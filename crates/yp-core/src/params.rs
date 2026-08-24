@@ -70,13 +70,23 @@ pub mod grounding {
     pub const EXPLICIT_WEIGHT: f64 = 1.0;
     pub const PROSE_WEIGHT: f64 = 0.5;
 
+    /// The candidate count at which a name has stopped telling you anything.
+    ///
+    /// Informativeness is measured against this fixed reference rather than
+    /// against the repository's own size. What costs an agent time is the
+    /// absolute number of places it has to look: narrowing a five-thousand
+    /// file repository to thirty-five candidates still leaves thirty-five
+    /// files to read. Normalising by repository size instead made a name worth
+    /// more simply for living in a bigger project -- which is how a sphinx
+    /// issue came to score better against django than against sphinx.
+    pub const UNINFORMATIVE_CANDIDATES: f64 = 1024.0;
+
     /// Mean information per name at which specificity is worth half its
     /// points. Average IDF is one of the pre-retrieval predictors surveyed by
     /// Hauff et al. (CIKM 2008).
+    ///
     /// Names the repository does not contain count as zero bits, so the mean
-    /// sits well below the IDF of any single rare name. Three bits per name
-    /// -- each name narrowing the repository to roughly an eighth of its
-    /// files -- is where this is worth half its points.
+    /// sits well below the value of any single precise name.
     pub const IDF_HALF_LIFE: f64 = 3.0;
 
     /// Decay per dangling deictic -- an "it" or "그거" with nothing to

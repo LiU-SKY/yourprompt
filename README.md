@@ -162,17 +162,17 @@ yp bench --dataset swe --repos 6
 
 | Comparison | Issues | Own repository scores higher | Mean margin |
 |---|---:|---:|---:|
-| versus the mean foreign repository | 270 | **80.4%** | +35.4 |
-| versus the *best* foreign repository | 270 | **59.3%** | +20.0 |
+| versus the mean foreign repository | 270 | **87.4%** | +39.5 |
+| versus the *best* foreign repository | 270 | **65.6%** | +22.5 |
 
 | Repository | Issues | Own scores higher |
 |---|---:|---:|
 | scikit-learn | 23 | 100.0% |
-| django | 114 | 93.9% |
-| matplotlib | 23 | 87.0% |
-| sympy | 77 | 66.2% |
-| pytest | 17 | 58.8% |
-| sphinx | 16 | 37.5% |
+| matplotlib | 23 | 95.7% |
+| sympy | 77 | 90.9% |
+| django | 114 | 88.6% |
+| pytest | 17 | 76.5% |
+| sphinx | 16 | 43.8% |
 
 **The first run of this control failed outright: 47.0%, below chance, mean
 margin −0.4.** Swapping the repository barely moved the score. Three defects
@@ -192,14 +192,44 @@ were behind it, and all three are the kind only a measurement finds:
   `sinc` carry no underscore or camel hump, so the tokenizer filed them as
   English. Inside a snippet they are names.
 
-sphinx still sits below chance and is not explained. The full report is at
-[bench/grounding.md](bench/grounding.md); the failing measurement is in the
-commit history, not edited out of it.
+Two further defects came out of the per-issue dump (`yp bench --dataset swe
+--dump …`), taking it from 80.4% to 87.4%:
 
-The **gold-patch test** — does an issue that names a file the fix actually
-touched score higher on resolution? — separates the two groups by 1.2 points
-out of 150. That is nothing, and it did not improve. Naming the right file is
-apparently not what this axis is picking up on.
+- **Resolution was a flat average.** A GitHub issue names 90–190 things, most
+  of them ordinary words that happen to exist in the codebase, so the one name
+  that actually pins the work down counted for about one part in a hundred and
+  fifty. It is now weighted by how much each name narrows things down, and
+  naming something that does not exist carries the weight it would have earned
+  had it been unique.
+- **Informativeness was measured wrongly, in two ways.** It used document
+  frequency, which inverts for any project whose vocabulary is its own subject:
+  `sphinx` appears in 1286 of sphinx's 1336 files, so sphinx looked *less*
+  informed about its own vocabulary than a project that merely imports it. And
+  it normalised by repository size, so a name was worth more simply for living
+  in a bigger project. It now counts definition sites against a fixed
+  reference — what costs an agent time is the absolute number of places it has
+  to look.
+
+### What still does not work
+
+**sphinx, at 43.8%, is still below chance.** The cause is now understood and is
+partly real: every one of these projects builds its documentation with sphinx,
+so sphinx's vocabulary genuinely lives in all of them — `toctree` is in 244 of
+sphinx's files and in 8–44 files of each of the others. Counting definitions
+rather than mentions recovered part of it (sphinx defines `toctree` fifteen
+times, the others never), but a sphinx issue really is partly grounded in any
+project that uses sphinx.
+
+**The gold-patch test produced nothing**, and the reason is a flaw in the test:
+**99% of issues already contain at least one name that resolves to exactly one
+thing**, so both groups are saturated and the label has no headroom. It is also
+asking a different question than it appears to — naming the file a maintainer
+eventually edited is not the same as being well grounded, since an issue can
+point precisely at a symptom whose fix belongs elsewhere. Reported rather than
+dropped, because it was offered as evidence and delivered none.
+
+The full report is at [bench/grounding.md](bench/grounding.md). The failing
+measurements are in the commit history, not edited out of it.
 
 ### Caveats worth stating
 

@@ -47,15 +47,45 @@ impl Referent {
         self.facts.map(|f| f.candidates())
     }
 
-    /// Inverse document frequency: how much seeing this name narrows things
-    /// down *in this repository*. A name in one file out of five thousand is
-    /// worth a great deal; one in half of them is worth almost nothing.
-    pub fn idf(&self, documents: usize) -> Option<f64> {
-        let facts = self.facts?;
-        if facts.df == 0 {
+    /// How much knowing this name narrows the work down, in bits.
+    ///
+    /// Two departures from textbook IDF, both forced by measurement.
+    ///
+    /// It counts *definition sites*, not raw document frequency. A name that
+    /// is a repository's own subject is *mentioned* everywhere in it --
+    /// `sphinx` appears in 1286 of sphinx's 1336 files -- so document
+    /// frequency says it carries almost no information there, while a
+    /// repository that merely imports sphinx a few times makes the same word
+    /// look highly distinctive. That inverts the measurement for exactly the
+    /// projects whose vocabulary is their subject. Definition sites do not
+    /// invert: sphinx defines `toctree` in fifteen places, django in none.
+    ///
+    /// And it measures against a fixed reference rather than the repository's
+    /// own size, because what costs an agent time is the absolute number of
+    /// places it must look. Thirty-five candidates is thirty-five files to
+    /// read whether the project has a thousand files or five thousand.
+    pub fn informativeness(&self, _documents: usize) -> Option<f64> {
+        let candidates = self.candidates()?;
+        if candidates == 0 {
             return None;
         }
-        Some((documents.max(1) as f64 / facts.df as f64).log2().max(0.0))
+        Some(
+            (g::UNINFORMATIVE_CANDIDATES / candidates as f64)
+                .log2()
+                .max(0.0),
+        )
+    }
+
+    /// What this name *would* have been worth had it resolved.
+    ///
+    /// Used to weight the resolution average, so that naming something the
+    /// repository has never heard of costs as much as naming something unique
+    /// would have gained. Without it an unresolvable name would carry zero
+    /// weight and simply vanish from the average.
+    pub fn weight_in_resolution(&self, documents: usize) -> f64 {
+        self.informativeness(documents)
+            .unwrap_or(g::UNINFORMATIVE_CANDIDATES.log2())
+            * self.weight
     }
 }
 
@@ -214,7 +244,7 @@ pub fn specificity(found: &[Referent], documents: usize) -> (f64, f64) {
     }
     let idfs: Vec<f64> = named
         .iter()
-        .map(|r| r.idf(documents).unwrap_or(0.0))
+        .map(|r| r.informativeness(documents).unwrap_or(0.0))
         .collect();
     let mean_idf = idfs.iter().sum::<f64>() / named.len() as f64;
     let known = idfs.iter().filter(|idf| **idf > 0.0).count();
@@ -261,8 +291,22 @@ pub fn grounding(
             "names nothing that exists in this repository",
         )
     } else {
-        let weight: f64 = found.iter().map(|r| r.weight).sum();
-        let earned: f64 = found.iter().map(|r| r.weight * r.resolution()).sum();
+        // Weighted by informativeness, not a flat average. A GitHub issue
+        // names a hundred and fifty things, most of them ordinary words that
+        // happen to exist in the codebase; averaging them flat means the one
+        // name that actually pins the work down is a single percent of the
+        // result. Measured on SWE-bench, issues that named a file the fix
+        // actually touched scored 1.2 points out of 150 above those that did
+        // not -- the signal was there and was being drowned.
+        let documents = corpus.documents();
+        let weight: f64 = found
+            .iter()
+            .map(|r| r.weight_in_resolution(documents))
+            .sum();
+        let earned: f64 = found
+            .iter()
+            .map(|r| r.weight_in_resolution(documents) * r.resolution())
+            .sum();
         let ratio = if weight > 0.0 { earned / weight } else { 0.0 };
 
         // Report the worst offender: the name the agent would struggle most
@@ -495,20 +539,92 @@ mod tests {
     }
 
     #[test]
-    fn a_rare_name_is_more_specific_than_a_ubiquitous_one() {
+    fn a_name_with_one_definition_beats_one_with_many() {
+        // Informativeness comes from how many places *define* a name, not
+        // how many mention it. Both of these are mentioned equally often.
         let corpus = MapCorpus::new(
             1000,
-            &[("rare_helper", 1, 2, 1), ("common_util", 400, 900, 1)],
+            &[("single_home", 40, 90, 1), ("many_homes", 40, 90, 30)],
         );
         let mean = |text: &str| {
             let found = referents(&tokenize(text), &[], &corpus);
             specificity(&found, corpus.documents()).0
         };
         assert!(
-            mean("fix rare_helper") > mean("fix common_util"),
-            "rare {} vs common {}",
-            mean("fix rare_helper"),
-            mean("fix common_util")
+            mean("fix single_home") > mean("fix many_homes"),
+            "one definition {} vs thirty {}",
+            mean("fix single_home"),
+            mean("fix many_homes")
+        );
+    }
+
+    #[test]
+    fn a_project_is_not_penalised_for_its_own_subject_matter() {
+        // The sphinx case. `toctree` is mentioned in 244 of sphinx's 1336
+        // files and defined in 15 of them; django mentions it in 35 and
+        // defines it nowhere. Judged on document frequency, sphinx looked
+        // *less* informed about its own vocabulary than a project that merely
+        // uses it, which inverted the measurement for sphinx entirely.
+        let home = MapCorpus::new(1336, &[("toctree", 244, 2007, 15)]);
+        let user = MapCorpus::new(4694, &[("toctree", 35, 60, 0)]);
+
+        let named = |corpus: &MapCorpus| {
+            referents(&tokenize("fix toctree"), &[], corpus)
+                .iter()
+                .find(|r| r.text == "toctree")
+                .and_then(|r| r.informativeness(corpus.documents()))
+                .unwrap_or(0.0)
+        };
+        assert!(
+            named(&home) > named(&user),
+            "home {} should beat mere user {}",
+            named(&home),
+            named(&user)
+        );
+    }
+
+    #[test]
+    fn naming_something_that_does_not_exist_counts_against_you() {
+        // Otherwise an unresolvable name would carry zero informativeness and
+        // drop out of the average instead of costing anything.
+        let corpus = repo();
+        let absent = Referent {
+            text: "compute_paycheck".into(),
+            offset: 0,
+            weight: 1.0,
+            explicit: true,
+            facts: None,
+        };
+        let documents = corpus.documents();
+        assert_eq!(absent.informativeness(documents), None);
+        assert!(absent.weight_in_resolution(documents) > 0.0);
+        assert_eq!(absent.resolution(), 0.0);
+    }
+
+    #[test]
+    fn one_precise_name_is_not_drowned_by_ordinary_words() {
+        // The gold-patch failure: resolution was a flat average, so the single
+        // name that pins the work down counted for one part in a hundred and
+        // fifty.
+        let corpus = repo();
+        let filler = "the handler token verify login the handler token verify login ";
+        let anchored = format!("{filler} fix verify_token");
+        let unanchored = format!("{filler} fix something");
+
+        let resolution_of = |text: &str| {
+            grounding(&tokenize(text), &[], &[], &corpus)
+                .0
+                .components
+                .iter()
+                .find(|c| c.id == "resolution")
+                .unwrap()
+                .earned
+        };
+        assert!(
+            resolution_of(&anchored) > resolution_of(&unanchored) * 1.5,
+            "anchored {} vs unanchored {}",
+            resolution_of(&anchored),
+            resolution_of(&unanchored)
         );
     }
 

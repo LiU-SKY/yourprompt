@@ -8,31 +8,36 @@ Axis A claims to read your repository. This checks that claim the only way that 
 
 | Comparison | Issues | Own repository scores higher | Mean margin |
 |---|---:|---:|---:|
-| versus the mean foreign repository | 270 | **80.4%** | 35.4 |
-| versus the *best* foreign repository | 270 | **59.3%** | 20.0 |
+| versus the mean foreign repository | 270 | **87.4%** | 39.5 |
+| versus the *best* foreign repository | 270 | **65.6%** | 22.5 |
 
 | Repository | Issues | Own scores higher | Mean margin |
 |---|---:|---:|---:|
-| django/django | 114 | 93.9% | 63.9 |
-| matplotlib/matplotlib | 23 | 87.0% | 18.2 |
-| pytest-dev/pytest | 17 | 58.8% | -0.6 |
-| scikit-learn/scikit-learn | 23 | 100.0% | 36.3 |
-| sphinx-doc/sphinx | 16 | 37.5% | -5.7 |
-| sympy/sympy | 77 | 66.2% | 14.5 |
+| django/django | 114 | 88.6% | 61.1 |
+| matplotlib/matplotlib | 23 | 95.7% | 21.8 |
+| pytest-dev/pytest | 17 | 76.5% | 10.8 |
+| scikit-learn/scikit-learn | 23 | 100.0% | 47.6 |
+| sphinx-doc/sphinx | 16 | 43.8% | -4.7 |
+| sympy/sympy | 77 | 90.9% | 25.8 |
 
-## Gold-patch test
+## Gold-patch test (a negative result)
 
-The patch names the files that actually had to change. An issue naming one of them has told the agent where to go; one that does not has left it to search. Mean `resolution` score, out of 150:
+The patch names the files that actually had to change. The idea was that an issue naming one of them has told the agent where to go, while one that does not has left it to search. Mean `resolution` score, out of 150:
 
-| Issue names a file the fix touched | Issues | Mean resolution |
-|---|---:|---:|
-| yes | 60 | **39.9** |
-| no | 210 | 38.7 |
+| Issue names a file the fix touched | Issues | Mean resolution | Has a name resolving to exactly one thing |
+|---|---:|---:|---:|
+| yes | 60 | 44.6 | 100.0% |
+| no | 210 | 44.0 | 98.1% |
 
-Separation: **+1.2** points.
+Separation: **+0.6** points, which is nothing.
+
+The last column explains why, and it is a flaw in the test rather than a finding about the score. Essentially every issue in the dataset -- 99% of them -- already contains at least one name that resolves to exactly one thing in its repository. Both groups are saturated, so there is no headroom for the label to discriminate.
+
+The label is also asking a different question than it appears to. Naming the file a maintainer eventually chose to edit is not the same as being well grounded: an issue can point precisely at a symptom whose fix belongs somewhere else entirely. The test is kept and reported because it was proposed as evidence and produced none, which is worth saying out loud rather than dropping quietly.
 
 ## Caveats
 
 - One index per repository, built at the base commit of that repository's first instance. Repositories evolve, but their vocabulary barely moves between nearby commits, and this turns three hundred downloads into a dozen. It is an approximation.
 - SWE-bench issues are written by maintainers and users to be filed, not typed at a coding agent. They are far longer than a typical prompt.
 - The cross-repository control shows the axis is repository-specific. It does not show that the resulting *number* predicts whether an agent will succeed; that would need agent runs, not scores.
+- sphinx remains below chance. Its vocabulary appears in every other repository here, because they all build their documentation with sphinx: `toctree` sits in 244 of sphinx's own files and in 8 to 44 files of each of the others. Counting definition sites rather than mentions recovered part of this -- sphinx defines `toctree` fifteen times, the others define it never -- but a sphinx issue really is partly grounded in any project that uses sphinx, and that is not an error to be removed.

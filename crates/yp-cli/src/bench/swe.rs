@@ -52,6 +52,7 @@ const PAGE: usize = 100;
 /// One SWE-bench instance, reduced to what this benchmark reads.
 struct Instance {
     repo: String,
+    instance_id: String,
     base_commit: String,
     problem_statement: String,
     /// Files the gold patch touches, as repository-relative paths.
@@ -136,6 +137,7 @@ fn ensure_dataset(refresh: bool) -> Result<Vec<Instance>, String> {
         }
         instances.push(Instance {
             repo: get("repo"),
+            instance_id: get("instance_id"),
             base_commit: get("base_commit"),
             changed_files: changed_files(&get("patch")),
             problem_statement,
@@ -218,20 +220,60 @@ fn ensure_index(repo: &str, sha: &str, refresh: bool) -> Result<PathBuf, String>
 /// How one issue scored against its own repository versus the others.
 struct Trial {
     repo: String,
+    instance_id: String,
     own: f64,
     foreign_mean: f64,
     foreign_best: f64,
     own_resolution: f64,
+    own_specificity: f64,
     names_changed_file: bool,
+    /// How many names the issue uses, and how many of them the repository
+    /// resolves to exactly one thing.
+    referents: usize,
+    resolved: usize,
 }
 
-fn resolution_of(score: &yp_core::Score) -> f64 {
+fn component_of(score: &yp_core::Score, id: &str) -> f64 {
     score
         .grounding
         .as_ref()
-        .and_then(|axis| axis.components.iter().find(|c| c.id == "resolution"))
+        .and_then(|axis| axis.components.iter().find(|c| c.id == id))
         .map(|c| c.earned)
         .unwrap_or(0.0)
+}
+
+/// One tab-separated row per issue, for diagnosing where a number comes from.
+fn dump(trials: &[Trial]) -> String {
+    let columns = [
+        "repo",
+        "instance",
+        "own",
+        "foreign_mean",
+        "foreign_best",
+        "resolution",
+        "specificity",
+        "names_changed_file",
+        "referents",
+        "resolved",
+    ];
+    let mut out = columns.join("\t");
+    out.push('\n');
+    for t in trials {
+        out.push_str(&format!(
+            "{}\t{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}\t{}\t{}\n",
+            t.repo,
+            t.instance_id,
+            t.own,
+            t.foreign_mean,
+            t.foreign_best,
+            t.own_resolution,
+            t.own_specificity,
+            t.names_changed_file,
+            t.referents,
+            t.resolved,
+        ));
+    }
+    out
 }
 
 fn render(trials: &[Trial], repos: &[String]) -> String {
@@ -296,6 +338,12 @@ fn render(trials: &[Trial], repos: &[String]) -> String {
     // ---- gold-patch test -------------------------------------------------
     let (named, unnamed): (Vec<&Trial>, Vec<&Trial>) =
         trials.iter().partition(|t| t.names_changed_file);
+    let anchored = |group: &[&Trial]| -> f64 {
+        if group.is_empty() {
+            return 0.0;
+        }
+        100.0 * group.iter().filter(|t| t.resolved >= 1).count() as f64 / group.len() as f64
+    };
     let mean = |group: &[&Trial]| -> f64 {
         if group.is_empty() {
             return 0.0;
@@ -304,20 +352,35 @@ fn render(trials: &[Trial], repos: &[String]) -> String {
     };
 
     out.push_str(&format!(
-        "\n## Gold-patch test\n\n\
-         The patch names the files that actually had to change. An issue naming \
-         one of them has told the agent where to go; one that does not has left \
-         it to search. Mean `resolution` score, out of 150:\n\n\
-         | Issue names a file the fix touched | Issues | Mean resolution |\n\
-         |---|---:|---:|\n\
-         | yes | {} | **{:.1}** |\n\
-         | no | {} | {:.1} |\n\n\
-         Separation: **{:+.1}** points.\n",
+        "\n## Gold-patch test (a negative result)\n\n\
+         The patch names the files that actually had to change. The idea was \
+         that an issue naming one of them has told the agent where to go, while \
+         one that does not has left it to search. Mean `resolution` score, out \
+         of 150:\n\n\
+         | Issue names a file the fix touched | Issues | Mean resolution | Has a name resolving to exactly one thing |\n\
+         |---|---:|---:|---:|\n\
+         | yes | {} | {:.1} | {:.1}% |\n\
+         | no | {} | {:.1} | {:.1}% |\n\n\
+         Separation: **{:+.1}** points, which is nothing.\n\n\
+         The last column explains why, and it is a flaw in the test rather than \
+         a finding about the score. Essentially every issue in the dataset -- \
+         {:.0}% of them -- already contains at least one name that resolves to \
+         exactly one thing in its repository. Both groups are saturated, so \
+         there is no headroom for the label to discriminate.\n\n\
+         The label is also asking a different question than it appears to. \
+         Naming the file a maintainer eventually chose to edit is not the same \
+         as being well grounded: an issue can point precisely at a symptom \
+         whose fix belongs somewhere else entirely. The test is kept and \
+         reported because it was proposed as evidence and produced none, which \
+         is worth saying out loud rather than dropping quietly.\n",
         named.len(),
         mean(&named),
+        anchored(&named),
         unnamed.len(),
         mean(&unnamed),
+        anchored(&unnamed),
         mean(&named) - mean(&unnamed),
+        anchored(&trials.iter().collect::<Vec<_>>()),
     ));
 
     out.push_str(
@@ -331,7 +394,15 @@ fn render(trials: &[Trial], repos: &[String]) -> String {
          prompt.\n\
          - The cross-repository control shows the axis is repository-specific. \
          It does not show that the resulting *number* predicts whether an \
-         agent will succeed; that would need agent runs, not scores.\n",
+         agent will succeed; that would need agent runs, not scores.\n\
+         - sphinx remains below chance. Its vocabulary appears in every other \
+         repository here, because they all build their documentation with \
+         sphinx: `toctree` sits in 244 of sphinx's own files and in 8 to 44 \
+         files of each of the others. Counting definition sites rather than \
+         mentions recovered part of this -- sphinx defines `toctree` fifteen \
+         times, the others define it never -- but a sphinx issue really is \
+         partly grounded in any project that uses sphinx, and that is not an \
+         error to be removed.\n",
     );
 
     out
@@ -342,6 +413,7 @@ pub fn run(
     limit: Option<usize>,
     refresh: bool,
     report: Option<String>,
+    dump_to: Option<String>,
 ) -> ExitCode {
     let instances = match ensure_dataset(refresh) {
         Ok(instances) => instances,
@@ -421,22 +493,41 @@ pub fn run(
         let foreign_mean = foreign.iter().sum::<f64>() / foreign.len() as f64;
         let foreign_best = foreign.iter().copied().fold(f64::MIN, f64::max);
 
+        let found = yp_core::referents_of(
+            &instance.problem_statement,
+            own_corpus as &dyn yp_core::Corpus,
+        );
+        let referents = found.len();
+        let resolved = found.iter().filter(|r| r.resolution() >= 1.0).count();
+
         trials.push(Trial {
             repo: instance.repo.clone(),
+            instance_id: instance.instance_id.clone(),
             own: own.total,
             foreign_mean,
             foreign_best,
-            own_resolution: resolution_of(&own),
+            own_resolution: component_of(&own, "resolution"),
+            own_specificity: component_of(&own, "specificity"),
             names_changed_file: names_a_changed_file(
                 &instance.problem_statement,
                 &instance.changed_files,
             ),
+            referents,
+            resolved,
         });
     }
 
     if trials.is_empty() {
         eprintln!("yp: no comparable issues");
         return ExitCode::FAILURE;
+    }
+
+    if let Some(path) = dump_to {
+        if let Err(e) = std::fs::write(&path, dump(&trials)) {
+            eprintln!("yp: could not write {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+        eprintln!("wrote per-issue detail to {path}");
     }
 
     let indexed: Vec<String> = corpora.keys().cloned().collect();

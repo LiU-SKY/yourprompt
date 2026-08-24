@@ -62,8 +62,17 @@ impl Score {
 ///
 /// The snippet has already had its backticks stripped, so it is read as plain
 /// text: re-running code detection over it would mask the whole thing again.
-pub(crate) fn tokenize_snippet(text: &str) -> Vec<yp_lang::Token> {
+pub fn tokenize_snippet(text: &str) -> Vec<yp_lang::Token> {
     yp_lang::tokenize(text)
+}
+
+/// The things a prompt names, resolved against a repository.
+///
+/// Exposed so callers can inspect what the grounding axis saw, rather than
+/// only the number it produced.
+pub fn referents_of(text: &str, corpus: &dyn Corpus) -> Vec<grounding::Referent> {
+    let tokens = yp_lang::tokenize(text);
+    grounding::referents(&tokens, &[], corpus)
 }
 
 /// Score a prompt.

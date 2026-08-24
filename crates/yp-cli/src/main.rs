@@ -91,6 +91,10 @@ enum Command {
         /// Write the report to a file instead of stdout.
         #[arg(long, value_name = "PATH")]
         report: Option<String>,
+        /// swe only: also write one tab-separated row per issue, for
+        /// diagnosing where a number comes from.
+        #[arg(long, value_name = "PATH")]
+        dump: Option<String>,
     },
 
     /// Build the repository index the grounding axis needs.
@@ -281,9 +285,10 @@ fn main() -> ExitCode {
             ablation,
             limit,
             report,
+            dump,
         } => match dataset.as_str() {
             "humanevalcomm" => bench::humanevalcomm::run(refresh, ablation, limit, report),
-            "swe" => bench::swe::run(repos, limit, refresh, report),
+            "swe" => bench::swe::run(repos, limit, refresh, report, dump),
             other => {
                 eprintln!("yp: unknown dataset {other:?}; expected humanevalcomm or swe");
                 ExitCode::FAILURE
