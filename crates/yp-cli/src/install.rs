@@ -35,16 +35,32 @@ fn is_ours(command: &str, subcommand: &str) -> bool {
     if !trimmed.contains(subcommand) {
         return false;
     }
-    let exe = trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .trim_matches('"');
-    let stem = std::path::Path::new(exe)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
+    let exe = first_token(trimmed);
+    // Split on both separators by hand rather than using `Path::file_stem`.
+    // On Unix, `Path` does not treat a backslash as a separator, so a
+    // settings.json written on Windows and read from WSL would not be
+    // recognised as ours -- and `yp install` would then wrap its own command
+    // instead of leaving it alone. Sharing a home directory between Windows
+    // and WSL is common enough to be worth handling.
+    let file = exe.rsplit(['/', '\\']).next().unwrap_or(exe);
+    let stem = file.split('.').next().unwrap_or(file).to_ascii_lowercase();
     stem == "yp"
+}
+
+/// The executable part of a command line, honouring a leading quoted path.
+///
+/// Splitting on whitespace alone is not enough: on Windows the binary very
+/// often lives under a path with a space in it, such as
+/// `C:\Program Files\yp\yp.exe`, and such a path has to be written quoted.
+fn first_token(command: &str) -> &str {
+    let trimmed = command.trim_start();
+    match trimmed.strip_prefix('"') {
+        Some(rest) => match rest.find('"') {
+            Some(end) => &rest[..end],
+            None => rest,
+        },
+        None => trimmed.split_whitespace().next().unwrap_or(""),
+    }
 }
 
 /// Quote a command for embedding inside `--wrap "..."`.
@@ -52,14 +68,27 @@ fn quote(command: &str) -> String {
     format!("\"{}\"", command.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Quote the executable path if it needs it.
+///
+/// Written unquoted, `C:\Program Files\yp\yp.exe hook` would be parsed by the
+/// shell as the command `C:\Program` with the arguments `Files\yp\yp.exe` and
+/// `hook`, and the hook would silently never run.
+fn quote_exe(exe: &str) -> String {
+    if exe.contains(char::is_whitespace) {
+        format!("\"{exe}\"")
+    } else {
+        exe.to_string()
+    }
+}
+
 fn hook_command(exe: &str) -> String {
-    format!("{exe} hook")
+    format!("{} hook", quote_exe(exe))
 }
 
 fn statusline_command(exe: &str, wrapping: Option<&str>) -> String {
     match wrapping {
-        Some(existing) => format!("{exe} statusline --wrap {}", quote(existing)),
-        None => format!("{exe} statusline"),
+        Some(existing) => format!("{} statusline --wrap {}", quote_exe(exe), quote(existing)),
+        None => format!("{} statusline", quote_exe(exe)),
     }
 }
 
@@ -440,15 +469,62 @@ mod tests {
     }
 
     #[test]
-    fn a_windows_exe_path_is_recognised_as_ours() {
+    fn a_windows_exe_path_is_recognised_as_ours_on_every_platform() {
+        // Must hold regardless of which platform is doing the reading: a
+        // Windows-written settings.json read from WSL must not be mistaken
+        // for someone else's status line and wrapped a second time.
         assert!(is_ours(r"C:\Users\me\bin\yp.exe statusline", "statusline"));
+        assert!(is_ours("/usr/local/bin/yp statusline", "statusline"));
         assert!(is_ours("yp hook", "hook"));
+        assert!(is_ours(r#""C:\Program Files\yp\yp.exe" hook"#, "hook"));
+    }
+
+    #[test]
+    fn a_double_install_across_platforms_does_not_wrap_our_own_command() {
+        // The bug the separator fix prevents: settings written by the Windows
+        // binary, then `yp install` run again from WSL.
+        let mut v = json!({
+            "statusLine": {
+                "type": "command",
+                "command": r"C:\Users\me\bin\yp.exe statusline"
+            }
+        });
+        apply(&mut v, "/usr/local/bin/yp");
+        assert_eq!(statusline_of(&v), r"C:\Users\me\bin\yp.exe statusline");
     }
 
     #[test]
     fn an_unrelated_command_mentioning_statusline_is_not_ours() {
         assert!(!is_ours("~/bin/my-statusline.sh", "statusline"));
         assert!(!is_ours("python statusline.py", "statusline"));
+    }
+
+    #[test]
+    fn an_exe_path_containing_spaces_is_quoted() {
+        // Unquoted, the shell would run `C:\Program` with two arguments and
+        // the hook would silently never fire.
+        let mut v = fresh();
+        apply(&mut v, r"C:\Program Files\yp\yp.exe");
+        assert_eq!(
+            statusline_of(&v),
+            r#""C:\Program Files\yp\yp.exe" statusline"#
+        );
+        assert_eq!(
+            v["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+            r#""C:\Program Files\yp\yp.exe" hook"#
+        );
+    }
+
+    #[test]
+    fn a_quoted_exe_path_survives_a_reinstall_and_an_uninstall() {
+        let exe = r"C:\Program Files\yp\yp.exe";
+        let mut v = fresh();
+        apply(&mut v, exe);
+        let after_first = v.clone();
+        apply(&mut v, exe);
+        assert_eq!(v, after_first, "reinstall was not a no-op");
+        remove(&mut v);
+        assert!(v.get("statusLine").is_none(), "got {v}");
     }
 
     #[test]

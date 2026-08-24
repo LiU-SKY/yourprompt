@@ -9,7 +9,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/LiU-SKY/yourprompt"
 authors = ["LiU-SKY <33451609+LiU-SKY@users.noreply.github.com>"]
