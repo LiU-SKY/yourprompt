@@ -1,4 +1,6 @@
 use serde::Deserialize;
+
+use crate::matcher::TermTable;
 use std::fmt;
 use std::str::FromStr;
 
@@ -134,11 +136,10 @@ pub struct Category {
 /// metadata the scorer needs.
 #[derive(Debug, Clone)]
 pub struct Lexicon {
-    /// Parallel to `term_category`: the literal patterns handed to the matcher.
-    pub terms: Vec<String>,
-    /// For each term, which category it belongs to.
-    pub term_category: Vec<SmellId>,
-    /// Category metadata, indexed by `SmellId::ALL` order.
+    /// The literal patterns handed to the matcher, each tagged with its
+    /// category.
+    pub table: TermTable<SmellId>,
+    /// Per-category weight and cap.
     pub categories: Vec<Category>,
 }
 
@@ -154,8 +155,7 @@ impl Lexicon {
     /// reference for scoring constants and translations cannot silently
     /// reweight a category.
     pub fn from_files(files: &[LexiconFile]) -> Result<Self, UnknownSmell> {
-        let mut terms = Vec::new();
-        let mut term_category = Vec::new();
+        let mut table = TermTable::default();
         let mut categories: Vec<Category> = Vec::new();
 
         for file in files {
@@ -173,17 +173,12 @@ impl Lexicon {
                     if term.is_empty() {
                         continue;
                     }
-                    terms.push(term.to_string());
-                    term_category.push(id);
+                    table.push(term, id);
                 }
             }
         }
 
-        Ok(Lexicon {
-            terms,
-            term_category,
-            categories,
-        })
+        Ok(Lexicon { table, categories })
     }
 }
 
@@ -214,8 +209,8 @@ mod tests {
                 "category {id} missing from bundled lexicons"
             );
         }
-        assert!(lex.terms.len() > 200, "got {} terms", lex.terms.len());
-        assert_eq!(lex.terms.len(), lex.term_category.len());
+        assert!(lex.table.len() > 200, "got {} terms", lex.table.len());
+        assert_eq!(lex.table.terms.len(), lex.table.categories.len());
     }
 
     #[test]
@@ -233,7 +228,7 @@ mod tests {
         let lex = load_bundled().unwrap();
         for id in SmellId::ALL {
             let mut seen = std::collections::HashSet::new();
-            for (term, cat) in lex.terms.iter().zip(&lex.term_category) {
+            for (term, cat) in lex.table.terms.iter().zip(&lex.table.categories) {
                 if *cat == id {
                     assert!(
                         seen.insert(term.to_ascii_lowercase()),

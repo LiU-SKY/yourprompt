@@ -1,0 +1,80 @@
+# English cue lexicon for yourprompt.
+#
+# Cues are the mirror image of smells: terms whose *presence* is evidence that
+# a prompt is executable. The B (actionability) and D (context sufficiency)
+# axes are built from these.
+#
+# Deliberate omissions:
+#   - Polysemous verbs ("handle", "check", "sort out") are NOT action verbs.
+#     They name an action without naming what the action is, so rewarding them
+#     would cancel out the penalty they earn as a smell.
+#   - Femmer's "negative statements" smell is not ported. In a requirements
+#     document a negative requirement is hard to verify; in a prompt to a
+#     coding agent, "don't touch the migrations" is one of the most useful
+#     things a user can say. Negation is therefore scored as a scope
+#     constraint here, and never penalised.
+
+lang = "en"
+
+[[cue]]
+id = "action_verb"
+terms = [
+  "add", "create", "implement", "write", "build", "generate", "scaffold",
+  "fix", "repair", "debug", "patch", "resolve", "correct",
+  "refactor", "rename", "move", "extract", "inline", "split", "merge",
+  "delete", "remove", "drop", "replace", "swap", "revert", "roll back",
+  "upgrade", "migrate", "port", "convert", "bump", "pin",
+  "wire up", "register", "expose", "document", "annotate", "comment",
+  "test", "cover", "benchmark", "profile", "instrument", "log",
+  "validate", "sanitize", "cache", "parse", "serialize", "deserialize",
+  "lint", "format", "deploy", "publish", "release", "mock", "stub",
+]
+
+[[cue]]
+id = "io_spec"
+terms = [
+  "returns", "should return", "must return", "return type", "return value",
+  "signature", "input", "inputs", "output", "outputs", "parameter",
+  "parameters", "argument", "arguments", "takes", "accepts", "expects",
+  "response", "request body", "payload", "schema", "endpoint", "route",
+  "status code", "exit code", "stdout", "stderr", "json", "yaml",
+  "given", "when", "then", "for input", "produces", "yields",
+  "the shape", "type is", "typed as", "->", "=>",
+]
+
+[[cue]]
+id = "acceptance"
+terms = [
+  "test passes", "tests pass", "should pass", "unit test", "integration test",
+  "assert", "asserts", "assertion", "verify", "verified", "verifiable",
+  "acceptance", "definition of done", "expected", "expect", "expects to",
+  "so that", "must equal", "should equal", "no regression", "regression test",
+  "green", "ci passes", "coverage", "reproduce", "repro", "steps to reproduce",
+]
+
+[[cue]]
+id = "scope_constraint"
+terms = [
+  "only", "only in", "only touch", "do not", "don't", "never", "without",
+  "must not", "should not", "avoid", "except", "excluding", "besides that",
+  "limit to", "limited to", "restrict", "restricted to", "confine",
+  "keep", "leave", "unchanged", "untouched", "as-is", "in place",
+  "backwards compatible", "backward compatible", "no new dependencies",
+  "no new deps", "out of scope", "in scope", "scoped to", "nothing else",
+]
+
+[[cue]]
+id = "example_marker"
+terms = [
+  "for example", "for instance", "e.g.", "example:", "examples:", "sample",
+  "like this:", "as follows", "here is", "here's", "case 1", "case 2",
+  "before:", "after:", "input:", "output:", "expected:", "actual:",
+]
+
+[[cue]]
+id = "conjunction"
+terms = [
+  "and also", "also", "additionally", "in addition", "plus", "as well as",
+  "and then", "after that", "furthermore", "moreover", "besides",
+  "while you're at it", "on top of that", "one more thing", "oh and",
+]

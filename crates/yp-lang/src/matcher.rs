@@ -1,6 +1,6 @@
 use aho_corasick::{AhoCorasick, MatchKind};
 
-use crate::lexicon::{Lexicon, SmellId};
+use crate::lexicon::SmellId;
 use crate::span::Span;
 use crate::token::{code_regions, is_hangul};
 
@@ -13,73 +13,142 @@ use crate::token::{code_regions, is_hangul};
 /// followed by Hangul only counts when that Hangul is one of these, which is a
 /// cheap stand-in for a morphological analyser and errs toward false negatives.
 const KO_FOLLOW: &str = "은는이가을를에의도만과와랑로으서써부터까지보다처럼한테에게\
-                         야여요다임함줘주라봐고며나든지밖뿐대로같하한할했합니";
+                         야여요다임함줘주라봐고며나든지밖뿐대로같하한할했합니시";
 
-/// One detected smell occurrence.
+/// A flat list of literal patterns, each tagged with the category it belongs to.
+///
+/// Generic over the category so the same matching machinery serves both the
+/// smell lexicons (which subtract points) and the cue lexicons (which add
+/// them).
+#[derive(Debug, Clone)]
+pub struct TermTable<C> {
+    pub terms: Vec<String>,
+    pub categories: Vec<C>,
+}
+
+// Written out rather than derived: `#[derive(Default)]` would demand
+// `C: Default`, which a category enum has no reason to implement.
+impl<C> Default for TermTable<C> {
+    fn default() -> Self {
+        Self {
+            terms: Vec::new(),
+            categories: Vec::new(),
+        }
+    }
+}
+
+impl<C: Copy> TermTable<C> {
+    pub fn push(&mut self, term: impl Into<String>, category: C) {
+        self.terms.push(term.into());
+        self.categories.push(category);
+    }
+
+    pub fn len(&self) -> usize {
+        self.terms.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.terms.is_empty()
+    }
+}
+
+/// One dictionary match in a prompt.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SmellHit {
-    pub id: SmellId,
+pub struct Hit<C> {
+    pub id: C,
     /// The matched text, exactly as it appears in the prompt.
     pub term: String,
     pub span: Span,
 }
 
-/// Multi-pattern dictionary matcher over both bundled lexicons.
+pub type SmellHit = Hit<SmellId>;
+
+/// Multi-pattern dictionary matcher.
 ///
 /// Built once and reused: construction compiles an Aho-Corasick automaton over
 /// every term in every language, which is the expensive part. Matching itself
 /// is a single linear pass regardless of how many terms the lexicons grow to.
-pub struct Matcher {
+pub struct Matcher<C> {
     ac: AhoCorasick,
-    term_category: Vec<SmellId>,
+    categories: Vec<C>,
     is_ko: Vec<bool>,
 }
 
-impl Matcher {
-    pub fn new(lex: &Lexicon) -> Result<Self, Box<dyn std::error::Error>> {
+impl<C: Copy> Matcher<C> {
+    pub fn new(table: &TermTable<C>) -> Result<Self, Box<dyn std::error::Error>> {
+        // Standard (not LeftmostLongest) so `find_overlapping_iter` is
+        // available -- see `find_masked` for why leftmost-longest has to be
+        // applied *after* the boundary filter rather than by the automaton.
         let ac = AhoCorasick::builder()
-            .match_kind(MatchKind::LeftmostLongest)
+            .match_kind(MatchKind::Standard)
             .ascii_case_insensitive(true)
-            .build(&lex.terms)?;
-        let is_ko = lex
+            .build(&table.terms)?;
+        let is_ko = table
             .terms
             .iter()
             .map(|t| t.chars().any(is_hangul))
             .collect();
         Ok(Self {
             ac,
-            term_category: lex.term_category.clone(),
+            categories: table.categories.clone(),
             is_ko,
         })
     }
 
-    /// Find every smell occurrence in `text`, skipping code.
+    /// Find every occurrence in `text`, skipping code.
     ///
     /// Text inside backticks or fenced blocks is excluded: a pasted snippet
     /// containing `this` or `handle` is code the user is pointing at, not
     /// vague prose they wrote.
-    pub fn find(&self, text: &str) -> Vec<SmellHit> {
+    pub fn find(&self, text: &str) -> Vec<Hit<C>> {
         let code = code_regions(text);
-        let mut hits = Vec::new();
+        self.find_masked(text, &code)
+    }
 
-        for m in self.ac.find_iter(text) {
+    /// Same as [`Matcher::find`], but with the code regions supplied by the
+    /// caller so several matchers can share one scan of the prompt.
+    pub fn find_masked(&self, text: &str, code: &[Span]) -> Vec<Hit<C>> {
+        // Collect every candidate, including overlapping ones, and only then
+        // pick leftmost-longest among those that survive the boundary rules.
+        //
+        // Letting the automaton do leftmost-longest would be faster but
+        // wrong: a longest match that the boundary filter later rejects would
+        // shadow a valid shorter one underneath it. In "테스트 통과시켜줘"
+        // the term "테스트 통과" is the longest match but is rejected because
+        // "시" is not a particle, and the valid "테스트" would be lost with it.
+        let mut candidates: Vec<(usize, usize, usize)> = Vec::new();
+        for m in self.ac.find_overlapping_iter(text) {
             let span = Span::new(m.start(), m.end());
             if code.iter().any(|r| r.overlaps(&span)) {
                 continue;
             }
-            let ok = if self.is_ko[m.pattern().as_usize()] {
+            let pattern = m.pattern().as_usize();
+            let ok = if self.is_ko[pattern] {
                 ko_boundary_ok(text, &span)
             } else {
                 en_boundary_ok(text, &span)
             };
-            if !ok {
+            if ok {
+                candidates.push((span.start, span.end, pattern));
+            }
+        }
+
+        // Leftmost first; on equal starts, longest first.
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+
+        let mut hits = Vec::new();
+        let mut consumed_to = 0usize;
+        for (start, end, pattern) in candidates {
+            if start < consumed_to {
                 continue;
             }
-            hits.push(SmellHit {
-                id: self.term_category[m.pattern().as_usize()],
+            let span = Span::new(start, end);
+            hits.push(Hit {
+                id: self.categories[pattern],
                 term: span.slice(text).to_string(),
                 span,
             });
+            consumed_to = end;
         }
 
         hits
@@ -121,8 +190,8 @@ mod tests {
     use super::*;
     use crate::lexicon::load_bundled;
 
-    fn matcher() -> Matcher {
-        Matcher::new(&load_bundled().unwrap()).unwrap()
+    fn matcher() -> Matcher<SmellId> {
+        Matcher::new(&load_bundled().unwrap().table).unwrap()
     }
 
     fn ids(text: &str) -> Vec<SmellId> {
@@ -198,6 +267,29 @@ mod tests {
             hits.iter().any(|t| t == "as fast as possible"),
             "got {hits:?}"
         );
+    }
+
+    #[test]
+    fn a_rejected_longer_match_does_not_shadow_a_valid_shorter_one() {
+        // The regression that made `find_masked` stop relying on the
+        // automaton's leftmost-longest mode. In "코드 리뷰어" the longest
+        // match "코드 리뷰" is rejected, because "어" is not a particle and
+        // the real word is "리뷰어". The shorter "코드" underneath it is
+        // perfectly valid and must survive rather than being swallowed.
+        let mut table: TermTable<u8> = TermTable::default();
+        table.push("코드", 0);
+        table.push("코드 리뷰", 1);
+        let m = Matcher::new(&table).unwrap();
+
+        let hits = m.find("코드 리뷰어가 필요");
+        assert_eq!(hits.len(), 1, "got {hits:?}");
+        assert_eq!(hits[0].term, "코드");
+        assert_eq!(hits[0].id, 0);
+
+        // With a real particle after it, the longer term wins as usual.
+        let hits = m.find("코드 리뷰를 해줘");
+        assert_eq!(hits[0].term, "코드 리뷰");
+        assert_eq!(hits[0].id, 1);
     }
 
     #[test]
