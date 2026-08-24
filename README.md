@@ -147,14 +147,42 @@ yp bench --ablation            # downloads and caches the dataset on first run
 
 Full report: [bench/report.md](bench/report.md).
 
+## Is the grounding axis real?
+
+Axis A is the whole reason this is not another prompt scorer, so it gets its
+own control — one that cannot be passed by accident. Score 270 real GitHub
+issues from [SWE-bench Lite](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite)
+against the codebase each was actually filed against, then against unrelated
+ones. A scorer that ignores the corpus returns the same number both times. So
+does one that merely rewards long prompts.
+
+```bash
+yp bench --dataset swe --repos 6
+```
+
+| Comparison | Issues | Own repository scores higher |
+|---|---:|---:|
+| versus the mean foreign repository | 270 | **47.0%** |
+| versus the *best* foreign repository | 270 | 22.6% |
+
+**It fails.** 47% is below chance, and the mean margin is −0.4 points: swapping
+the repository barely moves the score. Per repository the result is incoherent
+— matplotlib 87%, sphinx 6%. The gold-patch test (does an issue that names a
+file the fix actually touched score higher on resolution?) separates the two
+groups by 1.4 points out of 150, which is nothing.
+
+So the headline claim of this project is, as of this measurement, **not
+supported**. The full report is at [bench/grounding.md](bench/grounding.md).
+Diagnosis and what happened next are in the commits that follow.
+
 ### Caveats worth stating
 
 - HumanEvalComm's prompts are function stubs with docstrings, not the
   imperative requests a coding agent actually receives. The *ordering* is
   meaningful; the absolute scores on this dataset are not.
-- Grounding is inactive throughout, since these prompts have no repository. The
-  axis that makes this tool different is therefore **not yet validated** —
-  Ambig-SWE, which ships real repositories, is the next target.
+- Grounding is inactive throughout, since these prompts have no repository. That
+  axis is measured separately, against real codebases — see
+  [Is the grounding axis real?](#is-the-grounding-axis-real) below.
 - Scoring parameters remain reasoned defaults rather than fitted ones.
 
 ## Milestones
@@ -164,7 +192,7 @@ Full report: [bench/report.md](bench/report.md).
 - [x] **M3** — A axis: repository symbol index, `resolve@1`, SCS
 - [x] **M4** — Korean support (shipped with the lexicons from the start)
 - [x] **M5** — `yp bench`, ablation table, published numbers
-- [ ] **M6** — validate the grounding axis on Ambig-SWE (real repositories)
+- [x] **M6** — validate the grounding axis on real repositories (SWE-bench Lite)
 
 ## Prior art & references
 

@@ -1,4 +1,5 @@
-//! `yp bench` -- does the score actually mean anything?
+//! HumanEvalComm: does the score rank a specification above a damaged
+//! version of itself?
 //!
 //! Every prompt scorer on GitHub asserts that its number reflects prompt
 //! quality. None of them checks. This does.
@@ -29,6 +30,7 @@ use std::process::{Command, ExitCode};
 
 use yp_core::Score;
 
+use super::{spearman, total_without, Tally};
 use crate::session;
 
 const HUMANEVALCOMM_URL: &str = "https://raw.githubusercontent.com/jie-jw-wu/human-eval-comm/main/Benchmark/HumanEvalComm_v2.jsonl";
@@ -80,108 +82,6 @@ struct Pair {
     lexically_reachable: bool,
     original: Score,
     perturbed: Score,
-}
-
-/// Totals for one axis-ablation setting.
-#[derive(Default)]
-struct Tally {
-    correct: usize,
-    ties: usize,
-    total: usize,
-    delta_sum: f64,
-}
-
-impl Tally {
-    fn add(&mut self, original: f64, perturbed: f64) {
-        self.total += 1;
-        self.delta_sum += original - perturbed;
-        if (original - perturbed).abs() < 1e-9 {
-            self.ties += 1;
-        } else if original > perturbed {
-            self.correct += 1;
-        }
-    }
-
-    fn accuracy(&self) -> f64 {
-        if self.total == 0 {
-            return 0.0;
-        }
-        self.correct as f64 / self.total as f64
-    }
-
-    fn mean_delta(&self) -> f64 {
-        if self.total == 0 {
-            return 0.0;
-        }
-        self.delta_sum / self.total as f64
-    }
-}
-
-/// The score with one axis removed, renormalised over the axes that remain.
-///
-/// Recombining published component scores rather than re-running the scorer
-/// keeps the ablation honest: it is exactly the same measurement minus one
-/// term, not a differently-configured scorer.
-fn total_without(score: &Score, drop: &str) -> f64 {
-    let axes = [&score.actionability, &score.clarity, &score.context];
-    let mut earned = 0.0;
-    let mut max = 0.0;
-    for axis in axes {
-        if axis.id == drop {
-            continue;
-        }
-        earned += axis.earned;
-        max += axis.max;
-    }
-    if max <= 0.0 {
-        return 0.0;
-    }
-    earned * (1000.0 / max)
-}
-
-/// Spearman's rank correlation, with tied ranks averaged.
-fn spearman(pairs: &[(f64, f64)]) -> f64 {
-    if pairs.len() < 2 {
-        return 0.0;
-    }
-    let rank = |values: Vec<f64>| -> Vec<f64> {
-        let mut indexed: Vec<(usize, f64)> = values.into_iter().enumerate().collect();
-        indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let mut ranks = vec![0.0; indexed.len()];
-        let mut i = 0;
-        while i < indexed.len() {
-            let mut j = i;
-            while j + 1 < indexed.len() && indexed[j + 1].1 == indexed[i].1 {
-                j += 1;
-            }
-            // Ties share the average of the ranks they span.
-            let average = ((i + j) as f64) / 2.0 + 1.0;
-            for item in indexed.iter().take(j + 1).skip(i) {
-                ranks[item.0] = average;
-            }
-            i = j + 1;
-        }
-        ranks
-    };
-
-    let xs = rank(pairs.iter().map(|p| p.0).collect());
-    let ys = rank(pairs.iter().map(|p| p.1).collect());
-    let n = xs.len() as f64;
-    let mean_x = xs.iter().sum::<f64>() / n;
-    let mean_y = ys.iter().sum::<f64>() / n;
-
-    let mut cov = 0.0;
-    let mut var_x = 0.0;
-    let mut var_y = 0.0;
-    for (x, y) in xs.iter().zip(&ys) {
-        cov += (x - mean_x) * (y - mean_y);
-        var_x += (x - mean_x).powi(2);
-        var_y += (y - mean_y).powi(2);
-    }
-    if var_x <= 0.0 || var_y <= 0.0 {
-        return 0.0;
-    }
-    cov / (var_x * var_y).sqrt()
 }
 
 fn cache_path() -> Option<PathBuf> {

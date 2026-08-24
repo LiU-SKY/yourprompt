@@ -58,6 +58,18 @@ pub fn index_path(root: &Path) -> Option<PathBuf> {
     index_dir().map(|d| d.join(yp_index::index_file_name(root)))
 }
 
+/// Load an index from an explicit path.
+///
+/// Used by the benchmark, which keeps one index per benchmarked repository
+/// rather than one per working directory.
+pub fn load_index_at(path: &Path) -> Option<IndexCorpus> {
+    let index = RepoIndex::load(path)?;
+    if index.is_empty() {
+        return None;
+    }
+    Some(IndexCorpus(index))
+}
+
 /// Load the index for the repository containing `cwd`, if one has been built.
 ///
 /// Returns `None` rather than building: this is called from the hook, which

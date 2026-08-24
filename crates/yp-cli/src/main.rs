@@ -48,6 +48,13 @@ enum Command {
         /// Never colourise, even on a terminal.
         #[arg(long)]
         no_color: bool,
+        /// Ground against a specific index file instead of this directory's.
+        ///
+        /// Mostly a debugging aid: it answers "what would this prompt score
+        /// against *that* codebase", which is how the grounding axis gets
+        /// checked.
+        #[arg(long, value_name = "PATH")]
+        index: Option<String>,
     },
 
     /// Claude Code `UserPromptSubmit` hook. Writes nothing to stdout.
@@ -64,6 +71,14 @@ enum Command {
     /// often the score ranks an original specification above a deliberately
     /// damaged version of itself.
     Bench {
+        /// Which check to run. `humanevalcomm` asks whether the score falls
+        /// when a specification is damaged; `swe` asks whether the grounding
+        /// axis is actually reading the repository.
+        #[arg(long, value_name = "NAME", default_value = "humanevalcomm")]
+        dataset: String,
+        /// swe only: how many repositories to download and compare across.
+        #[arg(long, value_name = "N", default_value_t = 6)]
+        repos: usize,
         /// Re-download the dataset even if it is cached.
         #[arg(long)]
         refresh: bool,
@@ -143,7 +158,13 @@ fn read_stdin() -> std::io::Result<String> {
     Ok(buf)
 }
 
-fn run_score(text: Vec<String>, json: bool, oneline: bool, no_color: bool) -> ExitCode {
+fn run_score(
+    text: Vec<String>,
+    json: bool,
+    oneline: bool,
+    no_color: bool,
+    index: Option<String>,
+) -> ExitCode {
     let prompt = if text.is_empty() {
         match read_stdin() {
             Ok(s) => s,
@@ -157,8 +178,20 @@ fn run_score(text: Vec<String>, json: bool, oneline: bool, no_color: bool) -> Ex
     };
     let prompt = prompt.trim();
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let corpus = repo::load_for(&cwd);
+    let corpus = match &index {
+        Some(path) => {
+            let corpus = repo::load_index_at(std::path::Path::new(path));
+            if corpus.is_none() {
+                eprintln!("yp: could not read an index at {path}");
+                return ExitCode::FAILURE;
+            }
+            corpus
+        }
+        None => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            repo::load_for(&cwd)
+        }
+    };
     let Some(score) =
         yp_core::score_with(prompt, corpus.as_ref().map(|c| c as &dyn yp_core::Corpus))
     else {
@@ -239,13 +272,23 @@ fn main() -> ExitCode {
             json,
             oneline,
             no_color,
-        } => run_score(text, json, oneline, no_color),
+            index,
+        } => run_score(text, json, oneline, no_color, index),
         Command::Bench {
+            dataset,
+            repos,
             refresh,
             ablation,
             limit,
             report,
-        } => bench::run(refresh, ablation, limit, report),
+        } => match dataset.as_str() {
+            "humanevalcomm" => bench::humanevalcomm::run(refresh, ablation, limit, report),
+            "swe" => bench::swe::run(repos, limit, refresh, report),
+            other => {
+                eprintln!("yp: unknown dataset {other:?}; expected humanevalcomm or swe");
+                ExitCode::FAILURE
+            }
+        },
         Command::Explain { session, no_color } => explain::run(session, no_color),
         Command::Index {
             root,
