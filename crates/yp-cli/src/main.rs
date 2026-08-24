@@ -1,8 +1,9 @@
 //! `yp` -- the yourprompt command line.
 //!
 //! Subcommands land milestone by milestone. Today: `score`, `hook`,
-//! `statusline`, `install`, `explain`, `index`. Next: `bench` (M5).
+//! `statusline`, `install`, `explain`, `index`, `bench`.
 
+mod bench;
 mod explain;
 mod hook;
 mod install;
@@ -56,6 +57,26 @@ enum Command {
     /// Prints nothing and always exits 0, because a hook's stdout is injected
     /// into the model's context and a non-zero exit can block the prompt.
     Hook,
+
+    /// Check the score against published ambiguity benchmarks.
+    ///
+    /// Downloads HumanEvalComm on first use and caches it, then reports how
+    /// often the score ranks an original specification above a deliberately
+    /// damaged version of itself.
+    Bench {
+        /// Re-download the dataset even if it is cached.
+        #[arg(long)]
+        refresh: bool,
+        /// Also report each axis's contribution by removing it in turn.
+        #[arg(long)]
+        ablation: bool,
+        /// Use only the first N problems. Useful for a quick check.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+        /// Write the report to a file instead of stdout.
+        #[arg(long, value_name = "PATH")]
+        report: Option<String>,
+    },
 
     /// Build the repository index the grounding axis needs.
     ///
@@ -219,6 +240,12 @@ fn main() -> ExitCode {
             oneline,
             no_color,
         } => run_score(text, json, oneline, no_color),
+        Command::Bench {
+            refresh,
+            ablation,
+            limit,
+            report,
+        } => bench::run(refresh, ablation, limit, report),
         Command::Explain { session, no_color } => explain::run(session, no_color),
         Command::Index {
             root,
