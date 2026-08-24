@@ -38,14 +38,24 @@ jobs:
           cargo build -p yp-wasm --release --target wasm32-unknown-unknown
           cp target/wasm32-unknown-unknown/release/yp_wasm.wasm docs/yp.wasm
 
-      - name: Check the page carries no control characters
+      # A page whose script does not parse is a page where nothing works at
+      # all, and it looks perfectly fine to every check that only reads bytes.
+      # One shipped that way -- an escape written as a literal newline left a
+      # string unterminated -- so the script is now actually parsed before it
+      # can be published.
+      - name: Check the page
         run: |
+          set -euo pipefail
           python3 - <<'PY'
-          data = open('docs/index.html', encoding='utf-8').read()
+          page = open('docs/index.html', encoding='utf-8').read()
           for name, ch in (('NUL', chr(0)), ('U+FFFD', chr(0xFFFD))):
-              assert ch not in data, f'{name} in docs/index.html'
-          print('docs/index.html is clean')
+              assert ch not in page, f'{name} in docs/index.html'
+          script = page[page.index('<script>') + 8:page.rindex('</script>')]
+          open('/tmp/page.js', 'w', encoding='utf-8').write(script)
+          print(f'extracted {len(script)} bytes of script')
           PY
+          node --check /tmp/page.js
+          echo "docs/index.html parses"
 
       - name: Report what will be published
         run: ls -lh docs/

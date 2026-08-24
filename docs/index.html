@@ -385,8 +385,7 @@ function buildReport(s, prompt) {
   const longest = (prompt.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0);
   const fence = '`'.repeat(Math.max(3, longest + 1));
   const listed = files.length
-    ? files.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('
-')
+    ? files.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('\n')
     : '- none';
   return [
     `# yourprompt`, ``,

@@ -53,6 +53,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
 
+  pages-script:
+    name: the web pages parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A page whose script does not parse is a page where nothing works at
+      # all, and it looks perfectly fine to every check that only reads bytes.
+      # One shipped that way -- an escape written as a literal newline left a
+      # string unterminated. Checking it needs a real JavaScript parser, so it
+      # happens here, where there is one.
+      - name: Parse the script in every page
+        run: |
+          set -euo pipefail
+          for page in docs/index.html crates/yp-cli/assets/index.html; do
+            python3 - "$page" <<'PY'
+          import sys
+          page = open(sys.argv[1], encoding='utf-8').read()
+          for name, ch in (('NUL', chr(0)), ('U+FFFD', chr(0xFFFD))):
+              assert ch not in page, f'{name} in {sys.argv[1]}'
+          script = page[page.index('<script>') + 8:page.rindex('</script>')]
+          open('/tmp/page.js', 'w', encoding='utf-8').write(script)
+          PY
+            node --check /tmp/page.js
+            echo "$page parses"
+          done
+
   zero-context:
     name: hook writes nothing to stdout
     runs-on: ubuntu-latest
