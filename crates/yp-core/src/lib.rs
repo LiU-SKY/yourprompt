@@ -24,6 +24,7 @@ pub mod corpus;
 pub mod grade;
 pub mod grounding;
 pub mod params;
+pub mod prompt;
 pub mod stats;
 
 use serde::Serialize;
@@ -71,7 +72,8 @@ pub fn tokenize_snippet(text: &str) -> Vec<yp_lang::Token> {
 /// Exposed so callers can inspect what the grounding axis saw, rather than
 /// only the number it produced.
 pub fn referents_of(text: &str, corpus: &dyn Corpus) -> Vec<grounding::Referent> {
-    let tokens = yp_lang::tokenize(text);
+    let parts = prompt::split(text);
+    let tokens = yp_lang::tokenize(parts.instruction());
     grounding::referents(&tokens, &[], corpus)
 }
 
@@ -92,7 +94,21 @@ pub fn score(text: &str) -> Option<Score> {
 /// 1000, so a score is never silently capped at 650 -- but `renormalized` is
 /// set so the two are never confused.
 pub fn score_with(text: &str, corpus: Option<&dyn Corpus>) -> Option<Score> {
+    // A raw blob may carry pasted material. Anything long enough to have been
+    // pasted rather than typed is treated as an attachment, not as something
+    // the user said.
+    let parts = prompt::split(text);
+    score_parts(&parts, corpus)
+}
+
+/// Score a prompt whose attachments the caller has already separated.
+///
+/// The instruction is judged as an instruction; attachments are judged as
+/// material. A prompt that carries the file it is about is a better prompt
+/// than one that does not, and this is where that stops being penalised.
+pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Option<Score> {
     let resources = yp_lang::resources()?;
+    let text = parts.instruction();
 
     // One tokenisation and one code-region scan, shared by every axis.
     let tokens = yp_lang::tokenize(text);
@@ -114,7 +130,14 @@ pub fn score_with(text: &str, corpus: Option<&dyn Corpus>) -> Option<Score> {
             .map(|h| h.span)
             .chain(smell_hits.iter().map(|h| h.span))
             .collect();
-        grounding::grounding(&tokens, &offsets, &instruction_words, corpus).0
+        grounding::grounding(
+            &tokens,
+            &offsets,
+            &instruction_words,
+            &parts.attachments,
+            corpus,
+        )
+        .0
     });
 
     // With grounding active, vague pronouns are judged there -- by whether
@@ -228,6 +251,81 @@ mod tests {
                 .repeat(40),
         );
         assert!(stuffed < 950.0, "stuffed prompt scored {stuffed}");
+    }
+
+    #[test]
+    fn a_mashed_keyboard_scores_near_the_floor() {
+        // Gibberish has no ambiguity smells and no dangling references,
+        // because it has no words -- and it used to be paid for both. The
+        // repeated form scored 356 with clarity at full marks.
+        for mash in [
+            "asdfasefawefasf zxdf2wq4rq235wrsadgㅁㄴㅇㄹ",
+            &"asdfasefawefasf zxdf2wq4rq235wrsadg ㅁㄴㅇㄹㅎㅁㄴㅇㄻㄴㅇㄹ               qwerqwer zxcvzxcv asdfasdf "
+                .repeat(6),
+            &"asdfghjkl".repeat(60),
+        ] {
+            let s = score(mash).expect("scores");
+            assert!(s.total < 120.0, "mash scored {}: {mash:.40}", s.total);
+            assert_eq!(s.grade, "F");
+        }
+    }
+
+    #[test]
+    fn a_real_prompt_is_untouched_by_the_gibberish_guard() {
+        // The claim is not about the total -- it is that the guard does not
+        // engage at all for real prompts. It is a ratio, so technical
+        // vocabulary the word list has never heard of costs nothing as long as
+        // ordinary words hold the sentence together.
+        let legibility_of = |text: &str| {
+            let tokens = yp_lang::tokenize(text);
+            stats::analyze(text, &tokens).legibility()
+        };
+        for text in [
+            "Rewrite informativeness in crates/yp-core/src/grounding.rs so it              counts definition sites rather than document frequency.",
+            "crates/yp-core/src/grounding.rs 의 informativeness 를 정의 위치              기준으로 다시 작성해줘",
+            "fix the login handler",
+            "`verify_token` panics on an expired token",
+        ] {
+            assert_eq!(
+                legibility_of(text),
+                1.0,
+                "the guard engaged on a real prompt: {text:.50}"
+            );
+        }
+
+        // And it does engage on mashing.
+        assert!(legibility_of("asdfasefawefasf zxdf2wq4rq235wrsadg qwerqwer") < 0.3);
+    }
+
+    #[test]
+    fn attaching_the_file_a_task_is_about_does_not_cost_points() {
+        // The complaint that started this: a prompt carrying its own context
+        // scored seventy points *below* the same prompt without it.
+        let instruction = "Rewrite the parser in src/cli.rs so it returns a Config.";
+        let file: String = (0..40)
+            .map(|i| {
+                format!(
+                    "fn helper_{i}() {{ let value = {i}; }}
+"
+                )
+            })
+            .collect();
+        let with_context = format!(
+            "{instruction}
+
+```rust
+{file}```
+"
+        );
+
+        let alone = total(instruction);
+        let attached = total(&with_context);
+        // Ungrounded, an attachment cannot help -- but it must not hurt.
+        assert!(
+            attached >= alone - 1.0,
+            "attaching context cost {:.1} points",
+            alone - attached
+        );
     }
 
     #[test]

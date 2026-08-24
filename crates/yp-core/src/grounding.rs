@@ -202,6 +202,48 @@ fn push_referent(
     });
 }
 
+/// How much of an attachment this repository recognises.
+///
+/// The share of the distinct names in the attached material that the corpus
+/// has heard of at all, or `None` when nothing is attached.
+///
+/// This is the right question to ask of material, and it is not the question
+/// asked of an instruction. An instruction is judged on whether *it* names
+/// things precisely. An attachment makes no claims -- it hands over evidence,
+/// and what matters is whether that evidence belongs here. Averaging a pasted
+/// file's four hundred names into the dozen a person wrote is what made
+/// attaching the very file a task was about cost seventy points out of a
+/// thousand, and it measured nothing.
+///
+/// Language syntax is skipped: `let` and `return` live in every codebase and
+/// say nothing about which one this is.
+pub fn attachment_fit(attachments: &[&str], corpus: &dyn Corpus) -> Option<f64> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut known = 0usize;
+
+    for attachment in attachments {
+        for token in yp_lang::tokenize(attachment) {
+            if yp_lang::is_code_keyword(&token.text) {
+                continue;
+            }
+            if !(token.is_referent_candidate() || token.kind == TokenKind::Word) {
+                continue;
+            }
+            if !seen.insert(token.text.to_lowercase()) {
+                continue;
+            }
+            if corpus.lookup(&token.text).is_some() {
+                known += 1;
+            }
+        }
+    }
+
+    if seen.is_empty() {
+        return None;
+    }
+    Some(known as f64 / seen.len() as f64)
+}
+
 /// How much the names in this prompt narrow things down *in this repository*.
 ///
 /// Returns `(mean information per name, share of names the repository knows)`.
@@ -278,6 +320,7 @@ pub fn grounding(
     tokens: &[Token],
     pronoun_offsets: &[usize],
     instruction_words: &[Span],
+    attachments: &[&str],
     corpus: &dyn Corpus,
 ) -> (Axis, Vec<Referent>) {
     let found = referents(tokens, instruction_words, corpus);
@@ -307,7 +350,16 @@ pub fn grounding(
             .iter()
             .map(|r| r.weight_in_resolution(documents) * r.resolution())
             .sum();
-        let ratio = if weight > 0.0 { earned / weight } else { 0.0 };
+        let mut ratio = if weight > 0.0 { earned / weight } else { 0.0 };
+
+        // Attached material takes a fixed share of this sub-score, judged on
+        // whether the repository recognises it rather than on how precisely it
+        // names things. Attaching the right file lifts the score, attaching an
+        // unrelated one does not, and attaching anything at all can no longer
+        // bury the names the user actually wrote.
+        if let Some(fit) = attachment_fit(attachments, corpus) {
+            ratio = (1.0 - g::ATTACHMENT_SHARE) * ratio + g::ATTACHMENT_SHARE * fit;
+        }
 
         // Report the worst offender: the name the agent would struggle most
         // to pin down.
@@ -356,9 +408,14 @@ pub fn grounding(
 
     // ---- deixis ---------------------------------------------------------
     let dangling = dangling_deixis(pronoun_offsets, &found);
+    // Scaled by legibility, for the same reason clarity is: a mashed keyboard
+    // has no unattached references because it has no references, and full
+    // marks for that was the last thing keeping gibberish above the floor.
+    let legibility =
+        (yp_lang::legible_share(tokens) / crate::params::clarity::LEGIBLE_SHARE_FULL).min(1.0);
     let deixis = Component::new(
         "deixis",
-        decay(dangling, g::DEIXIS_MAX, g::DEIXIS_DECAY),
+        decay(dangling, g::DEIXIS_MAX, g::DEIXIS_DECAY) * legibility,
         g::DEIXIS_MAX,
         if dangling == 0 {
             "no unattached references".to_string()
@@ -417,7 +474,7 @@ mod tests {
         let tokens = tokenize(text);
         let resources = yp_lang::resources().unwrap();
         let offsets = pronoun_offsets(&resources.smells.find(text));
-        grounding(&tokens, &offsets, &[], &corpus).0
+        grounding(&tokens, &offsets, &[], &[], &corpus).0
     }
 
     fn component(axis: &Axis, id: &str) -> f64 {
@@ -522,7 +579,7 @@ mod tests {
 
         let axis_of = |corpus: &dyn Corpus| {
             let tokens = tokenize("fix verify_token so it returns claims");
-            grounding(&tokens, &[], &[], corpus)
+            grounding(&tokens, &[], &[], &[], corpus)
                 .0
                 .components
                 .iter()
@@ -612,7 +669,7 @@ mod tests {
         let unanchored = format!("{filler} fix something");
 
         let resolution_of = |text: &str| {
-            grounding(&tokenize(text), &[], &[], &corpus)
+            grounding(&tokenize(text), &[], &[], &[], &corpus)
                 .0
                 .components
                 .iter()
@@ -673,7 +730,7 @@ mod tests {
     fn a_snippet_full_of_real_names_beats_one_full_of_invented_ones() {
         let corpus = repo();
         let resolution_of = |text: &str| {
-            grounding(&tokenize(text), &[], &[], &corpus)
+            grounding(&tokenize(text), &[], &[], &[], &corpus)
                 .0
                 .components
                 .iter()

@@ -81,6 +81,35 @@ wrote, and download the result as a Markdown report with the full breakdown.
 Both happen in the browser: the file is read locally and only its text is
 scored, so the server keeps its three routes and gains no upload surface.
 
+## Attachments are evidence, not claims
+
+A prompt that carries the file it is about is a *better* prompt, and the score
+says so. Material you paste or attach is judged on whether this repository
+recognises it, not on how precisely it names things — because an attachment
+makes no claims, it hands over evidence.
+
+Getting that wrong was expensive: attaching the very source file a task was
+about used to cost **70 points out of 1000**, because the file's 434 names were
+averaged into the dozen the user had written by hand. Now attaching the right
+file *raises* the score and attaching an unrelated one does not.
+
+From a raw prompt — what the hook and the CLI see — a fenced block long enough
+to have been pasted rather than typed is taken as an attachment. Short spans
+stay inline: `verify_token` in the middle of a sentence is something you wrote.
+
+## Gibberish scores like gibberish
+
+Two components reward the *absence* of a defect, and text that is not language
+has no defects to find. `asdfasefawefasf zxdf2wq4rq235wrsadgㅁㄴㅇㄹ` repeated a
+few times used to score **356/1000 with clarity at full marks**. It now scores
+24.
+
+Recognising language needs no dictionary: Korean written in syllable blocks is
+writing while bare jamo (ㅁㄴㅇㄹ) is a mashed keyboard; identifiers and paths are
+judged against the repository instead; and Latin prose is checked against the
+commonest few hundred words as a *ratio*, so technical vocabulary costs nothing
+as long as ordinary words hold the sentence together.
+
 The server is `std::net` and nothing else — no async runtime, no framework, no
 dependency. It serves one page compiled into the binary and two JSON routes,
 never touches the filesystem in response to a request, caps bodies and headers,
@@ -130,8 +159,8 @@ side is worse.
 
 | | Pairwise accuracy |
 |---|---:|
-| Defects that are **lexically reachable** (399 pairs) | **64.7%** |
-| All 771 pairs, including the unreachable ones | 51.8% |
+| Defects that are **lexically reachable** (399 pairs) | **65.4%** |
+| All 771 pairs, including the unreachable ones | 52.5% |
 
 | Defect injected | Reachable | Pairs | Correct |
 |---|:---:|---:|---:|
@@ -183,8 +212,8 @@ yp bench --dataset swe --repos 6
 
 | Comparison | Issues | Own repository scores higher | Mean margin |
 |---|---:|---:|---:|
-| versus the mean foreign repository | 270 | **87.4%** | +39.5 |
-| versus the *best* foreign repository | 270 | **65.6%** | +22.5 |
+| versus the mean foreign repository | 270 | **87.4%** | +42.7 |
+| versus the *best* foreign repository | 270 | **66.3%** | +24.1 |
 
 | Repository | Issues | Own scores higher |
 |---|---:|---:|

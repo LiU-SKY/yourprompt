@@ -17,12 +17,29 @@ pub struct PromptStats {
     /// example in its own right: pasted code, a list, a number, or a quoted
     /// literal.
     pub has_concrete: bool,
+    /// The share of meaningful tokens that read as language rather than as a
+    /// mashed keyboard.
+    pub legible_share: f64,
     /// Tokens that could name something in the repository. The grounding axis
     /// resolves these; until it exists they are collected but unused.
     pub referents: Vec<String>,
 }
 
 impl PromptStats {
+    /// How far this text should be credited for containing no defects.
+    ///
+    /// Text that is not language contains no ambiguity smells and no dangling
+    /// references, and used to collect full marks for both. Components that
+    /// reward an *absence* are scaled by this, so a mashed keyboard earns
+    /// nothing for the defects it does not have.
+    ///
+    /// A ratio rather than a threshold, and a generous one: a prompt only has
+    /// to be a quarter ordinary words to count as fully written, which leaves
+    /// room for prompts that are mostly identifiers and paths.
+    pub fn legibility(&self) -> f64 {
+        (self.legible_share / crate::params::clarity::LEGIBLE_SHARE_FULL).min(1.0)
+    }
+
     /// Root type-token ratio: distinct tokens over the square root of total.
     ///
     /// Plain TTR falls as text gets longer no matter how varied it is, which
@@ -82,6 +99,7 @@ pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
     let has_number = tokens.iter().any(|t| t.kind == TokenKind::Number);
     let has_quote = text.contains('"') || text.contains('\'');
     let has_concrete = has_code || list_lines > 0 || has_number || has_quote;
+    let legible_share = yp_lang::legible_share(tokens);
 
     PromptStats {
         content_tokens,
@@ -89,6 +107,7 @@ pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
         has_code,
         list_lines,
         has_concrete,
+        legible_share,
         referents,
     }
 }

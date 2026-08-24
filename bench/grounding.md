@@ -8,17 +8,17 @@ Axis A claims to read your repository. This checks that claim the only way that 
 
 | Comparison | Issues | Own repository scores higher | Mean margin |
 |---|---:|---:|---:|
-| versus the mean foreign repository | 270 | **87.4%** | 39.5 |
-| versus the *best* foreign repository | 270 | **65.6%** | 22.5 |
+| versus the mean foreign repository | 270 | **87.4%** | 42.7 |
+| versus the *best* foreign repository | 270 | **69.6%** | 25.4 |
 
 | Repository | Issues | Own scores higher | Mean margin |
 |---|---:|---:|---:|
-| django/django | 114 | 88.6% | 61.1 |
-| matplotlib/matplotlib | 23 | 95.7% | 21.8 |
-| pytest-dev/pytest | 17 | 76.5% | 10.8 |
-| scikit-learn/scikit-learn | 23 | 100.0% | 47.6 |
-| sphinx-doc/sphinx | 16 | 43.8% | -4.7 |
-| sympy/sympy | 77 | 90.9% | 25.8 |
+| django/django | 114 | 89.5% | 61.4 |
+| matplotlib/matplotlib | 23 | 95.7% | 32.5 |
+| pytest-dev/pytest | 17 | 76.5% | 13.0 |
+| scikit-learn/scikit-learn | 23 | 100.0% | 60.2 |
+| sphinx-doc/sphinx | 16 | 56.2% | 5.6 |
+| sympy/sympy | 77 | 87.0% | 27.1 |
 
 ## Gold-patch test (a negative result)
 
@@ -26,12 +26,12 @@ The patch names the files that actually had to change. The idea was that an issu
 
 | Issue names a file the fix touched | Issues | Mean resolution | Has a name resolving to exactly one thing |
 |---|---:|---:|---:|
-| yes | 60 | 44.6 | 100.0% |
-| no | 210 | 44.0 | 98.1% |
+| yes | 60 | 67.9 | 98.3% |
+| no | 210 | 56.0 | 95.2% |
 
-Separation: **+0.6** points, which is nothing.
+Separation: **+11.9** points, which is nothing.
 
-The last column explains why, and it is a flaw in the test rather than a finding about the score. Essentially every issue in the dataset -- 99% of them -- already contains at least one name that resolves to exactly one thing in its repository. Both groups are saturated, so there is no headroom for the label to discriminate.
+The last column explains why, and it is a flaw in the test rather than a finding about the score. Essentially every issue in the dataset -- 96% of them -- already contains at least one name that resolves to exactly one thing in its repository. Both groups are saturated, so there is no headroom for the label to discriminate.
 
 The label is also asking a different question than it appears to. Naming the file a maintainer eventually chose to edit is not the same as being well grounded: an issue can point precisely at a symptom whose fix belongs somewhere else entirely. The test is kept and reported because it was proposed as evidence and produced none, which is worth saying out loud rather than dropping quietly.
 

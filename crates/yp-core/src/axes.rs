@@ -202,10 +202,13 @@ pub fn clarity(
     let units = (stats.content_tokens as f64).max(c::MIN_CONTENT_UNITS);
     let density = weighted / units;
     let k = std::f64::consts::LN_2 / c::HALF_LIFE_DENSITY;
-    // Scaled by substance: a prompt with nothing in it has no smells either,
-    // and must not collect full marks for the absence.
-    let earned =
-        crate::params::axis_max::CLARITY * (-k * density).exp() * substance(stats.content_tokens);
+    // Scaled by substance *and* legibility: a prompt with nothing in it has no
+    // smells, and neither does a mashed keyboard. Neither may collect full
+    // marks for the absence.
+    let earned = crate::params::axis_max::CLARITY
+        * (-k * density).exp()
+        * substance(stats.content_tokens)
+        * stats.legibility();
 
     worst.sort_by(|a, b| b.2.total_cmp(&a.2));
     let detail = if worst.is_empty() && stats.content_tokens < c::MIN_CONTENT_UNITS as usize {
@@ -255,10 +258,15 @@ fn variety_score(stats: &PromptStats) -> f64 {
         // Root TTR is dominated by noise on short text, so measuring it would
         // be worse than not measuring it. The fallback is still scaled by
         // substance, so an empty prompt earns nothing rather than a free 80%.
-        return d::VARIETY_MAX * d::VARIETY_SHORT_TEXT_FRACTION * substance(stats.content_tokens);
+        return d::VARIETY_MAX
+            * d::VARIETY_SHORT_TEXT_FRACTION
+            * substance(stats.content_tokens)
+            * stats.legibility();
     }
     let ratio = (stats.root_ttr() / d::FULL_VARIETY_RTTR).clamp(0.0, 1.0);
-    d::VARIETY_MAX * ratio
+    // Mashing is maximally "varied" -- every keystroke a new token -- so
+    // variety is credited only to text that reads as language.
+    d::VARIETY_MAX * ratio * stats.legibility()
 }
 
 /// Axis D -- does the prompt bound its own scope, show what it means, and
