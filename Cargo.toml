@@ -1,16 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/yp-core",
     "crates/yp-lang",
-    "crates/yp-index",
-    "crates/yp-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.82"
 license = "MIT"
 repository = "https://github.com/LiU-SKY/yourprompt"
 authors = ["LiU-SKY <33451609+LiU-SKY@users.noreply.github.com>"]
