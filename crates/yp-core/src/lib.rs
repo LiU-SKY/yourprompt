@@ -101,6 +101,32 @@ pub fn score_with(text: &str, corpus: Option<&dyn Corpus>) -> Option<Score> {
     score_parts(&parts, corpus)
 }
 
+/// How much of the absence credit this prompt has earned the right to.
+///
+/// Clarity and deixis reward what a prompt *lacks* -- no vague words, no
+/// unattached references. A text that asks for nothing lacks those defects
+/// the way silence does, so the reward is cut to
+/// [`params::clarity::NO_REQUEST_FACTOR`] unless something request-shaped is
+/// present: an objective, a result shape, an acceptance criterion, or a
+/// scope boundary. Requirements smells presuppose a requirement.
+pub(crate) fn request_factor(
+    cues: &std::collections::BTreeMap<yp_lang::CueId, Vec<String>>,
+) -> f64 {
+    let requestish = [
+        yp_lang::CueId::ActionVerb,
+        yp_lang::CueId::IoSpec,
+        yp_lang::CueId::Acceptance,
+        yp_lang::CueId::ScopeConstraint,
+    ]
+    .iter()
+    .any(|id| cues.get(id).is_some_and(|hits| !hits.is_empty()));
+    if requestish {
+        1.0
+    } else {
+        params::clarity::NO_REQUEST_FACTOR
+    }
+}
+
 /// Score a prompt whose attachments the caller has already separated.
 ///
 /// The instruction is judged as an instruction; attachments are judged as
@@ -120,6 +146,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
 
     let cues = axes::distinct_by_category(&cue_hits);
     let smells = axes::total_by_category(&smell_hits);
+    let request = request_factor(&cues);
 
     let grounding_axis = corpus.map(|corpus| {
         let offsets = grounding::pronoun_offsets(&smell_hits);
@@ -136,6 +163,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
             &instruction_words,
             &parts.attachments,
             corpus,
+            stats.diversity() * request,
         )
         .0
     });
@@ -150,7 +178,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     };
 
     let actionability = axes::actionability(&cues);
-    let clarity = axes::clarity(&smells, &resources.lexicon, &stats, waived);
+    let clarity = axes::clarity(&smells, &resources.lexicon, &stats, waived, request);
     let context = axes::context(&cues, &stats);
 
     let rest = actionability.earned + clarity.earned + context.earned;
@@ -268,6 +296,125 @@ mod tests {
             assert!(s.total < 120.0, "mash scored {}: {mash:.40}", s.total);
             assert_eq!(s.grade, "F");
         }
+    }
+
+    #[test]
+    fn one_word_held_down_scores_near_the_floor() {
+        // "아" over eight lines scored 346 and "테스트" ten times scored 389,
+        // with clarity at full marks both times: legible tokens, enough of
+        // them, and not a single ambiguity smell -- because between them they
+        // say one word. Absence credit is now scaled by lexical variety and
+        // by whether anything was asked for.
+        for held in [
+            "아아아아아아
+아아아
+아
+아
+아
+아
+아
+아",
+            "아아아아아아아아아아아아아아아아",
+            "테스트 테스트 테스트 테스트 테스트 테스트 테스트 테스트 테스트 테스트",
+            "가나가나가나가나 가나가나가나가나 가나가나가나가나",
+            "음... 어... 그... 저... 음... 어... 그... 저... 음...",
+            "123456 7890 1234 5678 90123 456789 012345",
+        ] {
+            let t = total(held);
+            assert!(t < 150.0, "{held:.30} scored {t}");
+        }
+    }
+
+    #[test]
+    fn text_that_asks_for_nothing_scores_below_a_real_request() {
+        // A greeting or a complaint has no ambiguity smells and no dangling
+        // references because it makes no request in which either could occur.
+        // It used to collect full marks for both absences and outscore actual
+        // requests. Requirements smells presuppose a requirement.
+        let request = total("그거 좀 고쳐줘");
+        for non_request in [
+            "안녕하세요 반갑습니다",
+            "아 진짜 짜증나네 왜 자꾸 이러지 답답해 죽겠다",
+            "와 진짜 대박이다 이거 미쳤네 진짜로",
+            "고맙습니다 정말 감사합니다 덕분에 잘 됐어요",
+        ] {
+            let t = total(non_request);
+            assert!(
+                t < request,
+                "{non_request} scored {t}, request scored {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_word_of_thanks_after_a_real_request_is_not_charged_for() {
+        // The non-request discount must key on the absence of request cues,
+        // not on the presence of pleasantries.
+        let plain = total("crates 안의 parse_args 함수를 수정해줘");
+        let polite = total("고마워! 이번에는 crates 안의 parse_args 함수를 수정해줘");
+        assert!(polite > plain * 0.8, "polite {polite} vs plain {plain}");
+    }
+
+    #[test]
+    fn the_korean_fixture_holds_its_ordering() {
+        // bench/korean.txt is 32 Korean prompts in five tiers, from held-down
+        // keys to a fully specified request. The scorer must keep tier 0
+        // under 150 and tier 1 under 350, and must order at least 90% of
+        // cross-tier pairs correctly. Scored ungrounded, so the result does
+        // not drift as this repository grows.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../bench/korean.txt");
+        let text = std::fs::read_to_string(path).expect("bench/korean.txt");
+
+        let mut records: Vec<(u32, String, f64)> = Vec::new();
+        for block in text.split("\n---\n") {
+            let block: String = block
+                .lines()
+                .skip_while(|l| l.starts_with('#') || l.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (head, body) = block.split_once('\n').expect("tiered record");
+            let (tier, label) = head.split_once('\t').expect("tier<TAB>label");
+            let tier: u32 = tier.trim().parse().expect("numeric tier");
+            let total = score(body.trim_matches('\n')).expect("scores").total;
+            records.push((tier, label.to_string(), total));
+        }
+        assert!(
+            records.len() > 25,
+            "fixture parsed {} records",
+            records.len()
+        );
+
+        for (tier, label, total) in &records {
+            let ceiling = match tier {
+                0 => 150.0,
+                1 => 350.0,
+                _ => continue,
+            };
+            assert!(
+                *total < ceiling,
+                "tier {tier} '{label}' scored {total}, ceiling {ceiling}"
+            );
+        }
+
+        let mut pairs = 0u32;
+        let mut correct = 0u32;
+        for (i, a) in records.iter().enumerate() {
+            for b in &records[i + 1..] {
+                if a.0 == b.0 {
+                    continue;
+                }
+                pairs += 1;
+                if (a.2 > b.2) == (a.0 > b.0) {
+                    correct += 1;
+                }
+            }
+        }
+        let accuracy = f64::from(correct) / f64::from(pairs);
+        assert!(
+            accuracy >= 0.90,
+            "cross-tier ordering {correct}/{pairs} = {:.1}%",
+            accuracy * 100.0
+        );
     }
 
     #[test]

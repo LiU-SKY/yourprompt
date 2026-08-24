@@ -178,6 +178,7 @@ pub fn clarity(
     lexicon: &Lexicon,
     stats: &PromptStats,
     waived: &[SmellId],
+    request: f64,
 ) -> Axis {
     let mut weighted = 0.0;
     let mut worst: Vec<(SmellId, usize, f64)> = Vec::new();
@@ -202,13 +203,16 @@ pub fn clarity(
     let units = (stats.content_tokens as f64).max(c::MIN_CONTENT_UNITS);
     let density = weighted / units;
     let k = std::f64::consts::LN_2 / c::HALF_LIFE_DENSITY;
-    // Scaled by substance *and* legibility: a prompt with nothing in it has no
-    // smells, and neither does a mashed keyboard. Neither may collect full
-    // marks for the absence.
+    // Scaled by substance, legibility, variety, and whether anything was
+    // asked for: a prompt with nothing in it has no smells, and neither does
+    // a mashed keyboard, one word held down, or a greeting. None of them may
+    // collect full marks for the absence.
     let earned = crate::params::axis_max::CLARITY
         * (-k * density).exp()
         * substance(stats.content_tokens)
-        * stats.legibility();
+        * stats.legibility()
+        * stats.diversity()
+        * request;
 
     worst.sort_by(|a, b| b.2.total_cmp(&a.2));
     let detail = if worst.is_empty() && stats.content_tokens < c::MIN_CONTENT_UNITS as usize {
@@ -351,9 +355,10 @@ mod tests {
         let stats = crate::stats::analyze(text, &tokens);
         let cues = distinct_by_category(&r.cue_matcher.find(text));
         let smells = total_by_category(&r.smells.find(text));
+        let request = crate::request_factor(&cues);
         (
             actionability(&cues),
-            clarity(&smells, &r.lexicon, &stats, &[]),
+            clarity(&smells, &r.lexicon, &stats, &[], request),
             context(&cues, &stats),
         )
     }

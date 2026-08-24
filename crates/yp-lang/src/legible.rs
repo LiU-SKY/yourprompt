@@ -318,14 +318,58 @@ pub fn is_common_word(word: &str) -> bool {
 /// Syllable blocks are what typing Korean produces. A run of bare
 /// compatibility jamo is what a keyboard produces when nobody is typing.
 pub fn is_written_hangul(text: &str) -> bool {
-    text.chars().any(|c| matches!(c as u32, 0xAC00..=0xD7A3))
+    text.chars().any(|c| matches!(c as u32, 0xAC00..=0xD7A3)) && !is_repeated_hangul(text)
+}
+
+/// True for a Hangul token that is one short unit typed over and over:
+/// "아아아아아아", "가나가나가나가나".
+///
+/// Held keys and reduplication carry feeling, not content -- a query made of
+/// one repeated term has almost no information in it (the pre-retrieval QPP
+/// literature's AvICTF is defined over *distinct* terms for this reason).
+/// Three repeats of one syllable or two of a two-syllable unit is where
+/// ordinary words stop and the held key begins.
+fn is_repeated_hangul(text: &str) -> bool {
+    let syllables: Vec<char> = text
+        .chars()
+        .filter(|c| matches!(*c as u32, 0xAC00..=0xD7A3))
+        .collect();
+    if syllables.len() < 3 || syllables.len() != text.chars().count() {
+        return false;
+    }
+    for unit in 1..=2usize {
+        if syllables.len() >= 2 * unit && syllables.len() % unit == 0 {
+            let pattern = &syllables[..unit];
+            if syllables.chunks(unit).all(|c| c == pattern) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Korean interjections and hesitation fillers: real language, but not a
+/// request for anything. Sorted, for binary search.
+const KO_FILLERS: &[&str] = &[
+    "아", "아하", "앗", "어", "어휴", "에", "에휴", "오", "와", "우와", "음", "저기", "제발", "헐",
+    "흠",
+];
+
+/// True for a token that is a standalone Korean interjection or filler.
+///
+/// "음... 어... 그..." is written Korean, so it must not count *against*
+/// legibility the way a mashed keyboard does -- but a prompt made of it has
+/// said nothing, so it must not count as content either. Fillers are treated
+/// the way punctuation is: neither evidence for nor against.
+pub fn is_filler(token: &Token) -> bool {
+    token.kind == TokenKind::Hangul && KO_FILLERS.binary_search(&token.text.as_str()).is_ok()
 }
 
 /// True when this token could plausibly be part of a human request.
 pub fn is_legible(token: &Token) -> bool {
     match token.kind {
-        // Judged against a real repository by the grounding axis, which is a
-        // better test than any word list.
+        // Idents and paths are judged against a real repository by the
+        // grounding axis, which is a better test than any word list.
         TokenKind::Ident | TokenKind::Path | TokenKind::CodeSpan | TokenKind::Number => true,
         TokenKind::Hangul => is_written_hangul(&token.text),
         TokenKind::Word => is_common_word(&token.text),
@@ -335,11 +379,13 @@ pub fn is_legible(token: &Token) -> bool {
 
 /// The share of a prompt's meaningful tokens that read as language.
 ///
-/// Punctuation is ignored: it is neither evidence for nor against.
+/// Punctuation, numbers, and interjections are ignored: none of them is
+/// evidence either way. Numbers matter in a real prompt, but a screen of
+/// digits is not language, and counting them here once let one score 312.
 pub fn legible_share(tokens: &[Token]) -> f64 {
     let considered: Vec<&Token> = tokens
         .iter()
-        .filter(|t| t.kind != TokenKind::Punct)
+        .filter(|t| !matches!(t.kind, TokenKind::Punct | TokenKind::Number) && !is_filler(t))
         .collect();
     if considered.is_empty() {
         return 0.0;
@@ -426,5 +472,36 @@ mod tests {
     fn empty_text_is_not_legible() {
         assert_eq!(legible_share(&tokenize("")), 0.0);
         assert_eq!(legible_share(&tokenize("   ")), 0.0);
+    }
+
+    #[test]
+    fn a_held_key_is_not_written_hangul() {
+        // One or two syllables typed over and over is a feeling, not a word.
+        for held in ["아아아", "아아아아아아", "가나가나가나가나", "빨리빨리"]
+        {
+            assert!(!is_written_hangul(held), "{held} passed as written");
+        }
+        // Real words with internal repetition are not caught: too short, or
+        // not a whole-token repetition of one unit.
+        for word in ["아", "아아", "테스트", "고쳐줘", "바꿔바꿔줘"] {
+            assert!(is_written_hangul(word), "{word} rejected");
+        }
+    }
+
+    #[test]
+    fn digits_are_neutral_not_language() {
+        // A screen of digits once counted as 87% legible and scored 312.
+        assert_eq!(legible_share(&tokenize("123456 7890 1234 5678")), 0.0);
+        // But a number inside a sentence costs that sentence nothing.
+        let text = "고쳐줘 verify_token 이 429 에서 실패해";
+        assert!(legible_share(&tokenize(text)) > 0.5);
+    }
+
+    #[test]
+    fn interjections_are_neutral_not_content() {
+        let filler = tokenize("음");
+        assert!(is_filler(&filler[0]));
+        // Not punished as mash, not credited as language.
+        assert_eq!(legible_share(&tokenize("음... 어... 음... 어...")), 0.0);
     }
 }

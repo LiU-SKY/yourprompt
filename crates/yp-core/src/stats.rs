@@ -40,6 +40,20 @@ impl PromptStats {
         (self.legible_share / crate::params::clarity::LEGIBLE_SHARE_FULL).min(1.0)
     }
 
+    /// How far this text should be credited as *varied* language.
+    ///
+    /// One word typed ten times is legible, substantial by token count, and
+    /// says one word's worth of anything. Components that reward an absence
+    /// of defects are scaled by this as well as by [`Self::legibility`],
+    /// because a prompt cannot be clearer than it is informative, and the
+    /// information in a query lives in its distinct terms.
+    ///
+    /// Root TTR rather than a raw distinct ratio, so ordinary repetition in
+    /// long prompts is not charged for.
+    pub fn diversity(&self) -> f64 {
+        (self.root_ttr() / crate::params::clarity::DIVERSITY_FULL_RTTR).clamp(0.0, 1.0)
+    }
+
     /// Root type-token ratio: distinct tokens over the square root of total.
     ///
     /// Plain TTR falls as text gets longer no matter how varied it is, which
@@ -87,6 +101,12 @@ pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
             TokenKind::Punct => continue,
             TokenKind::CodeSpan => has_code = true,
             _ => {}
+        }
+        // Interjections are language but not content: a prompt made of "음...
+        // 어..." has not said anything to score. They are skipped here the way
+        // punctuation is, so they neither add substance nor dilute variety.
+        if yp_lang::is_filler(token) {
+            continue;
         }
         content_tokens += 1;
         distinct.insert(token.text.as_str());

@@ -1,0 +1,142 @@
+# Korean prompts, ranked by how much of a request they actually are.
+#
+# Records are separated by a line of "---". The first line of a record is
+# "<tier> <tab> <label>"; everything after it, up to the separator, is the
+# prompt exactly as someone would type it.
+#
+# Tiers are an ordering, not a score. The claim under test is only that a
+# prompt in a higher tier outranks one in a lower tier -- the absolute numbers
+# are the scorer's business, except where a ceiling is stated below.
+#
+#   0  not language. Repetition, mashing, jamo, punctuation, filler.
+#      Ceiling: must score under 150.
+#   1  Korean, but no request in it. Greetings, reactions, thinking aloud.
+#      Ceiling: must score under 350.
+#   2  a real request, but underspecified -- the deixis and vagueness tier.
+#   3  a real request naming something concrete.
+#   4  concrete, bounded, and says how to tell when it is done.
+#
+# Tier 0 is the reason this file exists. A scorer that reads "no ambiguity
+# smells" off a prompt that contains no language is measuring the absence of
+# evidence and calling it quality.
+
+0	single syllable repeated over many lines
+아아아아아아
+아아아
+아
+아
+아
+아
+아
+아
+---
+0	one syllable, one line
+아아아아아아아아아아아아아아아아
+---
+0	laughter
+ㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋ
+---
+0	jamo mash
+ㅁㄴㅇㄹㅁㄴㅇㄹ ㅋㅌㅊㅍ ㅂㅈㄷㄱ ㅅㅛㅕㅑ ㅁㄴㅇㄹㅎ
+---
+0	latin keyboard mash with a hangul tail
+asdfasefawefasf zxdf2wq4rq235wrsadgㅁㄴㅇㄹ
+---
+0	two syllables alternating
+가나가나가나가나 가나가나가나가나 가나가나가나가나
+---
+0	punctuation only
+!!!!!!! ???? ..... ~~~~~ ;;;;;; ......
+---
+0	digits only
+123456 7890 1234 5678 90123 456789 012345
+---
+0	one word repeated verbatim
+테스트 테스트 테스트 테스트 테스트 테스트 테스트 테스트 테스트 테스트
+---
+0	filler syllables
+음... 어... 그... 저... 음... 어... 그... 저... 음...
+---
+1	greeting
+안녕하세요 반갑습니다
+---
+1	reaction
+와 진짜 대박이다 이거 미쳤네 진짜로
+---
+1	thanks
+고맙습니다 정말 감사합니다 덕분에 잘 됐어요
+---
+1	thinking aloud, no request
+음 이거 어떻게 해야 되지 잘 모르겠네 좀 어렵다
+---
+1	a complaint with no object
+아 진짜 짜증나네 왜 자꾸 이러지 답답해 죽겠다
+---
+1	a question about nothing in particular
+그래서 그거 어떻게 됐어? 잘 됐나? 괜찮은 거지?
+---
+2	pure deixis
+그거 좀 고쳐줘
+---
+2	deixis with urgency
+저거 빨리 좀 어떻게 해줘 급해
+---
+2	vague quality request
+코드 좀 더 좋게 만들어줘
+---
+2	vague performance request
+이거 좀 빠르게 최적화해줘
+---
+2	unnamed bug
+버그 있는 것 같은데 좀 봐줘
+---
+2	unnamed test failure
+테스트가 깨지는데 고쳐줘
+---
+2	subjective and comparative
+지금보다 더 깔끔하고 예쁘게 리팩터링해줘
+---
+2	broad and unbounded
+전체적으로 다 정리 좀 해줘
+---
+3	names a file
+src/auth/login.rs 의 토큰 만료 처리 로직을 수정해줘
+---
+3	names a function and a symptom
+verify_token 함수가 만료된 토큰을 받으면 panic 이 나는데 이걸 고쳐줘
+---
+3	names a file and an action
+crates/yp-core/src/params.rs 에 ATTACHMENT_SHARE 상수를 추가해줘
+---
+3	concrete refactor with a named target
+RepoIndex::build 를 파일 시스템에 의존하지 않도록 from_files 로 분리해줘
+---
+3	concrete with an explicit output shape
+scan_directory 함수가 Vec<PathBuf> 대신 Result<Vec<PathBuf>, io::Error> 를 반환하도록 바꿔줘
+---
+4	file, symptom, boundary, and acceptance
+crates/yp-index/src/lib.rs 의 RepoIndex::lookup 이 인덱스가 비어 있을 때 None 대신 panic 을 냅니다.
+빈 인덱스에서는 None 을 반환하도록 고쳐주세요.
+
+공개 시그니처는 바꾸지 말고, parse_str 쪽은 건드리지 마세요.
+완료 기준: cargo test -p yp-index 가 전부 통과하고, 빈 인덱스를 조회하는 회귀 테스트가 하나 추가되어 있을 것.
+---
+4	reproduction, expectation, and scope
+yp score 에 빈 문자열을 넘기면 464 점이 나옵니다. 기대값은 0 에 가까운 점수입니다.
+
+재현:
+  yp score ""
+
+crates/yp-core/src/axes.rs 의 clarity 축에서 스멜이 0 개라는 이유로 만점을 주는 것이 원인으로 보입니다.
+grounding 축은 건드리지 말고, clarity 축만 수정해주세요.
+완료 기준: yp score "" 가 100 점 미만이고 기존 테스트가 모두 통과할 것.
+---
+4	migration with a named boundary and a check
+crates/yp-lang/src/matcher.rs 의 Matcher 를 제네릭 Matcher<C> 로 바꿔서
+영어 사전과 한국어 사전이 같은 타입을 공유하도록 해주세요.
+
+- find_masked 의 겹치는 후보 수집 동작은 유지할 것
+- TermTable 의 직렬화 포맷은 바꾸지 말 것
+- token.rs 는 수정하지 말 것
+
+완료 기준: cargo test --workspace 통과, cargo clippy -D warnings 통과.

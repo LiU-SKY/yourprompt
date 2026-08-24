@@ -322,6 +322,7 @@ pub fn grounding(
     instruction_words: &[Span],
     attachments: &[&str],
     corpus: &dyn Corpus,
+    discount: f64,
 ) -> (Axis, Vec<Referent>) {
     let found = referents(tokens, instruction_words, corpus);
 
@@ -408,14 +409,16 @@ pub fn grounding(
 
     // ---- deixis ---------------------------------------------------------
     let dangling = dangling_deixis(pronoun_offsets, &found);
-    // Scaled by legibility, for the same reason clarity is: a mashed keyboard
-    // has no unattached references because it has no references, and full
-    // marks for that was the last thing keeping gibberish above the floor.
+    // Scaled by legibility and the caller's discount, for the same reason
+    // clarity is: a mashed keyboard has no unattached references because it
+    // has no references, one word held down has exactly one, and a greeting
+    // refers to nothing because it asks for nothing. Full marks for those
+    // absences was the last thing keeping gibberish above the floor.
     let legibility =
         (yp_lang::legible_share(tokens) / crate::params::clarity::LEGIBLE_SHARE_FULL).min(1.0);
     let deixis = Component::new(
         "deixis",
-        decay(dangling, g::DEIXIS_MAX, g::DEIXIS_DECAY) * legibility,
+        decay(dangling, g::DEIXIS_MAX, g::DEIXIS_DECAY) * legibility * discount,
         g::DEIXIS_MAX,
         if dangling == 0 {
             "no unattached references".to_string()
@@ -474,7 +477,7 @@ mod tests {
         let tokens = tokenize(text);
         let resources = yp_lang::resources().unwrap();
         let offsets = pronoun_offsets(&resources.smells.find(text));
-        grounding(&tokens, &offsets, &[], &[], &corpus).0
+        grounding(&tokens, &offsets, &[], &[], &corpus, 1.0).0
     }
 
     fn component(axis: &Axis, id: &str) -> f64 {
@@ -579,7 +582,7 @@ mod tests {
 
         let axis_of = |corpus: &dyn Corpus| {
             let tokens = tokenize("fix verify_token so it returns claims");
-            grounding(&tokens, &[], &[], &[], corpus)
+            grounding(&tokens, &[], &[], &[], corpus, 1.0)
                 .0
                 .components
                 .iter()
@@ -669,7 +672,7 @@ mod tests {
         let unanchored = format!("{filler} fix something");
 
         let resolution_of = |text: &str| {
-            grounding(&tokenize(text), &[], &[], &[], &corpus)
+            grounding(&tokenize(text), &[], &[], &[], &corpus, 1.0)
                 .0
                 .components
                 .iter()
@@ -730,7 +733,7 @@ mod tests {
     fn a_snippet_full_of_real_names_beats_one_full_of_invented_ones() {
         let corpus = repo();
         let resolution_of = |text: &str| {
-            grounding(&tokenize(text), &[], &[], &[], &corpus)
+            grounding(&tokenize(text), &[], &[], &[], &corpus, 1.0)
                 .0
                 .components
                 .iter()

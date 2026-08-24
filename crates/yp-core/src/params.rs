@@ -140,6 +140,25 @@ pub mod clarity {
     /// Weighted smell density at which the axis loses half its points.
     /// Roughly: one mid-weight smell every five content words.
     pub const HALF_LIFE_DENSITY: f64 = 0.20;
+
+    /// Root TTR at which a prompt counts as fully varied language.
+    ///
+    /// "That word ten times" is legible and substantial by token count, and
+    /// carries one word of information. Absence-rewarding components are
+    /// scaled by root TTR against this reference; three distinct words in a
+    /// three-word prompt already clears it, so only actual repetition pays.
+    pub const DIVERSITY_FULL_RTTR: f64 = 1.5;
+
+    /// How much of the absence credit survives when the prompt asks for
+    /// nothing at all.
+    ///
+    /// Requirements smells presuppose a requirement (Femmer et al. 2017
+    /// analyse *requirements*, not arbitrary text): a greeting or a complaint
+    /// has no ambiguity smells and no dangling references because it makes no
+    /// request in which either could occur. A prompt with no objective, no
+    /// I/O shape, no acceptance criterion, and no scope constraint keeps this
+    /// fraction of the marks awarded for those absences.
+    pub const NO_REQUEST_FACTOR: f64 = 0.4;
 }
 
 /// D -- context sufficiency and form.
