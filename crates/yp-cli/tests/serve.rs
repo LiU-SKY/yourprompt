@@ -253,3 +253,56 @@ fn korean_prompts_round_trip_intact() {
     let score: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
     assert!(score["total"].as_f64().unwrap() > 0.0);
 }
+
+#[test]
+fn a_json_body_separates_the_instruction_from_its_attachments() {
+    // The page posts the two apart so the scorer can judge one as a request
+    // and the other as evidence.
+    let server = start(&[], "json-parts");
+    let body = serde_json::json!({
+        "prompt": "fix the parser",
+        "attachments": ["fn informativeness() { let referent = 1; }"],
+    })
+    .to_string();
+    let (status, out) = post(server.port, "/api/score", &body);
+    assert!(status.contains("200"), "got {status}");
+    let score: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+    assert!(score["total"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn a_plain_body_is_still_scored_as_a_whole() {
+    // curl --data-binary must keep working alongside the JSON shape.
+    let server = start(&[], "plain-body");
+    let (status, out) = post(server.port, "/api/score", "fix the parser");
+    assert!(status.contains("200"), "got {status}");
+    let score: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+    assert!(score["total"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn attaching_context_through_the_api_does_not_lower_the_score() {
+    let server = start(&[], "attach-helps");
+    let prompt = "Rewrite the parser in src/cli.rs so it returns a Config.";
+    let alone: serde_json::Value =
+        serde_json::from_str(&post(server.port, "/api/score", prompt).1).unwrap();
+
+    let file: String = (0..40)
+        .map(|i| {
+            format!(
+                "fn helper_{i}() {{ let value = {i}; }}
+"
+            )
+        })
+        .collect();
+    let body = serde_json::json!({ "prompt": prompt, "attachments": [file] }).to_string();
+    let attached: serde_json::Value =
+        serde_json::from_str(&post(server.port, "/api/score", &body).1).unwrap();
+
+    assert!(
+        attached["total"].as_f64().unwrap() >= alone["total"].as_f64().unwrap() - 1.0,
+        "attaching context cost points: {} -> {}",
+        alone["total"],
+        attached["total"]
+    );
+}

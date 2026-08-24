@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>yourprompt</title>
+<meta name="description" content="Scores how well an AI coding agent can understand your prompt, against your actual repository. Runs entirely in your browser.">
 <style>
   :root {
     --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --dim: #6b6b66;
@@ -23,18 +24,18 @@
     font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
           "Noto Sans KR", Roboto, sans-serif;
   }
-  .wrap { max-width: 940px; margin: 0 auto; padding: 32px 20px 64px; }
-  header { margin-bottom: 24px; }
-  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 34px 20px 72px; }
+  header { margin-bottom: 22px; }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.015em; }
   .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
   .sub code { font-size: 12.5px; }
+  .lede { margin: 14px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
 
-  .panel {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; padding: 16px;
-  }
-
-  .tools { display: flex; gap: 8px; align-items: center; margin-bottom: 10px;
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 16px; }
+  .label { font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+           color: var(--dim); margin: 0 0 6px; }
+  .tools { display: flex; gap: 8px; align-items: center; margin: 12px 0 6px;
            flex-wrap: wrap; }
   button {
     font: inherit; font-size: 13.5px; padding: 6px 12px; border-radius: 7px;
@@ -47,29 +48,38 @@
   .note.bad { color: var(--bad); }
 
   textarea {
-    width: 100%; min-height: 150px; resize: vertical; padding: 12px;
+    width: 100%; min-height: 128px; resize: vertical; padding: 12px;
     background: transparent; color: inherit; border: 1px solid var(--line);
     border-radius: 8px; font: 14px/1.6 ui-monospace, SFMono-Regular,
     "Cascadia Mono", Menlo, Consolas, monospace;
   }
   textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-  textarea.dropping { border-color: var(--accent); background: var(--drop); }
+  .dropping { border-color: var(--accent) !important; background: var(--drop); }
 
-  .bar-row { display: flex; align-items: baseline; gap: 14px; margin: 20px 0 6px; }
-  .total { font-size: 40px; font-weight: 650; letter-spacing: -0.02em;
+  .attachments { margin-top: 10px; display: grid; gap: 6px; }
+  .att {
+    display: flex; align-items: center; gap: 10px; font-size: 13px;
+    border: 1px dashed var(--line); border-radius: 7px; padding: 7px 10px;
+  }
+  .att .nm { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .att .sz { color: var(--dim); }
+  .att button { margin-left: auto; padding: 2px 8px; font-size: 12px; }
+  .empty-att { color: var(--dim); font-size: 12.5px; font-style: italic;
+               border: 1px dashed var(--line); border-radius: 7px; padding: 9px 10px; }
+
+  .bar-row { display: flex; align-items: baseline; gap: 14px; margin: 22px 0 6px; }
+  .total { font-size: 42px; font-weight: 650; letter-spacing: -0.02em;
            font-variant-numeric: tabular-nums; }
-  .grade { font-size: 20px; font-weight: 600; }
+  .grade { font-size: 21px; font-weight: 600; }
   .of { color: var(--dim); font-size: 13px; }
   .flag { color: var(--dim); font-size: 12.5px; margin-left: auto; }
-
   .track { height: 8px; background: var(--track); border-radius: 999px; overflow: hidden; }
   .fill { height: 100%; border-radius: 999px; transition: width .18s ease; }
 
   .axes { margin-top: 26px; display: grid; gap: 14px; }
-  .axis { border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
-  .axis > .head {
-    display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px;
-  }
+  .axis { border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px;
+          background: var(--panel); }
+  .axis > .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
   .axis .name { font-weight: 600; text-transform: capitalize; }
   .axis .num { margin-left: auto; color: var(--dim); font-size: 13px;
                font-variant-numeric: tabular-nums; }
@@ -79,10 +89,10 @@
   .comp .cv { font-variant-numeric: tabular-nums; }
   .comp .cd { color: var(--dim); overflow-wrap: anywhere; }
   .muted { color: var(--dim); font-style: italic; }
-  footer { margin-top: 30px; color: var(--dim); font-size: 12.5px; }
+  footer { margin-top: 34px; color: var(--dim); font-size: 12.5px; line-height: 1.7; }
   a { color: var(--accent); }
   .err { color: var(--bad); }
-  @media (max-width: 620px) {
+  @media (max-width: 640px) {
     .comp { grid-template-columns: 1fr; gap: 2px; }
     .comp .cd { margin-bottom: 6px; }
     .note { margin-left: 0; width: 100%; }
@@ -93,22 +103,30 @@
 <div class="wrap">
   <header>
     <h1>yourprompt</h1>
-    <p class="sub" id="sub">Type a prompt. It is scored as you go, out of 1000.</p>
+    <p class="sub" id="sub">Loading the scorer…</p>
+    <p class="lede">
+      Scores how well an AI coding agent can understand your prompt, out of
+      1000, with the reason for every point.
+    </p>
   </header>
 
   <div class="panel">
-    <div class="tools">
-      <button type="button" id="open">Open a file…</button>
-      <button type="button" id="download" disabled>Download report</button>
-      <button type="button" id="clear">Clear</button>
-      <input type="file" id="file" hidden accept=".txt,.md,.markdown,.rst,.text,text/*">
-      <span class="note" id="note"></span>
-    </div>
-
+    <p class="label">Prompt</p>
     <textarea id="p" spellcheck="false" autofocus
-      placeholder="Type here, or drop a text file onto this box.
+      placeholder="What do you want the agent to do?
 
 e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don't change the public signature of login(). tests/auth.rs must still pass."></textarea>
+
+    <p class="label" style="margin-top:16px">Attached context <span style="text-transform:none;letter-spacing:0">— files the agent should read, judged as evidence rather than as instructions</span></p>
+    <div class="attachments" id="atts"></div>
+
+    <div class="tools">
+      <button type="button" id="open">Attach a file…</button>
+      <button type="button" id="download" disabled>Download report</button>
+      <button type="button" id="clear">Clear</button>
+      <input type="file" id="file" hidden multiple accept=".txt,.md,.markdown,.rst,.text,text/*">
+      <span class="note" id="note"></span>
+    </div>
 
     <div class="bar-row">
       <span class="total" id="total">—</span>
@@ -122,41 +140,55 @@ e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expi
   <div class="axes" id="axes"></div>
 
   <footer>
-    Deterministic and local — no model is called, and nothing you type or open
-    leaves this server. Files you open are read in your browser and only their
-    text is scored.
-    <a href="https://github.com/LiU-SKY/yourprompt">source</a>
+    Deterministic and local: no model is called, and nothing you type or
+    attach leaves this server. Files are read in your browser and only their
+    text is scored.<br>
+    <a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>
   </footer>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
 const colourFor = r => r >= 0.70 ? 'var(--accent)' : r >= 0.50 ? 'var(--warn)' : 'var(--bad)';
-
-// Matches the server's own cap, so a file that would be refused is refused
-// here with an explanation rather than as an opaque 400.
 const MAX_BYTES = 256 * 1024;
 
 let lastScore = null;
-let repoInfo = { repo: null, files: 0 };
+let attachments = [];   // { name, text }
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-
 function note(message, bad) {
   $('note').textContent = message || '';
   $('note').className = 'note' + (bad ? ' bad' : '');
 }
 
+// --- talking to the server ------------------------------------------------
+// The page posts the instruction and its attachments separately, so the
+// scorer can judge one as a request and the other as evidence.
+
+async function scoreNow(instruction, attached) {
+  const res = await fetch('/api/score', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json; charset=utf-8'},
+    body: JSON.stringify({
+      prompt: instruction,
+      attachments: attached.map(a => a.text),
+    }),
+  });
+  if (!res.ok) throw new Error('server returned ' + res.status);
+  return res.json();
+}
+
+// --- rendering -------------------------------------------------------------
+
 function renderAxis(axis, absent) {
   if (absent) {
     return `<div class="axis"><div class="head"><span class="name">grounding</span>
       <span class="num">not scored</span></div>
-      <div class="muted">No repository indexed, so the remaining axes were
-      rescaled to 1000. Start the server with <code>--repo PATH</code> to
-      ground scores in a codebase.</div></div>`;
+      <div class="muted">No repository index loaded, so the remaining axes were
+      rescaled to 1000.</div></div>`;
   }
   const r = axis.max ? axis.earned / axis.max : 0;
   const comps = axis.components.map(c => `
@@ -183,7 +215,7 @@ function render(s) {
   $('grade').style.color = colourFor(r);
   $('fill').style.width = (r * 100).toFixed(1) + '%';
   $('fill').style.background = colourFor(r);
-  $('flag').textContent = s.renormalized ? 'no repository indexed — rescaled' : '';
+  $('flag').textContent = s.renormalized ? 'ungrounded — rescaled' : '';
   $('axes').innerHTML =
     renderAxis(s.grounding, !s.grounding) +
     renderAxis(s.actionability) + renderAxis(s.clarity) + renderAxis(s.context);
@@ -197,28 +229,39 @@ function clearScore() {
   $('axes').innerHTML = '';
 }
 
-// ---------------------------------------------------------------------------
-// Scoring
-// ---------------------------------------------------------------------------
+function renderAttachments() {
+  if (!attachments.length) {
+    $('atts').innerHTML =
+      '<div class="empty-att">Nothing attached. Drop a file here, or use the button below.</div>';
+    return;
+  }
+  $('atts').innerHTML = attachments.map((a, i) => `
+    <div class="att">
+      <span class="nm">${escapeHtml(a.name)}</span>
+      <span class="sz">${(a.text.length / 1024).toFixed(1)} KB</span>
+      <button type="button" data-i="${i}">remove</button>
+    </div>`).join('');
+  $('atts').querySelectorAll('button').forEach(b =>
+    b.addEventListener('click', () => {
+      attachments.splice(Number(b.dataset.i), 1);
+      renderAttachments();
+      score();
+    }));
+}
+
+// --- scoring ---------------------------------------------------------------
 
 let timer = null, inflight = null;
-
 async function score() {
   const text = $('p').value;
-  if (!text.trim()) { clearScore(); return; }
-  if (inflight) inflight.abort();
-  inflight = new AbortController();
+  if (!text.trim() && !attachments.length) { clearScore(); return; }
   try {
-    const res = await fetch('/api/score', {
-      method: 'POST', body: text, signal: inflight.signal,
-      headers: {'Content-Type': 'text/plain; charset=utf-8'},
-    });
-    if (!res.ok) throw new Error('server returned ' + res.status);
-    lastScore = await res.json();
+    const s = await scoreNow(text, attachments);
+    if (!s) throw new Error('the scorer could not read that');
+    lastScore = s;
     $('download').disabled = false;
-    render(lastScore);
+    render(s);
   } catch (e) {
-    if (e.name === 'AbortError') return;
     clearScore();
     $('axes').innerHTML = '<div class="axis err">' + escapeHtml(e.message) + '</div>';
   }
@@ -226,12 +269,10 @@ async function score() {
 
 $('p').addEventListener('input', () => {
   clearTimeout(timer);
-  timer = setTimeout(score, 140);
+  timer = setTimeout(score, 120);
 });
 
-// ---------------------------------------------------------------------------
-// Opening a file
-// ---------------------------------------------------------------------------
+// --- attaching files -------------------------------------------------------
 
 function looksBinary(text) {
   // A NUL byte never appears in text a human wrote.
@@ -241,7 +282,7 @@ function looksBinary(text) {
   return replacements > 3 && replacements / Math.max(text.length, 1) > 0.001;
 }
 
-function loadFile(file) {
+function attach(file) {
   if (!file) return;
   if (file.size > MAX_BYTES) {
     note(`${file.name} is ${(file.size / 1024).toFixed(0)} KB — the limit is 256 KB`, true);
@@ -251,12 +292,10 @@ function loadFile(file) {
   reader.onerror = () => note(`could not read ${file.name}`, true);
   reader.onload = () => {
     const text = String(reader.result);
-    if (looksBinary(text)) {
-      note(`${file.name} does not look like text`, true);
-      return;
-    }
-    $('p').value = text;
-    note(`${file.name} — ${(file.size / 1024).toFixed(1)} KB`);
+    if (looksBinary(text)) { note(`${file.name} does not look like text`, true); return; }
+    attachments.push({ name: file.name, text });
+    note(`attached ${file.name}`);
+    renderAttachments();
     score();
   };
   reader.readAsText(file, 'utf-8');
@@ -264,40 +303,31 @@ function loadFile(file) {
 
 $('open').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', e => {
-  loadFile(e.target.files[0]);
-  // Reset so choosing the same file twice fires again.
+  for (const f of e.target.files) attach(f);
   e.target.value = '';
 });
 
-const box = $('p');
-['dragenter', 'dragover'].forEach(kind =>
-  box.addEventListener(kind, e => {
+for (const target of [$('p'), $('atts')]) {
+  ['dragenter', 'dragover'].forEach(k =>
+    target.addEventListener(k, e => { e.preventDefault(); target.classList.add('dropping'); }));
+  ['dragleave', 'drop'].forEach(k =>
+    target.addEventListener(k, () => target.classList.remove('dropping')));
+  target.addEventListener('drop', e => {
     e.preventDefault();
-    box.classList.add('dropping');
-  }));
-['dragleave', 'drop'].forEach(kind =>
-  box.addEventListener(kind, () => box.classList.remove('dropping')));
-box.addEventListener('drop', e => {
-  e.preventDefault();
-  const file = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (file) loadFile(file);
-});
+    for (const f of (e.dataTransfer.files || [])) attach(f);
+  });
+}
 
 $('clear').addEventListener('click', () => {
-  $('p').value = '';
-  note('');
-  clearScore();
-  $('p').focus();
+  $('p').value = ''; attachments = []; note('');
+  renderAttachments(); clearScore(); $('p').focus();
 });
 
-// ---------------------------------------------------------------------------
-// Downloading the report
-// ---------------------------------------------------------------------------
+// --- the report ------------------------------------------------------------
 
 function axisSection(axis, name) {
   if (!axis) {
-    return `### grounding — not scored\n\n` +
-      `No repository was indexed, so the remaining axes were rescaled to 1000.\n`;
+    return `### grounding — not scored\n\nNo repository index was loaded.\n`;
   }
   const rows = axis.components.map(c =>
     `| ${c.id} | ${c.earned.toFixed(1)} | ${c.max.toFixed(0)} | ${c.detail.replace(/\|/g, '\\|')} |`
@@ -307,42 +337,27 @@ function axisSection(axis, name) {
 }
 
 function buildReport(s, prompt) {
-  // A prompt may itself contain a fenced block, so the wrapping fence has
-  // to be longer than the longest run of backticks inside it.
-  const longest = (prompt.match(/`+/g) || [])
-    .reduce((n, run) => Math.max(n, run.length), 0);
+  const longest = (prompt.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0);
   const fence = '`'.repeat(Math.max(3, longest + 1));
-  const where = repoInfo.repo
-    ? `${repoInfo.repo} (${repoInfo.files} files indexed)`
-    : 'none — grounding was not scored and the other axes were rescaled';
+  const attached = attachments.length
+    ? attachments.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('\n')
+    : '- none';
   return [
-    `# yourprompt`,
-    ``,
-    `**${s.total.toFixed(1)} / 1000 — ${s.grade}**`,
-    ``,
-    `| | |`,
-    `|---|---|`,
+    `# yourprompt`, ``,
+    `**${s.total.toFixed(1)} / 1000 — ${s.grade}**`, ``,
+    `| | |`, `|---|---|`,
     `| Generated | ${new Date().toISOString()} |`,
-    `| Repository | ${where} |`,
     `| Grounded | ${s.renormalized ? 'no (score rescaled from three axes)' : 'yes'} |`,
-    ``,
-    `## Prompt`,
-    ``,
-    fence,
-    prompt,
-    fence,
-    ``,
-    `## Breakdown`,
-    ``,
+    ``, `## Prompt`, ``, fence, prompt, fence,
+    ``, `## Attached context`, ``, attached,
+    ``, `## Breakdown`, ``,
     axisSection(s.grounding, 'grounding'),
     axisSection(s.actionability, 'actionability'),
     axisSection(s.clarity, 'clarity'),
     axisSection(s.context, 'context'),
-    `---`,
-    ``,
-    `Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt). The score is`,
-    `deterministic and computed locally; no model was called.`,
-    ``,
+    `---`, ``,
+    `Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the`,
+    `browser. Deterministic; no model was called.`, ``,
   ].join('\n');
 }
 
@@ -354,25 +369,21 @@ $('download').addEventListener('click', () => {
                         {type: 'text/markdown;charset=utf-8'});
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = url;
-  link.download = name;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  // Give the browser a moment to start the download before dropping the blob.
+  link.href = url; link.download = name;
+  document.body.appendChild(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   note(`saved ${name}`);
 });
 
-// ---------------------------------------------------------------------------
+// --- boot ------------------------------------------------------------------
 
+renderAttachments();
 fetch('/api/info').then(r => r.json()).then(i => {
-  repoInfo = i;
-  if (i.repo) {
-    $('sub').innerHTML = 'Type a prompt, or open a file. Scored as you go, out of 1000, grounded in <code>'
-      + escapeHtml(i.repo) + '</code> (' + i.files + ' files indexed).';
-  }
-}).catch(() => {});
+  $('sub').innerHTML = i.repo
+    ? 'Scored on this server, grounded in <code>' + escapeHtml(i.repo)
+      + '</code> (' + i.files + ' files indexed).'
+    : 'Scored on this server. No repository indexed, so grounding is not scored.';
+}).catch(() => { $('sub').textContent = 'Scored on this server.'; });
 </script>
 </body>
 </html>

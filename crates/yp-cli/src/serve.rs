@@ -42,6 +42,15 @@ const MAX_HEADERS: usize = 16 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The JSON body the page posts: what was written, and what was attached.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ScoreRequest {
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    attachments: Vec<String>,
+}
+
 /// What the server was started with, shared by every connection.
 struct Context {
     corpus: Option<IndexCorpus>,
@@ -198,7 +207,24 @@ fn handle(stream: &mut TcpStream, context: &Context) {
             );
         }
         ("POST", "/api/score") => {
-            let Some(score) = yp_core::score_with(request.body.trim(), context.corpus()) else {
+            // Two shapes are accepted. A JSON object separates the instruction
+            // from the material attached to it, which is what the page sends
+            // and what the scorer wants; a plain body is still scored as a
+            // whole, so `curl --data-binary` keeps working.
+            // `parsed` has to outlive the borrowed slices handed to the
+            // scorer, so it is bound before the parts are built rather than
+            // inside a match arm.
+            let parsed = serde_json::from_str::<ScoreRequest>(&request.body).ok();
+            let attached: Vec<&str> = parsed
+                .iter()
+                .flat_map(|p| p.attachments.iter().map(String::as_str))
+                .collect();
+            let parts = match &parsed {
+                Some(parsed) => yp_core::prompt::from_parts(parsed.prompt.trim(), &attached),
+                None => yp_core::prompt::split(request.body.trim()),
+            };
+
+            let Some(score) = yp_core::score_parts(&parts, context.corpus()) else {
                 respond(
                     stream,
                     "500 Internal Server Error",
