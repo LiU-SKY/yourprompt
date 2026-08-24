@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>yourprompt</title>
-<meta name="description" content="Scores how well an AI coding agent can understand your prompt, against your actual repository. Runs entirely in your browser.">
 <style>
   :root {
     --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --dim: #6b6b66;
@@ -26,7 +25,13 @@
   }
   .wrap { max-width: 960px; margin: 0 auto; padding: 34px 20px 72px; }
   header { margin-bottom: 22px; }
+  .top { display: flex; align-items: baseline; gap: 12px; }
   h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.015em; }
+  .langs { margin-left: auto; display: flex; gap: 0; border: 1px solid var(--line);
+           border-radius: 7px; overflow: hidden; }
+  .langs button { border: 0; border-radius: 0; padding: 4px 10px; font-size: 12.5px;
+                  color: var(--dim); }
+  .langs button.on { background: var(--track); color: var(--ink); font-weight: 600; }
   .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
   .sub code { font-size: 12.5px; }
   .lede { margin: 14px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
@@ -35,6 +40,7 @@
            border-radius: 10px; padding: 16px; }
   .label { font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
            color: var(--dim); margin: 0 0 6px; }
+  .label .hint { text-transform: none; letter-spacing: 0; }
   .tools { display: flex; gap: 8px; align-items: center; margin: 12px 0 6px;
            flex-wrap: wrap; }
   button {
@@ -102,28 +108,28 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>yourprompt</h1>
+    <div class="top">
+      <h1>yourprompt</h1>
+      <div class="langs" role="group" aria-label="Language">
+        <button type="button" id="lang-en">EN</button>
+        <button type="button" id="lang-ko">한국어</button>
+      </div>
+    </div>
     <p class="sub" id="sub">Loading the scorer…</p>
-    <p class="lede">
-      Scores how well an AI coding agent can understand your prompt, out of
-      1000, with the reason for every point.
-    </p>
+    <p class="lede" id="lede"></p>
   </header>
 
   <div class="panel">
-    <p class="label">Prompt</p>
-    <textarea id="p" spellcheck="false" autofocus
-      placeholder="What do you want the agent to do?
+    <p class="label" id="label-prompt">Prompt</p>
+    <textarea id="p" spellcheck="false" autofocus></textarea>
 
-e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don't change the public signature of login(). tests/auth.rs must still pass."></textarea>
-
-    <p class="label" style="margin-top:16px">Attached context <span style="text-transform:none;letter-spacing:0">— files the agent should read, judged as evidence rather than as instructions</span></p>
+    <p class="label" style="margin-top:16px" id="label-att"></p>
     <div class="attachments" id="atts"></div>
 
     <div class="tools">
-      <button type="button" id="open">Attach a file…</button>
-      <button type="button" id="download" disabled>Download report</button>
-      <button type="button" id="clear">Clear</button>
+      <button type="button" id="open"></button>
+      <button type="button" id="download" disabled></button>
+      <button type="button" id="clear"></button>
       <input type="file" id="file" hidden multiple accept=".txt,.md,.markdown,.rst,.text,text/*">
       <span class="note" id="note"></span>
     </div>
@@ -139,12 +145,7 @@ e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expi
 
   <div class="axes" id="axes"></div>
 
-  <footer>
-    Deterministic and local: no model is called, and nothing you type or
-    attach leaves this server. Files are read in your browser and only their
-    text is scored.<br>
-    <a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>
-  </footer>
+  <footer id="foot"></footer>
 </div>
 
 <script>
@@ -154,6 +155,134 @@ const MAX_BYTES = 256 * 1024;
 
 let lastScore = null;
 let attachments = [];   // { name, text }
+let serverInfo = null;  // /api/info, kept so language switches re-render it
+
+// --- language ---------------------------------------------------------------
+// Everything the page says exists in both languages; the per-component
+// reasoning sentences come from the scoring engine and stay in English.
+
+const STR = {
+  en: {
+    lede: 'Scores how well an AI coding agent can understand your prompt, out of 1000, with the reason for every point.',
+    placeholder: 'What do you want the agent to do?\n\ne.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.',
+    label_prompt: 'Prompt',
+    label_att: 'Attached context <span class="hint">— files the agent should read, judged as evidence rather than as instructions</span>',
+    open: 'Attach a file…',
+    download: 'Download report',
+    clear: 'Clear',
+    remove: 'remove',
+    empty: 'Nothing attached. Drop a file here, or use the button below.',
+    footer: 'Deterministic and local: no model is called, and nothing you type or attach leaves this server. Files are read in your browser and only their text is scored.<br><a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>',
+    loading: 'Loading the scorer…',
+    sub_repo: (repo, files) => `Scored on this server, grounded in <code>${repo}</code> (${files} files indexed).`,
+    sub_none: 'Scored on this server. No repository indexed, so grounding is not scored.',
+    sub_plain: 'Scored on this server.',
+    not_scored: 'not scored',
+    no_index: 'No repository index loaded, so the remaining axes were rescaled to 1000.',
+    rescaled: 'ungrounded — rescaled',
+    unreadable: 'the scorer could not read that',
+    server_err: s => 'server returned ' + s,
+    too_big: (n, kb) => `${n} is ${kb} KB — the limit is 256 KB`,
+    read_failed: n => `could not read ${n}`,
+    not_text: n => `${n} does not look like text`,
+    attached: n => `attached ${n}`,
+    saved: n => `saved ${n}`,
+    axes: { grounding: 'grounding', actionability: 'actionability',
+            clarity: 'clarity', context: 'context' },
+    comps: { resolution: 'resolution', specificity: 'specificity', deixis: 'deixis',
+             objective: 'objective', singularity: 'singularity', io_spec: 'io_spec',
+             acceptance: 'acceptance', smell_density: 'smell_density',
+             scope: 'scope', evidence: 'evidence', shape: 'shape' },
+    rpt: { generated: 'Generated', grounded: 'Grounded', yes: 'yes',
+           no: 'no (score rescaled from three axes)', prompt: 'Prompt',
+           attached_h: 'Attached context', breakdown: 'Breakdown', none: '- none',
+           head: '| component | score | out of | why |',
+           no_index: 'No repository index was loaded.',
+           foot: 'Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the browser. Deterministic; no model was called.' },
+  },
+  ko: {
+    lede: 'AI 코딩 에이전트가 프롬프트를 얼마나 이해할 수 있는지 1000점 만점으로, 모든 점수의 사유와 함께 채점합니다.',
+    placeholder: '에이전트가 무엇을 하길 원하나요?\n\n예: src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.',
+    label_prompt: '프롬프트',
+    label_att: '첨부 컨텍스트 <span class="hint">— 에이전트가 읽어야 할 파일. 지시가 아니라 근거 자료로 채점됩니다</span>',
+    open: '파일 첨부…',
+    download: '리포트 다운로드',
+    clear: '지우기',
+    remove: '제거',
+    empty: '첨부된 파일이 없습니다. 여기에 끌어다 놓거나 아래 버튼을 사용하세요.',
+    footer: '결정론적이고 로컬입니다: 모델 호출이 없고, 입력하거나 첨부한 내용은 이 서버 밖으로 나가지 않습니다. 파일은 브라우저에서 읽히며 텍스트만 채점됩니다.<br><a href="https://github.com/LiU-SKY/yourprompt">소스와 벤치마크</a>',
+    loading: '채점기를 불러오는 중…',
+    sub_repo: (repo, files) => `이 서버에서 채점하며, <code>${repo}</code> 를 근거로 합니다 (${files}개 파일 인덱싱됨).`,
+    sub_none: '이 서버에서 채점합니다. 인덱싱된 저장소가 없어 그라운딩 축은 채점되지 않습니다.',
+    sub_plain: '이 서버에서 채점합니다.',
+    not_scored: '채점 안 함',
+    no_index: '저장소 인덱스가 없어 나머지 축을 1000점으로 재조정했습니다.',
+    rescaled: '비접지 — 재조정됨',
+    unreadable: '채점기가 입력을 읽지 못했습니다',
+    server_err: s => '서버 응답 ' + s,
+    too_big: (n, kb) => `${n} 은(는) ${kb} KB — 최대 256 KB 입니다`,
+    read_failed: n => `${n} 을(를) 읽지 못했습니다`,
+    not_text: n => `${n} 은(는) 텍스트 파일이 아닌 것 같습니다`,
+    attached: n => `${n} 첨부됨`,
+    saved: n => `${n} 저장됨`,
+    axes: { grounding: '그라운딩', actionability: '실행가능성',
+            clarity: '명료성', context: '맥락' },
+    comps: { resolution: '지시대상 해소', specificity: '특정성', deixis: '지시어',
+             objective: '목적', singularity: '단일성', io_spec: '입출력 사양',
+             acceptance: '완료 기준', smell_density: '모호성 밀도',
+             scope: '범위 제한', evidence: '예시·근거', shape: '형태' },
+    rpt: { generated: '생성 시각', grounded: '그라운딩', yes: '예',
+           no: '아니오 (세 축에서 재조정된 점수)', prompt: '프롬프트',
+           attached_h: '첨부 컨텍스트', breakdown: '세부 내역', none: '- 없음',
+           head: '| 항목 | 점수 | 만점 | 사유 |',
+           no_index: '저장소 인덱스가 없었습니다.',
+           foot: '[yourprompt](https://github.com/LiU-SKY/yourprompt) 가 브라우저에서 채점했습니다. 결정론적이며 모델 호출은 없습니다.' },
+  },
+};
+
+let lang = 'en';
+try {
+  lang = localStorage.getItem('yp-lang')
+    || ((navigator.language || '').toLowerCase().startsWith('ko') ? 'ko' : 'en');
+} catch (e) { /* storage may be unavailable; English is fine */ }
+if (!STR[lang]) lang = 'en';
+
+const T = () => STR[lang];
+const axisName = id => T().axes[id] || id;
+const compName = id => T().comps[id] || id;
+
+function renderSub() {
+  if (serverInfo === null) { $('sub').textContent = T().sub_plain; return; }
+  $('sub').innerHTML = serverInfo.repo
+    ? T().sub_repo(escapeHtml(serverInfo.repo), serverInfo.files)
+    : T().sub_none;
+}
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  $('lang-en').className = lang === 'en' ? 'on' : '';
+  $('lang-ko').className = lang === 'ko' ? 'on' : '';
+  $('lede').innerHTML = T().lede;
+  $('p').placeholder = T().placeholder;
+  $('label-prompt').textContent = T().label_prompt;
+  $('label-att').innerHTML = T().label_att;
+  $('open').textContent = T().open;
+  $('download').textContent = T().download;
+  $('clear').textContent = T().clear;
+  $('foot').innerHTML = T().footer;
+  renderSub();
+  note('');
+  renderAttachments();
+  if (lastScore) render(lastScore);
+}
+
+function setLang(next) {
+  lang = next;
+  try { localStorage.setItem('yp-lang', next); } catch (e) { /* fine */ }
+  applyLang();
+}
+$('lang-en').addEventListener('click', () => setLang('en'));
+$('lang-ko').addEventListener('click', () => setLang('ko'));
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => (
@@ -177,7 +306,7 @@ async function scoreNow(instruction, attached) {
       attachments: attached.map(a => a.text),
     }),
   });
-  if (!res.ok) throw new Error('server returned ' + res.status);
+  if (!res.ok) throw new Error(T().server_err(res.status));
   return res.json();
 }
 
@@ -185,21 +314,20 @@ async function scoreNow(instruction, attached) {
 
 function renderAxis(axis, absent) {
   if (absent) {
-    return `<div class="axis"><div class="head"><span class="name">grounding</span>
-      <span class="num">not scored</span></div>
-      <div class="muted">No repository index loaded, so the remaining axes were
-      rescaled to 1000.</div></div>`;
+    return `<div class="axis"><div class="head"><span class="name">${axisName('grounding')}</span>
+      <span class="num">${T().not_scored}</span></div>
+      <div class="muted">${T().no_index}</div></div>`;
   }
   const r = axis.max ? axis.earned / axis.max : 0;
   const comps = axis.components.map(c => `
     <div class="comp">
-      <span class="cn">${c.id}</span>
+      <span class="cn">${compName(c.id)}</span>
       <span class="cv">${c.earned.toFixed(1)} / ${c.max.toFixed(0)}</span>
       <span class="cd">${escapeHtml(c.detail)}</span>
     </div>`).join('');
   return `<div class="axis">
     <div class="head">
-      <span class="name">${axis.id}</span>
+      <span class="name">${axisName(axis.id)}</span>
       <span class="num">${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}</span>
     </div>
     <div class="track" style="margin-bottom:8px">
@@ -215,7 +343,7 @@ function render(s) {
   $('grade').style.color = colourFor(r);
   $('fill').style.width = (r * 100).toFixed(1) + '%';
   $('fill').style.background = colourFor(r);
-  $('flag').textContent = s.renormalized ? 'ungrounded — rescaled' : '';
+  $('flag').textContent = s.renormalized ? T().rescaled : '';
   $('axes').innerHTML =
     renderAxis(s.grounding, !s.grounding) +
     renderAxis(s.actionability) + renderAxis(s.clarity) + renderAxis(s.context);
@@ -231,15 +359,14 @@ function clearScore() {
 
 function renderAttachments() {
   if (!attachments.length) {
-    $('atts').innerHTML =
-      '<div class="empty-att">Nothing attached. Drop a file here, or use the button below.</div>';
+    $('atts').innerHTML = '<div class="empty-att">' + T().empty + '</div>';
     return;
   }
   $('atts').innerHTML = attachments.map((a, i) => `
     <div class="att">
       <span class="nm">${escapeHtml(a.name)}</span>
       <span class="sz">${(a.text.length / 1024).toFixed(1)} KB</span>
-      <button type="button" data-i="${i}">remove</button>
+      <button type="button" data-i="${i}">${T().remove}</button>
     </div>`).join('');
   $('atts').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => {
@@ -251,13 +378,13 @@ function renderAttachments() {
 
 // --- scoring ---------------------------------------------------------------
 
-let timer = null, inflight = null;
+let timer = null;
 async function score() {
   const text = $('p').value;
   if (!text.trim() && !attachments.length) { clearScore(); return; }
   try {
     const s = await scoreNow(text, attachments);
-    if (!s) throw new Error('the scorer could not read that');
+    if (!s) throw new Error(T().unreadable);
     lastScore = s;
     $('download').disabled = false;
     render(s);
@@ -285,16 +412,16 @@ function looksBinary(text) {
 function attach(file) {
   if (!file) return;
   if (file.size > MAX_BYTES) {
-    note(`${file.name} is ${(file.size / 1024).toFixed(0)} KB — the limit is 256 KB`, true);
+    note(T().too_big(file.name, (file.size / 1024).toFixed(0)), true);
     return;
   }
   const reader = new FileReader();
-  reader.onerror = () => note(`could not read ${file.name}`, true);
+  reader.onerror = () => note(T().read_failed(file.name), true);
   reader.onload = () => {
     const text = String(reader.result);
-    if (looksBinary(text)) { note(`${file.name} does not look like text`, true); return; }
+    if (looksBinary(text)) { note(T().not_text(file.name), true); return; }
     attachments.push({ name: file.name, text });
-    note(`attached ${file.name}`);
+    note(T().attached(file.name));
     renderAttachments();
     score();
   };
@@ -325,15 +452,15 @@ $('clear').addEventListener('click', () => {
 
 // --- the report ------------------------------------------------------------
 
-function axisSection(axis, name) {
+function axisSection(axis, id) {
   if (!axis) {
-    return `### grounding — not scored\n\nNo repository index was loaded.\n`;
+    return `### ${axisName('grounding')} — ${T().not_scored}\n\n${T().rpt.no_index}\n`;
   }
   const rows = axis.components.map(c =>
-    `| ${c.id} | ${c.earned.toFixed(1)} | ${c.max.toFixed(0)} | ${c.detail.replace(/\|/g, '\\|')} |`
+    `| ${compName(c.id)} | ${c.earned.toFixed(1)} | ${c.max.toFixed(0)} | ${c.detail.replace(/\|/g, '\\|')} |`
   ).join('\n');
-  return `### ${name} — ${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}\n\n` +
-    `| component | score | out of | why |\n|---|---:|---:|---|\n${rows}\n`;
+  return `### ${axisName(id)} — ${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}\n\n` +
+    `${T().rpt.head}\n|---|---:|---:|---|\n${rows}\n`;
 }
 
 function buildReport(s, prompt) {
@@ -341,23 +468,22 @@ function buildReport(s, prompt) {
   const fence = '`'.repeat(Math.max(3, longest + 1));
   const attached = attachments.length
     ? attachments.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('\n')
-    : '- none';
+    : T().rpt.none;
   return [
     `# yourprompt`, ``,
     `**${s.total.toFixed(1)} / 1000 — ${s.grade}**`, ``,
     `| | |`, `|---|---|`,
-    `| Generated | ${new Date().toISOString()} |`,
-    `| Grounded | ${s.renormalized ? 'no (score rescaled from three axes)' : 'yes'} |`,
-    ``, `## Prompt`, ``, fence, prompt, fence,
-    ``, `## Attached context`, ``, attached,
-    ``, `## Breakdown`, ``,
+    `| ${T().rpt.generated} | ${new Date().toISOString()} |`,
+    `| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`,
+    ``, `## ${T().rpt.prompt}`, ``, fence, prompt, fence,
+    ``, `## ${T().rpt.attached_h}`, ``, attached,
+    ``, `## ${T().rpt.breakdown}`, ``,
     axisSection(s.grounding, 'grounding'),
     axisSection(s.actionability, 'actionability'),
     axisSection(s.clarity, 'clarity'),
     axisSection(s.context, 'context'),
     `---`, ``,
-    `Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the`,
-    `browser. Deterministic; no model was called.`, ``,
+    T().rpt.foot, ``,
   ].join('\n');
 }
 
@@ -372,18 +498,16 @@ $('download').addEventListener('click', () => {
   link.href = url; link.download = name;
   document.body.appendChild(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  note(`saved ${name}`);
+  note(T().saved(name));
 });
 
 // --- boot ------------------------------------------------------------------
 
-renderAttachments();
+applyLang();
 fetch('/api/info').then(r => r.json()).then(i => {
-  $('sub').innerHTML = i.repo
-    ? 'Scored on this server, grounded in <code>' + escapeHtml(i.repo)
-      + '</code> (' + i.files + ' files indexed).'
-    : 'Scored on this server. No repository indexed, so grounding is not scored.';
-}).catch(() => { $('sub').textContent = 'Scored on this server.'; });
+  serverInfo = i;
+  renderSub();
+}).catch(() => { serverInfo = null; renderSub(); });
 </script>
 </body>
 </html>

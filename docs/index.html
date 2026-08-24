@@ -26,7 +26,13 @@
   }
   .wrap { max-width: 960px; margin: 0 auto; padding: 34px 20px 72px; }
   header { margin-bottom: 22px; }
+  .top { display: flex; align-items: baseline; gap: 12px; }
   h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.015em; }
+  .langs { margin-left: auto; display: flex; gap: 0; border: 1px solid var(--line);
+           border-radius: 7px; overflow: hidden; }
+  .langs button { border: 0; border-radius: 0; padding: 4px 10px; font-size: 12.5px;
+                  color: var(--dim); }
+  .langs button.on { background: var(--track); color: var(--ink); font-weight: 600; }
   .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
   .sub code { font-size: 12.5px; }
   .lede { margin: 14px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
@@ -35,6 +41,7 @@
            border-radius: 10px; padding: 16px; }
   .label { font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
            color: var(--dim); margin: 0 0 6px; }
+  .label .hint { text-transform: none; letter-spacing: 0; }
   .tools { display: flex; gap: 8px; align-items: center; margin: 12px 0 6px;
            flex-wrap: wrap; }
   button {
@@ -102,30 +109,28 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>yourprompt</h1>
+    <div class="top">
+      <h1>yourprompt</h1>
+      <div class="langs" role="group" aria-label="Language">
+        <button type="button" id="lang-en">EN</button>
+        <button type="button" id="lang-ko">한국어</button>
+      </div>
+    </div>
     <p class="sub" id="sub">Loading the scorer…</p>
-    <p class="lede">
-      Scores how well an AI coding agent can understand your prompt, out of
-      1000, with the reason for every point. Add your own source files and it
-      scores against <em>your</em> codebase. Deterministic, and it all runs in
-      this page — nothing you type or add is uploaded anywhere.
-    </p>
+    <p class="lede" id="lede"></p>
   </header>
 
   <div class="panel">
-    <p class="label">Prompt</p>
-    <textarea id="p" spellcheck="false" autofocus
-      placeholder="What do you want the agent to do?
+    <p class="label" id="label-prompt">Prompt</p>
+    <textarea id="p" spellcheck="false" autofocus></textarea>
 
-e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don't change the public signature of login(). tests/auth.rs must still pass."></textarea>
-
-    <p class="label" style="margin-top:16px">Your codebase <span style="text-transform:none;letter-spacing:0">— drop source files here and the score is grounded in them: whether the things you name exist, and whether they point at one thing or forty</span></p>
+    <p class="label" style="margin-top:16px" id="label-code"></p>
     <div class="attachments" id="atts"></div>
 
     <div class="tools">
-      <button type="button" id="open">Add source files…</button>
-      <button type="button" id="download" disabled>Download report</button>
-      <button type="button" id="clear">Clear</button>
+      <button type="button" id="open"></button>
+      <button type="button" id="download" disabled></button>
+      <button type="button" id="clear"></button>
       <input type="file" id="file" hidden multiple accept=".txt,.md,.markdown,.rst,.text,text/*">
       <span class="note" id="note"></span>
     </div>
@@ -141,13 +146,7 @@ e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expi
 
   <div class="axes" id="axes"></div>
 
-  <footer>
-    The whole scorer is compiled to WebAssembly and runs here; there is no
-    server and no model call. The files you add are indexed in your browser and
-    never leave it. For a whole repository rather than a handful of files, run
-    <code>yp serve --repo .</code> locally.<br>
-    <a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>
-  </footer>
+  <footer id="foot"></footer>
 </div>
 
 <script>
@@ -158,6 +157,126 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 
 let wasm = null, indexBytes = null, lastScore = null;
 let files = [];         // { name, text } -- the visitor's codebase
+
+// --- language ---------------------------------------------------------------
+// Everything the page says exists in both languages; the per-component
+// reasoning sentences come from the scoring engine and stay in English.
+
+const STR = {
+  en: {
+    lede: 'Scores how well an AI coding agent can understand your prompt, out of 1000, with the reason for every point. Add your own source files and it scores against <em>your</em> codebase. Deterministic, and it all runs in this page — nothing you type or add is uploaded anywhere.',
+    placeholder: 'What do you want the agent to do?\n\ne.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.',
+    label_prompt: 'Prompt',
+    label_code: 'Your codebase <span class="hint">— drop source files here and the score is grounded in them: whether the things you name exist, and whether they point at one thing or forty</span>',
+    open: 'Add source files…',
+    download: 'Download report',
+    clear: 'Clear',
+    remove: 'remove',
+    empty: 'No files yet — grounding is not scored. Drop some source files here to score against your own codebase.',
+    footer: 'The whole scorer is compiled to WebAssembly and runs here; there is no server and no model call. The files you add are indexed in your browser and never leave it. For a whole repository rather than a handful of files, run <code>yp serve --repo .</code> locally.<br><a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>',
+    loading: 'Loading the scorer…',
+    ready: v => `v${v} — running in your browser. Add source files to score against your own codebase.`,
+    load_failed: 'could not load the scorer: ',
+    not_scored: 'not scored',
+    no_index: 'No repository index loaded, so the remaining axes were rescaled to 1000.',
+    rescaled: 'ungrounded — rescaled',
+    unreadable: 'the scorer could not read that',
+    too_big: (n, kb) => `${n} is ${kb} KB — the limit is 256 KB`,
+    read_failed: n => `could not read ${n}`,
+    not_text: n => `${n} does not look like text`,
+    added: n => `added ${n}`,
+    saved: n => `saved ${n}`,
+    axes: { grounding: 'grounding', actionability: 'actionability',
+            clarity: 'clarity', context: 'context' },
+    comps: { resolution: 'resolution', specificity: 'specificity', deixis: 'deixis',
+             objective: 'objective', singularity: 'singularity', io_spec: 'io_spec',
+             acceptance: 'acceptance', smell_density: 'smell_density',
+             scope: 'scope', evidence: 'evidence', shape: 'shape' },
+    rpt: { generated: 'Generated', grounded: 'Grounded', yes: 'yes',
+           no: 'no (score rescaled from three axes)', prompt: 'Prompt',
+           codebase: 'Codebase indexed', breakdown: 'Breakdown', none: '- none',
+           head: '| component | score | out of | why |',
+           no_index: 'No repository index was loaded.',
+           foot: 'Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the browser. Deterministic; no model was called.' },
+  },
+  ko: {
+    lede: 'AI 코딩 에이전트가 프롬프트를 얼마나 이해할 수 있는지 1000점 만점으로, 모든 점수의 사유와 함께 채점합니다. 소스 파일을 추가하면 <em>당신의</em> 코드베이스를 기준으로 채점합니다. 결정론적이며 전부 이 페이지 안에서 실행됩니다 — 입력하거나 추가한 내용은 어디에도 업로드되지 않습니다.',
+    placeholder: '에이전트가 무엇을 하길 원하나요?\n\n예: src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.',
+    label_prompt: '프롬프트',
+    label_code: '코드베이스 <span class="hint">— 소스 파일을 끌어다 놓으면 그 파일들을 근거로 채점합니다: 언급한 이름이 실제로 존재하는지, 하나를 가리키는지 마흔 개를 가리키는지</span>',
+    open: '소스 파일 추가…',
+    download: '리포트 다운로드',
+    clear: '지우기',
+    remove: '제거',
+    empty: '아직 파일이 없어 그라운딩 축은 채점되지 않습니다. 소스 파일을 끌어다 놓으면 당신의 코드베이스 기준으로 채점합니다.',
+    footer: '채점기 전체가 WebAssembly 로 컴파일되어 여기서 실행됩니다. 서버도, 모델 호출도 없습니다. 추가한 파일은 브라우저 안에서 인덱싱되며 밖으로 나가지 않습니다. 파일 몇 개가 아니라 저장소 전체로 채점하려면 로컬에서 <code>yp serve --repo .</code> 를 실행하세요.<br><a href="https://github.com/LiU-SKY/yourprompt">소스와 벤치마크</a>',
+    loading: '채점기를 불러오는 중…',
+    ready: v => `v${v} — 브라우저에서 실행 중. 소스 파일을 추가하면 당신의 코드베이스 기준으로 채점합니다.`,
+    load_failed: '채점기를 불러오지 못했습니다: ',
+    not_scored: '채점 안 함',
+    no_index: '저장소 인덱스가 없어 나머지 축을 1000점으로 재조정했습니다.',
+    rescaled: '비접지 — 재조정됨',
+    unreadable: '채점기가 입력을 읽지 못했습니다',
+    too_big: (n, kb) => `${n} 은(는) ${kb} KB — 최대 256 KB 입니다`,
+    read_failed: n => `${n} 을(를) 읽지 못했습니다`,
+    not_text: n => `${n} 은(는) 텍스트 파일이 아닌 것 같습니다`,
+    added: n => `${n} 추가됨`,
+    saved: n => `${n} 저장됨`,
+    axes: { grounding: '그라운딩', actionability: '실행가능성',
+            clarity: '명료성', context: '맥락' },
+    comps: { resolution: '지시대상 해소', specificity: '특정성', deixis: '지시어',
+             objective: '목적', singularity: '단일성', io_spec: '입출력 사양',
+             acceptance: '완료 기준', smell_density: '모호성 밀도',
+             scope: '범위 제한', evidence: '예시·근거', shape: '형태' },
+    rpt: { generated: '생성 시각', grounded: '그라운딩', yes: '예',
+           no: '아니오 (세 축에서 재조정된 점수)', prompt: '프롬프트',
+           codebase: '인덱싱된 코드베이스', breakdown: '세부 내역', none: '- 없음',
+           head: '| 항목 | 점수 | 만점 | 사유 |',
+           no_index: '저장소 인덱스가 없었습니다.',
+           foot: '[yourprompt](https://github.com/LiU-SKY/yourprompt) 가 브라우저에서 채점했습니다. 결정론적이며 모델 호출은 없습니다.' },
+  },
+};
+
+let lang = 'en';
+try {
+  lang = localStorage.getItem('yp-lang')
+    || ((navigator.language || '').toLowerCase().startsWith('ko') ? 'ko' : 'en');
+} catch (e) { /* storage may be unavailable; English is fine */ }
+if (!STR[lang]) lang = 'en';
+
+const T = () => STR[lang];
+const axisName = id => T().axes[id] || id;
+const compName = id => T().comps[id] || id;
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  $('lang-en').className = lang === 'en' ? 'on' : '';
+  $('lang-ko').className = lang === 'ko' ? 'on' : '';
+  $('lede').innerHTML = T().lede;
+  $('p').placeholder = T().placeholder;
+  $('label-prompt').textContent = T().label_prompt;
+  $('label-code').innerHTML = T().label_code;
+  $('open').textContent = T().open;
+  $('download').textContent = T().download;
+  $('clear').textContent = T().clear;
+  $('foot').innerHTML = T().footer;
+  if (wasm) {
+    $('sub').textContent = T().ready(wasmVersion);
+  } else {
+    $('sub').textContent = T().loading;
+  }
+  note('');
+  renderFiles();
+  if (lastScore) render(lastScore);
+}
+
+function setLang(next) {
+  lang = next;
+  try { localStorage.setItem('yp-lang', next); } catch (e) { /* fine */ }
+  applyLang();
+}
+$('lang-en').addEventListener('click', () => setLang('en'));
+$('lang-ko').addEventListener('click', () => setLang('ko'));
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => (
@@ -207,7 +326,7 @@ function scoreNow(instruction) {
 /// whichever project happened to ship with the page.
 function rebuildIndex() {
   if (!files.length) { indexBytes = null; return; }
-  const payload = files.map(f => f.name + '' + f.text).join('');
+  const payload = files.map(f => f.name + '\u001f' + f.text).join('\u001e');
   const bytes = enc.encode(payload);
   const [p, l] = write(bytes);
   try {
@@ -227,21 +346,20 @@ function rebuildIndex() {
 
 function renderAxis(axis, absent) {
   if (absent) {
-    return `<div class="axis"><div class="head"><span class="name">grounding</span>
-      <span class="num">not scored</span></div>
-      <div class="muted">No repository index loaded, so the remaining axes were
-      rescaled to 1000.</div></div>`;
+    return `<div class="axis"><div class="head"><span class="name">${axisName('grounding')}</span>
+      <span class="num">${T().not_scored}</span></div>
+      <div class="muted">${T().no_index}</div></div>`;
   }
   const r = axis.max ? axis.earned / axis.max : 0;
   const comps = axis.components.map(c => `
     <div class="comp">
-      <span class="cn">${c.id}</span>
+      <span class="cn">${compName(c.id)}</span>
       <span class="cv">${c.earned.toFixed(1)} / ${c.max.toFixed(0)}</span>
       <span class="cd">${escapeHtml(c.detail)}</span>
     </div>`).join('');
   return `<div class="axis">
     <div class="head">
-      <span class="name">${axis.id}</span>
+      <span class="name">${axisName(axis.id)}</span>
       <span class="num">${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}</span>
     </div>
     <div class="track" style="margin-bottom:8px">
@@ -257,7 +375,7 @@ function render(s) {
   $('grade').style.color = colourFor(r);
   $('fill').style.width = (r * 100).toFixed(1) + '%';
   $('fill').style.background = colourFor(r);
-  $('flag').textContent = s.renormalized ? 'ungrounded — rescaled' : '';
+  $('flag').textContent = s.renormalized ? T().rescaled : '';
   $('axes').innerHTML =
     renderAxis(s.grounding, !s.grounding) +
     renderAxis(s.actionability) + renderAxis(s.clarity) + renderAxis(s.context);
@@ -273,15 +391,14 @@ function clearScore() {
 
 function renderFiles() {
   if (!files.length) {
-    $('atts').innerHTML =
-      '<div class="empty-att">No files yet — grounding is not scored. Drop some source files here to score against your own codebase.</div>';
+    $('atts').innerHTML = '<div class="empty-att">' + T().empty + '</div>';
     return;
   }
   $('atts').innerHTML = files.map((a, i) => `
     <div class="att">
       <span class="nm">${escapeHtml(a.name)}</span>
       <span class="sz">${(a.text.length / 1024).toFixed(1)} KB</span>
-      <button type="button" data-i="${i}">remove</button>
+      <button type="button" data-i="${i}">${T().remove}</button>
     </div>`).join('');
   $('atts').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => {
@@ -301,7 +418,7 @@ function score() {
   if (!text.trim()) { clearScore(); return; }
   try {
     const s = scoreNow(text);
-    if (!s) throw new Error('the scorer could not read that');
+    if (!s) throw new Error(T().unreadable);
     lastScore = s;
     $('download').disabled = false;
     render(s);
@@ -329,16 +446,16 @@ function looksBinary(text) {
 function addFile(file) {
   if (!file) return;
   if (file.size > MAX_BYTES) {
-    note(`${file.name} is ${(file.size / 1024).toFixed(0)} KB — the limit is 256 KB`, true);
+    note(T().too_big(file.name, (file.size / 1024).toFixed(0)), true);
     return;
   }
   const reader = new FileReader();
-  reader.onerror = () => note(`could not read ${file.name}`, true);
+  reader.onerror = () => note(T().read_failed(file.name), true);
   reader.onload = () => {
     const text = String(reader.result);
-    if (looksBinary(text)) { note(`${file.name} does not look like text`, true); return; }
+    if (looksBinary(text)) { note(T().not_text(file.name), true); return; }
     files.push({ name: file.name, text });
-    note(`added ${file.name}`);
+    note(T().added(file.name));
     renderFiles();
     rebuildIndex();
     score();
@@ -370,15 +487,15 @@ $('clear').addEventListener('click', () => {
 
 // --- the report ------------------------------------------------------------
 
-function axisSection(axis, name) {
+function axisSection(axis, id) {
   if (!axis) {
-    return `### grounding — not scored\n\nNo repository index was loaded.\n`;
+    return `### ${axisName('grounding')} — ${T().not_scored}\n\n${T().rpt.no_index}\n`;
   }
   const rows = axis.components.map(c =>
-    `| ${c.id} | ${c.earned.toFixed(1)} | ${c.max.toFixed(0)} | ${c.detail.replace(/\|/g, '\\|')} |`
+    `| ${compName(c.id)} | ${c.earned.toFixed(1)} | ${c.max.toFixed(0)} | ${c.detail.replace(/\|/g, '\\|')} |`
   ).join('\n');
-  return `### ${name} — ${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}\n\n` +
-    `| component | score | out of | why |\n|---|---:|---:|---|\n${rows}\n`;
+  return `### ${axisName(id)} — ${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}\n\n` +
+    `${T().rpt.head}\n|---|---:|---:|---|\n${rows}\n`;
 }
 
 function buildReport(s, prompt) {
@@ -386,23 +503,22 @@ function buildReport(s, prompt) {
   const fence = '`'.repeat(Math.max(3, longest + 1));
   const listed = files.length
     ? files.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('\n')
-    : '- none';
+    : T().rpt.none;
   return [
     `# yourprompt`, ``,
     `**${s.total.toFixed(1)} / 1000 — ${s.grade}**`, ``,
     `| | |`, `|---|---|`,
-    `| Generated | ${new Date().toISOString()} |`,
-    `| Grounded | ${s.renormalized ? 'no (score rescaled from three axes)' : 'yes'} |`,
-    ``, `## Prompt`, ``, fence, prompt, fence,
-    ``, `## Codebase indexed`, ``, listed,
-    ``, `## Breakdown`, ``,
+    `| ${T().rpt.generated} | ${new Date().toISOString()} |`,
+    `| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`,
+    ``, `## ${T().rpt.prompt}`, ``, fence, prompt, fence,
+    ``, `## ${T().rpt.codebase}`, ``, listed,
+    ``, `## ${T().rpt.breakdown}`, ``,
     axisSection(s.grounding, 'grounding'),
     axisSection(s.actionability, 'actionability'),
     axisSection(s.clarity, 'clarity'),
     axisSection(s.context, 'context'),
     `---`, ``,
-    `Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the`,
-    `browser. Deterministic; no model was called.`, ``,
+    T().rpt.foot, ``,
   ].join('\n');
 }
 
@@ -417,13 +533,14 @@ $('download').addEventListener('click', () => {
   link.href = url; link.download = name;
   document.body.appendChild(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  note(`saved ${name}`);
+  note(T().saved(name));
 });
 
 // --- boot ------------------------------------------------------------------
 
+let wasmVersion = '';
+applyLang();
 (async () => {
-  renderFiles();
   try {
     const { instance } = await WebAssembly.instantiateStreaming(fetch('yp.wasm'), {});
     wasm = instance.exports;
@@ -434,14 +551,13 @@ $('download').addEventListener('click', () => {
       const bytes = await (await fetch('yp.wasm')).arrayBuffer();
       wasm = (await WebAssembly.instantiate(bytes, {})).instance.exports;
     } catch (e2) {
-      $('sub').innerHTML = '<span class="err">could not load the scorer: '
+      $('sub').innerHTML = '<span class="err">' + T().load_failed
         + escapeHtml(e2.message) + '</span>';
       return;
     }
   }
-  const version = readAndFree(wasm.yp_version());
-  $('sub').textContent =
-    `v${version} — running in your browser. Add source files to score against your own codebase.`;
+  wasmVersion = readAndFree(wasm.yp_version());
+  $('sub').textContent = T().ready(wasmVersion);
   score();
 })();
 </script>
