@@ -110,11 +110,21 @@ pub mod context {
 
     /// How `EXAMPLE_MAX` splits between pasted code, explicit example
     /// markers, and list structure.
-    pub const CODE_PRESENT: f64 = 20.0;
-    pub const EXAMPLE_MARKER_MAX: f64 = 15.0;
+    ///
+    /// Weighted toward the concrete. Code and lists *are* examples; a phrase
+    /// like "for example" or "e.g." only promises one, and a promise is worth
+    /// less -- especially since the same construct is often used to introduce
+    /// alternatives ("e.g. integer or decimal or another"), which is
+    /// underspecification wearing an example's clothes.
+    pub const CODE_PRESENT: f64 = 25.0;
+    pub const EXAMPLE_MARKER_MAX: f64 = 10.0;
     pub const LIST_STRUCTURE_MAX: f64 = 15.0;
-    pub const EXAMPLE_MARKER_RATE: f64 = 1.0;
+    pub const EXAMPLE_MARKER_RATE: f64 = 0.8;
     pub const LIST_STRUCTURE_RATE: f64 = 0.5;
+
+    /// A marker with nothing concrete anywhere in the prompt earns only this
+    /// fraction of its points.
+    pub const UNBACKED_MARKER_FRACTION: f64 = 0.4;
 
     /// How `SHAPE_MAX` splits between length and lexical variety.
     pub const LENGTH_MAX: f64 = 25.0;

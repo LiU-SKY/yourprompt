@@ -93,15 +93,69 @@ unavailable and the score is marked `~`.
 
 ## Status
 
-🚧 Early development. M1 through M4 are done: the score is live in the status
+🚧 Early development. M1 through M5 are done: the score is live in the status
 line at zero context cost, grounded in your repository, in English and
 Korean. The benchmark validation that turns the number from plausible into
-*checked* is M5, and until it lands the absolute values are provisional --
-only the ordering is meaningful. See [milestones](#milestones).
+*checked* has landed -- see [Validation](#validation). Absolute values remain
+provisional; only the ordering is meaningful. See [milestones](#milestones).
 
 ## Validation
 
-_Benchmark numbers land here once `yp bench` is wired up (M5)._
+Every prompt scorer on GitHub asserts that its number means something. None of
+them checks. `yp bench` does, against [HumanEvalComm](https://github.com/jie-jw-wu/human-eval-comm)
+(Wu et al.): 164 HumanEval problems deliberately damaged into ambiguous,
+inconsistent and incomplete variants, giving 771 pairs where we know which
+side is worse.
+
+| | Pairwise accuracy |
+|---|---:|
+| Defects that are **lexically reachable** (399 pairs) | **64.7%** |
+| All 771 pairs, including the unreachable ones | 51.8% |
+
+| Defect injected | Reachable | Pairs | Correct |
+|---|:---:|---:|---:|
+| incompleteness | yes | 164 | **80.5%** |
+| ambiguity + incompleteness | yes | 71 | **78.9%** |
+| ambiguity | yes | 164 | 42.7% |
+| inconsistency | no | 163 | 24.5% (99 ties) |
+
+**Why inconsistency is out of reach.** HumanEvalComm makes a problem
+inconsistent by contradicting a docstring's worked example against its prose —
+`truncate_number(3.5) -> 3` where the text says "return the decimal part".
+Detecting that requires knowing the decimal part of 3.5 is 0.5. No dictionary,
+density measure or corpus statistic gets there, which is why those pairs come
+out as exact ties: to a lexical scorer the two prompts are identical. That is a
+boundary of the LLM-free approach, and it is reported as one rather than
+averaged away.
+
+**These numbers are not flattering, and that is the point.** The first run of
+this harness returned **45.3% — worse than a coin flip** — and the ablation
+showed the clarity axis was actively hurting. Diagnosing one pair found three
+real defects: hedges like "a certain" and "or another" were missing from the
+lexicon entirely; because the damaged text was longer, the density
+normalisation then read the extra words as dilution and *raised* the score; and
+the `(e.g. …)` construct that created the ambiguity was being counted as a
+worked example. Fixing those took the reachable figure to 64.7%. The bad first
+number is [in the git history](../../commits/main) rather than tuned away
+before publication.
+
+Reproduce it yourself:
+
+```bash
+yp bench --ablation            # downloads and caches the dataset on first run
+```
+
+Full report: [bench/report.md](bench/report.md).
+
+### Caveats worth stating
+
+- HumanEvalComm's prompts are function stubs with docstrings, not the
+  imperative requests a coding agent actually receives. The *ordering* is
+  meaningful; the absolute scores on this dataset are not.
+- Grounding is inactive throughout, since these prompts have no repository. The
+  axis that makes this tool different is therefore **not yet validated** —
+  Ambig-SWE, which ships real repositories, is the next target.
+- Scoring parameters remain reasoned defaults rather than fitted ones.
 
 ## Milestones
 
@@ -109,7 +163,8 @@ _Benchmark numbers land here once `yp bench` is wired up (M5)._
 - [x] **M2** — zero-context integration: `yp hook`, `yp statusline`, `yp install`
 - [x] **M3** — A axis: repository symbol index, `resolve@1`, SCS
 - [x] **M4** — Korean support (shipped with the lexicons from the start)
-- [ ] **M5** — `yp bench`, ablation table, marketplace listing
+- [x] **M5** — `yp bench`, ablation table, published numbers
+- [ ] **M6** — validate the grounding axis on Ambig-SWE (real repositories)
 
 ## Prior art & references
 

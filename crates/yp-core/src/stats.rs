@@ -13,6 +13,10 @@ pub struct PromptStats {
     pub has_code: bool,
     /// Lines that begin a bullet or numbered list item.
     pub list_lines: usize,
+    /// Whether the prompt contains anything concrete enough to serve as an
+    /// example in its own right: pasted code, a list, a number, or a quoted
+    /// literal.
+    pub has_concrete: bool,
     /// Tokens that could name something in the repository. The grounding axis
     /// resolves these; until it exists they are collected but unused.
     pub referents: Vec<String>,
@@ -75,12 +79,16 @@ pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
     }
 
     let list_lines = text.lines().filter(|l| is_list_line(l)).count();
+    let has_number = tokens.iter().any(|t| t.kind == TokenKind::Number);
+    let has_quote = text.contains('"') || text.contains('\'');
+    let has_concrete = has_code || list_lines > 0 || has_number || has_quote;
 
     PromptStats {
         content_tokens,
         distinct_content: distinct.len(),
         has_code,
         list_lines,
+        has_concrete,
         referents,
     }
 }
@@ -115,6 +123,21 @@ mod tests {
     #[test]
     fn a_bare_dash_or_number_is_not_a_list() {
         assert_eq!(stats("- \n1.\n42 items\n-5 degrees").list_lines, 0);
+    }
+
+    #[test]
+    fn concreteness_needs_more_than_prose() {
+        assert!(!stats("make it a bit nicer please").has_concrete);
+        assert!(stats("return `Config`").has_concrete);
+        assert!(stats("retry 3 times").has_concrete);
+        assert!(
+            stats(
+                "- first
+- second"
+            )
+            .has_concrete
+        );
+        assert!(stats("rename it to \"parse_args\"").has_concrete);
     }
 
     #[test]

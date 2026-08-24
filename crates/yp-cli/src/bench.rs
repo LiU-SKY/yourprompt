@@ -38,20 +38,46 @@ const HUMANEVALCOMM_URL: &str = "https://raw.githubusercontent.com/jie-jw-wu/hum
 ///
 /// The suffix letters are the paper's: `a` ambiguity, `c` inconsistency,
 /// `p` incompleteness. A field with two letters carries both defects.
-const VARIANTS: &[(&str, &str, usize)] = &[
-    ("prompt1a", "ambiguity", 1),
-    ("prompt1c", "inconsistency", 1),
-    ("prompt1p", "incompleteness", 1),
-    ("prompt2ac", "ambiguity+inconsistency", 2),
-    ("prompt2ap", "ambiguity+incompleteness", 2),
-    ("prompt2cp", "inconsistency+incompleteness", 2),
-    ("prompt3acp", "all three", 3),
+const VARIANTS: &[Variant] = &[
+    Variant::new("prompt1a", "ambiguity", 1, true),
+    Variant::new("prompt1c", "inconsistency", 1, false),
+    Variant::new("prompt1p", "incompleteness", 1, true),
+    Variant::new("prompt2ac", "ambiguity+inconsistency", 2, false),
+    Variant::new("prompt2ap", "ambiguity+incompleteness", 2, true),
+    Variant::new("prompt2cp", "inconsistency+incompleteness", 2, false),
+    Variant::new("prompt3acp", "all three", 3, false),
 ];
+
+struct Variant {
+    field: &'static str,
+    category: &'static str,
+    defects: usize,
+    /// Whether the injected defect is in principle visible without evaluating
+    /// the program. See the note in the report for why inconsistency is not.
+    lexically_reachable: bool,
+}
+
+impl Variant {
+    const fn new(
+        field: &'static str,
+        category: &'static str,
+        defects: usize,
+        lexically_reachable: bool,
+    ) -> Self {
+        Variant {
+            field,
+            category,
+            defects,
+            lexically_reachable,
+        }
+    }
+}
 
 /// One original-versus-damaged comparison.
 struct Pair {
     category: &'static str,
     defects: usize,
+    lexically_reachable: bool,
     original: Score,
     perturbed: Score,
 }
@@ -212,8 +238,8 @@ fn load_pairs(path: &Path, limit: Option<usize>) -> Result<Vec<Pair>, String> {
             return Err("language resources unavailable".into());
         };
 
-        for (field, category, defects) in VARIANTS {
-            let Some(text) = record.get(*field).and_then(|v| v.as_str()) else {
+        for variant in VARIANTS {
+            let Some(text) = record.get(variant.field).and_then(|v| v.as_str()) else {
                 continue;
             };
             if text.trim().is_empty() {
@@ -223,8 +249,9 @@ fn load_pairs(path: &Path, limit: Option<usize>) -> Result<Vec<Pair>, String> {
                 continue;
             };
             pairs.push(Pair {
-                category,
-                defects: *defects,
+                category: variant.category,
+                defects: variant.defects,
+                lexically_reachable: variant.lexically_reachable,
                 original: original.clone(),
                 perturbed,
             });
@@ -259,28 +286,56 @@ fn render_report(pairs: &[Pair], ablation: bool) -> String {
             .add(pair.original.total, pair.perturbed.total);
     }
 
+    let mut reachable = Tally::default();
+    for pair in pairs.iter().filter(|p| p.lexically_reachable) {
+        reachable.add(pair.original.total, pair.perturbed.total);
+    }
+
     out.push_str(&format!(
         "## Pairwise ordering\n\n\
          **{:.1}%** of {} pairs score the original above the damaged version \
-         (ties: {}), mean margin {:.1} points.\n\n",
+         (ties: {}), mean margin {:.1} points.\n\n\
+         Restricted to the {} pairs whose defect is *lexically reachable* -- \
+         visible without evaluating the program -- the figure is **{:.1}%**. \
+         The gap is not a tuning problem; see the note below.\n\n",
         overall.accuracy() * 100.0,
         overall.total,
         overall.ties,
         overall.mean_delta(),
+        reachable.total,
+        reachable.accuracy() * 100.0,
     ));
 
-    out.push_str("| Defect injected | Pairs | Correct | Ties | Mean margin |\n");
-    out.push_str("|---|---:|---:|---:|---:|\n");
+    out.push_str("| Defect injected | Reachable | Pairs | Correct | Ties | Mean margin |\n");
+    out.push_str("|---|:---:|---:|---:|---:|---:|\n");
     for (category, tally) in &by_category {
+        let is_reachable = pairs
+            .iter()
+            .find(|p| p.category == *category)
+            .is_some_and(|p| p.lexically_reachable);
         out.push_str(&format!(
-            "| {} | {} | {:.1}% | {} | {:.1} |\n",
+            "| {} | {} | {} | {:.1}% | {} | {:.1} |\n",
             category,
+            if is_reachable { "yes" } else { "no" },
             tally.total,
             tally.accuracy() * 100.0,
             tally.ties,
             tally.mean_delta(),
         ));
     }
+
+    out.push_str(
+        "\n### Why inconsistency is out of reach\n\n\
+         HumanEvalComm creates an inconsistent problem by making a docstring's \
+         worked example contradict its prose -- `truncate_number(3.5) -> 3` \
+         where the text says \"return the decimal part\". Detecting that means \
+         knowing the decimal part of 3.5 is 0.5. No dictionary, density \
+         measure or corpus statistic reaches it, which is why those pairs \
+         mostly come out as exact ties: to a lexical scorer the two prompts \
+         are indistinguishable. That is a boundary of the deterministic, \
+         LLM-free approach rather than a defect in this implementation of it, \
+         and it is reported as a boundary instead of averaged away.\n",
+    );
 
     // ---- severity ordering ----------------------------------------------
     let severity: Vec<(f64, f64)> = pairs

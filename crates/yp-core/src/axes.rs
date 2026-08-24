@@ -280,11 +280,18 @@ pub fn context(cues: &BTreeMap<CueId, Vec<String>>, stats: &PromptStats) -> Axis
     );
 
     let code_points = if stats.has_code { d::CODE_PRESENT } else { 0.0 };
+    // "for example" with nothing concrete anywhere in the prompt is a promise
+    // of an example, not an example.
+    let marker_backing = if stats.has_concrete {
+        1.0
+    } else {
+        d::UNBACKED_MARKER_FRACTION
+    };
     let marker_points = saturate(
         example_terms.len(),
         d::EXAMPLE_MARKER_MAX,
         d::EXAMPLE_MARKER_RATE,
-    );
+    ) * marker_backing;
     let list_points = saturate(
         stats.list_lines,
         d::LIST_STRUCTURE_MAX,

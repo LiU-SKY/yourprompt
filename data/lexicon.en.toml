@@ -83,6 +83,10 @@ terms = [
   "significantly", "minimally", "substantially", "appropriately",
   "properly", "correctly", "accordingly", "adequately", "suitably",
   "as needed", "as required", "reasonably",
+  # Hedges that name a thing without saying which thing.
+  "a certain", "certain", "some kind", "some sort", "a suitable",
+  "an appropriate", "a given", "relevant", "applicable", "necessary",
+  "desired", "expected behaviour", "expected behavior",
 ]
 
 [[smell]]
@@ -117,6 +121,10 @@ terms = [
   "etc", "etc.", "and so on", "and so forth", "among others", "and more",
   "including but not limited to", "such as", "like that", "any other",
   "whatever", "and the rest", "and others", "or similar",
+  # Open disjunctions: an unclosed list of alternatives is the same defect
+  # as an unclosed list of items.
+  "or another", "or other", "or else", "or the like", "or so",
+  "one of", "any of", "either", "some of",
 ]
 
 [[smell]]
