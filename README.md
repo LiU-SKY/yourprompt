@@ -45,6 +45,15 @@ $ yp score "In src/auth/login.rs, change verify_token so it returns     Err(Auth
 Every sub-score prints with the reason it came out that way -- the model is
 meant to be argued with, which it cannot be if it only prints a number.
 
+## Try it without installing anything
+
+**<https://liu-sky.github.io/yourprompt/>**
+
+The whole scorer is compiled to WebAssembly and runs in the page — no server,
+no model call, and nothing you type or attach is uploaded anywhere. It ships
+with an index of this repository, so the grounding axis is live and you can
+watch it react to names that exist here and names that do not.
+
 ## Install
 
 ```bash

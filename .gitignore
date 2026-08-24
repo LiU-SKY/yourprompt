@@ -8,3 +8,7 @@ Cargo.lock.bak
 
 # Windows reserved device name, occasionally created by a stray redirect
 nul
+
+# Built by the Pages workflow, not committed
+docs/yp.wasm
+docs/repo-index.tsv

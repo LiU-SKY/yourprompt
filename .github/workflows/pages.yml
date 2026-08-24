@@ -1,0 +1,73 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deployment at a time; a queued run supersedes a running one rather than
+# racing it.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # The page is the scorer, not a description of it: yp-core compiles to
+      # WebAssembly and runs in the visitor's browser, so nothing they type is
+      # uploaded anywhere and the site needs no backend.
+      - name: Build the scorer for the browser
+        run: |
+          cargo build -p yp-wasm --release --target wasm32-unknown-unknown
+          cp target/wasm32-unknown-unknown/release/yp_wasm.wasm docs/yp.wasm
+
+      # Ship an index of this repository so visitors can see the grounding
+      # axis actually work rather than reading about it.
+      - name: Index this repository for the grounding axis
+        run: |
+          cargo build --release --bin yp
+          YP_STATE_DIR="$RUNNER_TEMP/yp" ./target/release/yp index
+          cp "$RUNNER_TEMP/yp/index/"*.tsv docs/repo-index.tsv
+
+      - name: Check the page carries no control characters
+        run: |
+          python3 - <<'PY'
+          data = open('docs/index.html', encoding='utf-8').read()
+          for name, ch in (('NUL', chr(0)), ('U+FFFD', chr(0xFFFD))):
+              assert ch not in data, f'{name} in docs/index.html'
+          print('docs/index.html is clean')
+          PY
+
+      - name: Report what will be published
+        run: ls -lh docs/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

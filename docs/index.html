@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yourprompt</title>
+<meta name="description" content="Scores how well an AI coding agent can understand your prompt, against your actual repository. Runs entirely in your browser.">
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --dim: #6b6b66;
+    --line: #e4e4e0; --accent: #2f6f4f; --warn: #8a6d1f; --bad: #9b3a2f;
+    --track: #ecece8; --drop: rgba(47,111,79,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1d1e22; --ink: #e8e8e4; --dim: #96968f;
+      --line: #2c2d32; --accent: #6fbf90; --warn: #d6b45c; --bad: #e08a7c;
+      --track: #26272c; --drop: rgba(111,191,144,.10);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+          "Noto Sans KR", Roboto, sans-serif;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 34px 20px 72px; }
+  header { margin-bottom: 22px; }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.015em; }
+  .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
+  .sub code { font-size: 12.5px; }
+  .lede { margin: 14px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 16px; }
+  .label { font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+           color: var(--dim); margin: 0 0 6px; }
+  .tools { display: flex; gap: 8px; align-items: center; margin: 12px 0 6px;
+           flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 13.5px; padding: 6px 12px; border-radius: 7px;
+    border: 1px solid var(--line); background: transparent; color: inherit;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  .note { font-size: 12.5px; color: var(--dim); margin-left: auto; }
+  .note.bad { color: var(--bad); }
+
+  textarea {
+    width: 100%; min-height: 128px; resize: vertical; padding: 12px;
+    background: transparent; color: inherit; border: 1px solid var(--line);
+    border-radius: 8px; font: 14px/1.6 ui-monospace, SFMono-Regular,
+    "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .dropping { border-color: var(--accent) !important; background: var(--drop); }
+
+  .attachments { margin-top: 10px; display: grid; gap: 6px; }
+  .att {
+    display: flex; align-items: center; gap: 10px; font-size: 13px;
+    border: 1px dashed var(--line); border-radius: 7px; padding: 7px 10px;
+  }
+  .att .nm { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .att .sz { color: var(--dim); }
+  .att button { margin-left: auto; padding: 2px 8px; font-size: 12px; }
+  .empty-att { color: var(--dim); font-size: 12.5px; font-style: italic;
+               border: 1px dashed var(--line); border-radius: 7px; padding: 9px 10px; }
+
+  .bar-row { display: flex; align-items: baseline; gap: 14px; margin: 22px 0 6px; }
+  .total { font-size: 42px; font-weight: 650; letter-spacing: -0.02em;
+           font-variant-numeric: tabular-nums; }
+  .grade { font-size: 21px; font-weight: 600; }
+  .of { color: var(--dim); font-size: 13px; }
+  .flag { color: var(--dim); font-size: 12.5px; margin-left: auto; }
+  .track { height: 8px; background: var(--track); border-radius: 999px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; transition: width .18s ease; }
+
+  .axes { margin-top: 26px; display: grid; gap: 14px; }
+  .axis { border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px;
+          background: var(--panel); }
+  .axis > .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+  .axis .name { font-weight: 600; text-transform: capitalize; }
+  .axis .num { margin-left: auto; color: var(--dim); font-size: 13px;
+               font-variant-numeric: tabular-nums; }
+  .comp { display: grid; grid-template-columns: 128px 74px 1fr; gap: 10px;
+          align-items: baseline; padding: 4px 0; font-size: 13.5px; }
+  .comp .cn { color: var(--dim); }
+  .comp .cv { font-variant-numeric: tabular-nums; }
+  .comp .cd { color: var(--dim); overflow-wrap: anywhere; }
+  .muted { color: var(--dim); font-style: italic; }
+  footer { margin-top: 34px; color: var(--dim); font-size: 12.5px; line-height: 1.7; }
+  a { color: var(--accent); }
+  .err { color: var(--bad); }
+  @media (max-width: 640px) {
+    .comp { grid-template-columns: 1fr; gap: 2px; }
+    .comp .cd { margin-bottom: 6px; }
+    .note { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>yourprompt</h1>
+    <p class="sub" id="sub">Loading the scorer…</p>
+    <p class="lede">
+      Scores how well an AI coding agent can understand your prompt, out of 1000,
+      with the reason for every point. Deterministic, and it runs entirely in
+      this page — nothing you type or attach is uploaded anywhere.
+    </p>
+  </header>
+
+  <div class="panel">
+    <p class="label">Prompt</p>
+    <textarea id="p" spellcheck="false" autofocus
+      placeholder="What do you want the agent to do?
+
+e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don't change the public signature of login(). tests/auth.rs must still pass."></textarea>
+
+    <p class="label" style="margin-top:16px">Attached context <span style="text-transform:none;letter-spacing:0">— files the agent should read, judged as evidence rather than as instructions</span></p>
+    <div class="attachments" id="atts"></div>
+
+    <div class="tools">
+      <button type="button" id="open">Attach a file…</button>
+      <button type="button" id="download" disabled>Download report</button>
+      <button type="button" id="clear">Clear</button>
+      <input type="file" id="file" hidden multiple accept=".txt,.md,.markdown,.rst,.text,text/*">
+      <span class="note" id="note"></span>
+    </div>
+
+    <div class="bar-row">
+      <span class="total" id="total">—</span>
+      <span class="of">/ 1000</span>
+      <span class="grade" id="grade"></span>
+      <span class="flag" id="flag"></span>
+    </div>
+    <div class="track"><div class="fill" id="fill" style="width:0"></div></div>
+  </div>
+
+  <div class="axes" id="axes"></div>
+
+  <footer>
+    The whole scorer is compiled to WebAssembly and runs here; there is no
+    server and no model call. Grounding is measured against an index of
+    <a href="https://github.com/LiU-SKY/yourprompt">this project's own
+    repository</a> so you can see the axis work — point it at your own codebase
+    with <code>yp serve --repo .</code>.<br>
+    <a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const colourFor = r => r >= 0.70 ? 'var(--accent)' : r >= 0.50 ? 'var(--warn)' : 'var(--bad)';
+const MAX_BYTES = 256 * 1024;
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+let wasm = null, indexBytes = null, lastScore = null;
+let attachments = [];   // { name, text }
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function note(message, bad) {
+  $('note').textContent = message || '';
+  $('note').className = 'note' + (bad ? ' bad' : '');
+}
+
+// --- the WebAssembly boundary ---------------------------------------------
+// Strings cross as (pointer, length) and come back length-prefixed. Every
+// buffer we take ownership of is handed straight back.
+
+function write(bytes) {
+  if (!bytes.length) return [0, 0];
+  const ptr = wasm.yp_alloc(bytes.length);
+  new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+  return [ptr, bytes.length];
+}
+
+function readAndFree(ptr) {
+  if (!ptr) return null;
+  const view = new DataView(wasm.memory.buffer);
+  const len = view.getUint32(ptr, true);
+  const text = dec.decode(new Uint8Array(wasm.memory.buffer, ptr + 4, len));
+  wasm.yp_free(ptr, 4 + len);
+  return text;
+}
+
+function scoreNow(instruction, attached) {
+  const joined = attached.map(a => a.text).join('\u0000');
+  const buffers = [];
+  try {
+    const [tp, tl] = write(enc.encode(instruction)); buffers.push([tp, tl]);
+    const [ap, al] = write(enc.encode(joined));      buffers.push([ap, al]);
+    const [ip, il] = write(indexBytes || new Uint8Array()); buffers.push([ip, il]);
+    const out = wasm.yp_score_parts(tp, tl, ap, al, ip, il);
+    const json = readAndFree(out);
+    return json ? JSON.parse(json) : null;
+  } finally {
+    for (const [ptr, len] of buffers) if (ptr) wasm.yp_free(ptr, len);
+  }
+}
+
+// --- rendering -------------------------------------------------------------
+
+function renderAxis(axis, absent) {
+  if (absent) {
+    return `<div class="axis"><div class="head"><span class="name">grounding</span>
+      <span class="num">not scored</span></div>
+      <div class="muted">No repository index loaded, so the remaining axes were
+      rescaled to 1000.</div></div>`;
+  }
+  const r = axis.max ? axis.earned / axis.max : 0;
+  const comps = axis.components.map(c => `
+    <div class="comp">
+      <span class="cn">${c.id}</span>
+      <span class="cv">${c.earned.toFixed(1)} / ${c.max.toFixed(0)}</span>
+      <span class="cd">${escapeHtml(c.detail)}</span>
+    </div>`).join('');
+  return `<div class="axis">
+    <div class="head">
+      <span class="name">${axis.id}</span>
+      <span class="num">${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}</span>
+    </div>
+    <div class="track" style="margin-bottom:8px">
+      <div class="fill" style="width:${(r*100).toFixed(1)}%;background:${colourFor(r)}"></div>
+    </div>
+    ${comps}</div>`;
+}
+
+function render(s) {
+  const r = s.total / 1000;
+  $('total').textContent = s.total.toFixed(1);
+  $('grade').textContent = s.grade;
+  $('grade').style.color = colourFor(r);
+  $('fill').style.width = (r * 100).toFixed(1) + '%';
+  $('fill').style.background = colourFor(r);
+  $('flag').textContent = s.renormalized ? 'ungrounded — rescaled' : '';
+  $('axes').innerHTML =
+    renderAxis(s.grounding, !s.grounding) +
+    renderAxis(s.actionability) + renderAxis(s.clarity) + renderAxis(s.context);
+}
+
+function clearScore() {
+  lastScore = null;
+  $('download').disabled = true;
+  $('total').textContent = '—'; $('grade').textContent = '';
+  $('fill').style.width = '0'; $('flag').textContent = '';
+  $('axes').innerHTML = '';
+}
+
+function renderAttachments() {
+  if (!attachments.length) {
+    $('atts').innerHTML =
+      '<div class="empty-att">Nothing attached. Drop a file here, or use the button below.</div>';
+    return;
+  }
+  $('atts').innerHTML = attachments.map((a, i) => `
+    <div class="att">
+      <span class="nm">${escapeHtml(a.name)}</span>
+      <span class="sz">${(a.text.length / 1024).toFixed(1)} KB</span>
+      <button type="button" data-i="${i}">remove</button>
+    </div>`).join('');
+  $('atts').querySelectorAll('button').forEach(b =>
+    b.addEventListener('click', () => {
+      attachments.splice(Number(b.dataset.i), 1);
+      renderAttachments();
+      score();
+    }));
+}
+
+// --- scoring ---------------------------------------------------------------
+
+let timer = null;
+function score() {
+  if (!wasm) return;
+  const text = $('p').value;
+  if (!text.trim() && !attachments.length) { clearScore(); return; }
+  try {
+    const s = scoreNow(text, attachments);
+    if (!s) throw new Error('the scorer could not read that');
+    lastScore = s;
+    $('download').disabled = false;
+    render(s);
+  } catch (e) {
+    clearScore();
+    $('axes').innerHTML = '<div class="axis err">' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+$('p').addEventListener('input', () => {
+  clearTimeout(timer);
+  timer = setTimeout(score, 120);
+});
+
+// --- attaching files -------------------------------------------------------
+
+function looksBinary(text) {
+  // A NUL byte never appears in text a human wrote.
+  if (text.indexOf('\u0000') !== -1) return true;
+  // Repeated U+FFFD means the bytes were decoded as UTF-8 but were not.
+  const replacements = (text.match(/\uFFFD/g) || []).length;
+  return replacements > 3 && replacements / Math.max(text.length, 1) > 0.001;
+}
+
+function attach(file) {
+  if (!file) return;
+  if (file.size > MAX_BYTES) {
+    note(`${file.name} is ${(file.size / 1024).toFixed(0)} KB — the limit is 256 KB`, true);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => note(`could not read ${file.name}`, true);
+  reader.onload = () => {
+    const text = String(reader.result);
+    if (looksBinary(text)) { note(`${file.name} does not look like text`, true); return; }
+    attachments.push({ name: file.name, text });
+    note(`attached ${file.name}`);
+    renderAttachments();
+    score();
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+$('open').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', e => {
+  for (const f of e.target.files) attach(f);
+  e.target.value = '';
+});
+
+for (const target of [$('p'), $('atts')]) {
+  ['dragenter', 'dragover'].forEach(k =>
+    target.addEventListener(k, e => { e.preventDefault(); target.classList.add('dropping'); }));
+  ['dragleave', 'drop'].forEach(k =>
+    target.addEventListener(k, () => target.classList.remove('dropping')));
+  target.addEventListener('drop', e => {
+    e.preventDefault();
+    for (const f of (e.dataTransfer.files || [])) attach(f);
+  });
+}
+
+$('clear').addEventListener('click', () => {
+  $('p').value = ''; attachments = []; note('');
+  renderAttachments(); clearScore(); $('p').focus();
+});
+
+// --- the report ------------------------------------------------------------
+
+function axisSection(axis, name) {
+  if (!axis) {
+    return `### grounding — not scored\n\nNo repository index was loaded.\n`;
+  }
+  const rows = axis.components.map(c =>
+    `| ${c.id} | ${c.earned.toFixed(1)} | ${c.max.toFixed(0)} | ${c.detail.replace(/\|/g, '\\|')} |`
+  ).join('\n');
+  return `### ${name} — ${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}\n\n` +
+    `| component | score | out of | why |\n|---|---:|---:|---|\n${rows}\n`;
+}
+
+function buildReport(s, prompt) {
+  const longest = (prompt.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0);
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  const attached = attachments.length
+    ? attachments.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('\n')
+    : '- none';
+  return [
+    `# yourprompt`, ``,
+    `**${s.total.toFixed(1)} / 1000 — ${s.grade}**`, ``,
+    `| | |`, `|---|---|`,
+    `| Generated | ${new Date().toISOString()} |`,
+    `| Grounded | ${s.renormalized ? 'no (score rescaled from three axes)' : 'yes'} |`,
+    ``, `## Prompt`, ``, fence, prompt, fence,
+    ``, `## Attached context`, ``, attached,
+    ``, `## Breakdown`, ``,
+    axisSection(s.grounding, 'grounding'),
+    axisSection(s.actionability, 'actionability'),
+    axisSection(s.clarity, 'clarity'),
+    axisSection(s.context, 'context'),
+    `---`, ``,
+    `Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the`,
+    `browser. Deterministic; no model was called.`, ``,
+  ].join('\n');
+}
+
+$('download').addEventListener('click', () => {
+  if (!lastScore) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
+  const name = `yourprompt-${lastScore.total.toFixed(0)}-${stamp}.md`;
+  const blob = new Blob([buildReport(lastScore, $('p').value)],
+                        {type: 'text/markdown;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = name;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  note(`saved ${name}`);
+});
+
+// --- boot ------------------------------------------------------------------
+
+(async () => {
+  renderAttachments();
+  try {
+    const { instance } = await WebAssembly.instantiateStreaming(
+      fetch('yp.wasm'), {});
+    wasm = instance.exports;
+  } catch (e) {
+    // instantiateStreaming needs the right MIME type; fall back if the host
+    // serves .wasm as something else.
+    try {
+      const bytes = await (await fetch('yp.wasm')).arrayBuffer();
+      wasm = (await WebAssembly.instantiate(bytes, {})).instance.exports;
+    } catch (e2) {
+      $('sub').innerHTML = '<span class="err">could not load the scorer: '
+        + escapeHtml(e2.message) + '</span>';
+      return;
+    }
+  }
+
+  let where = 'not grounded';
+  try {
+    const res = await fetch('repo-index.tsv');
+    if (res.ok) {
+      indexBytes = new Uint8Array(await res.arrayBuffer());
+      const header = dec.decode(indexBytes.slice(0, 120)).split('\n')[0].split('\t');
+      where = `grounded in ${header[2]} files of this project`;
+    }
+  } catch (e) { /* ungrounded is a valid state */ }
+
+  const version = readAndFree(wasm.yp_version());
+  $('sub').textContent = `v${version} — running in your browser, ${where}.`;
+  score();
+})();
+</script>
+</body>
+</html>

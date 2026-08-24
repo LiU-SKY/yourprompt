@@ -225,6 +225,14 @@ impl RepoIndex {
         Self::parse(blob)
     }
 
+    /// Parse an index that is already in memory.
+    ///
+    /// Used where there is no filesystem to read from -- the browser build
+    /// receives the index as bytes over the network.
+    pub fn parse_str(blob: &str) -> Option<RepoIndex> {
+        Self::parse(blob.to_string())
+    }
+
     fn parse(blob: String) -> Option<RepoIndex> {
         let header_end = blob.find('\n')?;
         let header = &blob[..header_end];

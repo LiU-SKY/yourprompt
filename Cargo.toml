@@ -5,6 +5,7 @@ members = [
     "crates/yp-core",
     "crates/yp-index",
     "crates/yp-lang",
+    "crates/yp-wasm",
 ]
 
 [workspace.package]
