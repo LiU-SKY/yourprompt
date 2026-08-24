@@ -1,9 +1,11 @@
 //! `yp` -- the yourprompt command line.
 //!
 //! Subcommands land milestone by milestone. Today: `score`, `hook`,
-//! `statusline`. Next: `install` (M2), `index` (M3), `bench` (M5).
+//! `statusline`, `install`, `explain`. Next: `index` (M3), `bench` (M5).
 
+mod explain;
 mod hook;
+mod install;
 mod report;
 mod session;
 mod statusline;
@@ -53,6 +55,32 @@ enum Command {
     /// Prints nothing and always exits 0, because a hook's stdout is injected
     /// into the model's context and a non-zero exit can block the prompt.
     Hook,
+
+    /// Show the full breakdown of the prompt that was just scored.
+    ///
+    /// Backs the `/score` slash command. With no --session, uses the most
+    /// recently scored session, preferring one from this directory.
+    Explain {
+        /// Explain a specific session rather than the most recent one.
+        #[arg(long, value_name = "ID")]
+        session: Option<String>,
+        /// Never colourise, even on a terminal.
+        #[arg(long)]
+        no_color: bool,
+    },
+
+    /// Register the hook and status line in Claude Code's settings.
+    ///
+    /// Backs up your settings first, and wraps any status line you already
+    /// have rather than replacing it.
+    Install {
+        /// Print the settings that would be written, without writing them.
+        #[arg(long)]
+        print_only: bool,
+        /// Undo a previous install, restoring any status line that was wrapped.
+        #[arg(long)]
+        uninstall: bool,
+    },
 
     /// Render the score for Claude Code's status line.
     ///
@@ -130,7 +158,12 @@ fn main() -> ExitCode {
             oneline,
             no_color,
         } => run_score(text, json, oneline, no_color),
+        Command::Explain { session, no_color } => explain::run(session, no_color),
         Command::Hook => hook::run(),
+        Command::Install {
+            print_only,
+            uninstall,
+        } => install::run(print_only, uninstall),
         Command::Statusline { wrap } => statusline::run(wrap),
     }
 }

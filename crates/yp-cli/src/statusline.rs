@@ -144,6 +144,8 @@ mod tests {
             updated_unix: 0,
             cwd: String::new(),
             latest: entry(latest, true),
+            latest_prompt: "fix it".into(),
+            prompt_truncated: false,
             history: history.into_iter().map(|t| entry(t, true)).collect(),
         }
     }

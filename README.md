@@ -45,11 +45,32 @@ $ yp score "In src/auth/login.rs, change verify_token so it returns     Err(Auth
 Every sub-score prints with the reason it came out that way -- the model is
 meant to be argued with, which it cannot be if it only prints a number.
 
+## Install
+
+```bash
+cargo install --git https://github.com/LiU-SKY/yourprompt yp-cli
+yp install
+```
+
+`yp install` registers the `UserPromptSubmit` hook and the status line in your
+Claude Code settings. It backs the file up first, and if you already have a
+status line it **wraps** it rather than replacing it, so yours keeps working
+with our segment appended. `--print-only` shows what it would write without
+writing anything; `--uninstall` puts everything back.
+
+Then, in any session:
+
+```
+[Opus] ~/proj main 42% ctx  ⟦ 742.3 ▓▓▓▓▓▓▓░░░ A- ▲ ⟧
+```
+
+`/score` explains the last prompt, axis by axis, and suggests one rewrite.
+
 ## Status
 
-🚧 Early development. M1 (scoring engine + CLI) is done; the status line
-integration that makes this free of context cost lands in M2. See
-[milestones](#milestones).
+🚧 Early development. M1 and M2 are done: the score is live in the status line
+at zero context cost. The repository-grounding axis that makes the score
+*about your codebase* lands in M3. See [milestones](#milestones).
 
 ## Validation
 
@@ -58,7 +79,7 @@ _Benchmark numbers land here once `yp bench` is wired up (M5)._
 ## Milestones
 
 - [x] **M1** — core scoring engine (B/C/D axes), `yp score`
-- [ ] **M2** — zero-context integration: `yp hook`, `yp statusline`, `yp install`
+- [x] **M2** — zero-context integration: `yp hook`, `yp statusline`, `yp install`
 - [ ] **M3** — A axis: tree-sitter repo symbol index, `resolve@1`, SCS
 - [ ] **M4** — Korean support
 - [ ] **M5** — `yp bench`, ablation table, marketplace listing

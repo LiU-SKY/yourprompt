@@ -95,7 +95,7 @@ pub fn run() -> ExitCode {
         input.session_id, entry.total, entry.grade
     ));
 
-    if let Err(e) = session::record(&input.session_id, &input.cwd, entry) {
+    if let Err(e) = session::record(&input.session_id, &input.cwd, &input.prompt, entry) {
         debug(&format!("could not write sidecar: {e}"));
     }
 

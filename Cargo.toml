@@ -19,7 +19,7 @@ yp-core = { path = "crates/yp-core" }
 yp-lang = { path = "crates/yp-lang" }
 yp-index = { path = "crates/yp-index" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [profile.release]
 opt-level = 3

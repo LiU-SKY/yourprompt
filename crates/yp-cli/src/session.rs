@@ -22,6 +22,14 @@ pub const SIDECAR_VERSION: u32 = 1;
 /// How many past scores to keep, for trend display.
 const HISTORY_LIMIT: usize = 20;
 
+/// Longest prompt kept verbatim for `yp explain`.
+///
+/// The status line re-reads this file constantly, so an enormous pasted
+/// snippet must not make it enormous too. Anything longer is stored truncated
+/// and flagged, and `explain` says so rather than quietly explaining a
+/// different prompt than the one that was scored.
+const PROMPT_LIMIT: usize = 16 * 1024;
+
 /// Sidecars older than this are removed. Sessions are ephemeral; there is no
 /// reason to accumulate them forever in the user's home directory.
 const TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -63,6 +71,14 @@ pub struct Sidecar {
     #[serde(default)]
     pub cwd: String,
     pub latest: Entry,
+    /// The prompt behind `latest`, kept so `yp explain` can show the full
+    /// breakdown without the user retyping it. Local only -- it never leaves
+    /// this file, and never enters the model's context.
+    #[serde(default)]
+    pub latest_prompt: String,
+    /// True when `latest_prompt` was cut short by `PROMPT_LIMIT`.
+    #[serde(default)]
+    pub prompt_truncated: bool,
     /// Most recent first.
     #[serde(default)]
     pub history: Vec<Entry>,
@@ -140,7 +156,7 @@ pub fn load(session_id: &str) -> Option<Sidecar> {
 }
 
 /// Record a score, rolling the previous latest into the history.
-pub fn record(session_id: &str, cwd: &str, entry: Entry) -> io::Result<()> {
+pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Result<()> {
     let Some(dir) = sessions_dir() else {
         return Err(io::Error::other("no state directory available"));
     };
@@ -154,12 +170,15 @@ pub fn record(session_id: &str, cwd: &str, entry: Entry) -> io::Result<()> {
         history.truncate(HISTORY_LIMIT);
     }
 
+    let (stored_prompt, truncated) = truncate_on_char_boundary(prompt, PROMPT_LIMIT);
     let sidecar = Sidecar {
         version: SIDECAR_VERSION,
         session_id: session_id.to_string(),
         updated_unix: now_unix(),
         cwd: cwd.to_string(),
         latest: entry,
+        latest_prompt: stored_prompt.to_string(),
+        prompt_truncated: truncated,
         history,
     };
 
@@ -173,6 +192,59 @@ pub fn record(session_id: &str, cwd: &str, entry: Entry) -> io::Result<()> {
         let _ = prune_expired(&dir);
     }
     Ok(())
+}
+
+/// Cut a string to at most `limit` bytes without splitting a character.
+fn truncate_on_char_boundary(text: &str, limit: usize) -> (&str, bool) {
+    if text.len() <= limit {
+        return (text, false);
+    }
+    let mut end = limit;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
+
+/// The sidecar most recently written from `cwd`, or the most recent overall.
+///
+/// Slash commands do not receive a session id, so `yp explain` has to guess.
+/// Preferring a matching working directory makes the guess right whenever the
+/// user has several sessions open in different projects.
+pub fn most_recent(cwd: &str) -> Option<Sidecar> {
+    let dir = sessions_dir()?;
+    let mut best: Option<Sidecar> = None;
+    for entry in fs::read_dir(dir).ok()? {
+        let Ok(entry) = entry else { continue };
+        if entry.path().extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(sidecar) = serde_json::from_str::<Sidecar>(&text) else {
+            continue;
+        };
+        if sidecar.version != SIDECAR_VERSION {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some(current) => {
+                let candidate_matches = !cwd.is_empty() && sidecar.cwd == cwd;
+                let current_matches = !cwd.is_empty() && current.cwd == cwd;
+                match (candidate_matches, current_matches) {
+                    (true, false) => true,
+                    (false, true) => false,
+                    _ => sidecar.updated_unix > current.updated_unix,
+                }
+            }
+        };
+        if better {
+            best = Some(sidecar);
+        }
+    }
+    best
 }
 
 /// Write via a temporary file and a rename, so a reader never observes a
@@ -258,7 +330,7 @@ mod tests {
     #[test]
     fn records_and_reads_back_a_score() {
         let _s = Scratch::new("roundtrip");
-        record("abc123", "/tmp/project", entry(742.3)).unwrap();
+        record("abc123", "/tmp/project", "fix it", entry(742.3)).unwrap();
         let loaded = load("abc123").expect("sidecar should exist");
         assert_eq!(loaded.latest.total, 742.3);
         assert_eq!(loaded.session_id, "abc123");
@@ -276,7 +348,7 @@ mod tests {
     fn successive_scores_roll_into_history_newest_first() {
         let _s = Scratch::new("history");
         for total in [100.0, 200.0, 300.0] {
-            record("s", "", entry(total)).unwrap();
+            record("s", "", "p", entry(total)).unwrap();
         }
         let loaded = load("s").unwrap();
         assert_eq!(loaded.latest.total, 300.0);
@@ -288,7 +360,7 @@ mod tests {
     fn history_is_bounded() {
         let _s = Scratch::new("bounded");
         for i in 0..(HISTORY_LIMIT + 10) {
-            record("s", "", entry(i as f64)).unwrap();
+            record("s", "", "p", entry(i as f64)).unwrap();
         }
         assert_eq!(load("s").unwrap().history.len(), HISTORY_LIMIT);
     }
@@ -313,7 +385,7 @@ mod tests {
     #[test]
     fn a_sidecar_from_a_future_version_is_ignored_rather_than_misread() {
         let _s = Scratch::new("version");
-        record("s", "", entry(500.0)).unwrap();
+        record("s", "", "p", entry(500.0)).unwrap();
         let path = sidecar_path("s").unwrap();
         let text = fs::read_to_string(&path).unwrap();
         fs::write(&path, text.replace("\"version\":1", "\"version\":999")).unwrap();
@@ -323,7 +395,7 @@ mod tests {
     #[test]
     fn corrupt_json_reads_as_none_instead_of_panicking() {
         let _s = Scratch::new("corrupt");
-        record("s", "", entry(500.0)).unwrap();
+        record("s", "", "p", entry(500.0)).unwrap();
         fs::write(sidecar_path("s").unwrap(), b"{not json").unwrap();
         assert!(load("s").is_none());
     }
@@ -331,7 +403,7 @@ mod tests {
     #[test]
     fn pruning_removes_only_expired_sidecars() {
         let _s = Scratch::new("prune");
-        record("fresh", "", entry(500.0)).unwrap();
+        record("fresh", "", "p", entry(500.0)).unwrap();
         let dir = sessions_dir().unwrap();
 
         // A file whose mtime is far in the past stands in for an old session.
