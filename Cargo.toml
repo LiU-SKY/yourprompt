@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/yp-core",
+    "crates/yp-lang",
+    "crates/yp-index",
+    "crates/yp-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+repository = "https://github.com/LiU-SKY/yourprompt"
+authors = ["LiU-SKY <33451609+LiU-SKY@users.noreply.github.com>"]
+
+[workspace.dependencies]
+yp-core = { path = "crates/yp-core" }
+yp-lang = { path = "crates/yp-lang" }
+yp-index = { path = "crates/yp-index" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
