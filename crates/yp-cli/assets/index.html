@@ -34,7 +34,10 @@
   .langs button.on { background: var(--track); color: var(--ink); font-weight: 600; }
   .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
   .sub code { font-size: 12.5px; }
-  .lede { margin: 14px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
+  .lede { margin: 10px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
+  @media (prefers-reduced-motion: reduce) {
+    .fill { transition: none; }
+  }
 
   .panel { background: var(--panel); border: 1px solid var(--line);
            border-radius: 10px; padding: 16px; }
@@ -115,8 +118,8 @@
         <button type="button" id="lang-ko">한국어</button>
       </div>
     </div>
-    <p class="sub" id="sub">Loading the scorer…</p>
     <p class="lede" id="lede"></p>
+    <p class="sub" id="sub" style="margin-top:6px">Loading the scorer…</p>
   </header>
 
   <div class="panel">
@@ -135,7 +138,7 @@
     </div>
 
     <div class="bar-row">
-      <span class="total" id="total">—</span>
+      <span class="total" id="total">--</span>
       <span class="of">/ 1000</span>
       <span class="grade" id="grade"></span>
       <span class="flag" id="flag"></span>
@@ -163,10 +166,10 @@ let serverInfo = null;  // /api/info, kept so language switches re-render it
 
 const STR = {
   en: {
-    lede: 'Scores how well an AI coding agent can understand your prompt, out of 1000, with the reason for every point.',
+    lede: 'Scores how well an AI coding agent can understand your prompt, with a reason for every point.',
     placeholder: 'What do you want the agent to do?\n\ne.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.',
     label_prompt: 'Prompt',
-    label_att: 'Attached context <span class="hint">— files the agent should read, judged as evidence rather than as instructions</span>',
+    label_att: 'Attached context <span class="hint">· files the agent should read, judged as evidence</span>',
     open: 'Attach a file…',
     download: 'Download report',
     clear: 'Clear',
@@ -174,15 +177,15 @@ const STR = {
     empty: 'Nothing attached. Drop a file here, or use the button below.',
     footer: 'Deterministic and local: no model is called, and nothing you type or attach leaves this server. Files are read in your browser and only their text is scored.<br><a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>',
     loading: 'Loading the scorer…',
-    sub_repo: (repo, files) => `Scored on this server, grounded in <code>${repo}</code> (${files} files indexed).`,
-    sub_none: 'Scored on this server. No repository indexed, so grounding is not scored.',
+    sub_repo: (repo, files) => `<code>${repo}</code> · ${files} files indexed · nothing leaves this server · deterministic`,
+    sub_none: 'No repository indexed, so grounding is not scored · nothing leaves this server',
     sub_plain: 'Scored on this server.',
     not_scored: 'not scored',
     no_index: 'No repository index loaded, so the remaining axes were rescaled to 1000.',
-    rescaled: 'ungrounded — rescaled',
+    rescaled: 'ungrounded, rescaled',
     unreadable: 'the scorer could not read that',
     server_err: s => 'server returned ' + s,
-    too_big: (n, kb) => `${n} is ${kb} KB — the limit is 256 KB`,
+    too_big: (n, kb) => `${n} is ${kb} KB, over the 256 KB limit`,
     read_failed: n => `could not read ${n}`,
     not_text: n => `${n} does not look like text`,
     attached: n => `attached ${n}`,
@@ -201,10 +204,10 @@ const STR = {
            foot: 'Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the browser. Deterministic; no model was called.' },
   },
   ko: {
-    lede: 'AI 코딩 에이전트가 프롬프트를 얼마나 이해할 수 있는지 1000점 만점으로, 모든 점수의 사유와 함께 채점합니다.',
+    lede: 'AI 코딩 에이전트가 프롬프트를 얼마나 이해할 수 있는지, 모든 점수의 사유와 함께 채점합니다.',
     placeholder: '에이전트가 무엇을 하길 원하나요?\n\n예: src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.',
     label_prompt: '프롬프트',
-    label_att: '첨부 컨텍스트 <span class="hint">— 에이전트가 읽어야 할 파일. 지시가 아니라 근거 자료로 채점됩니다</span>',
+    label_att: '첨부 컨텍스트 <span class="hint">· 에이전트가 읽어야 할 파일, 지시가 아니라 근거로 채점됩니다</span>',
     open: '파일 첨부…',
     download: '리포트 다운로드',
     clear: '지우기',
@@ -212,15 +215,15 @@ const STR = {
     empty: '첨부된 파일이 없습니다. 여기에 끌어다 놓거나 아래 버튼을 사용하세요.',
     footer: '결정론적이고 로컬입니다: 모델 호출이 없고, 입력하거나 첨부한 내용은 이 서버 밖으로 나가지 않습니다. 파일은 브라우저에서 읽히며 텍스트만 채점됩니다.<br><a href="https://github.com/LiU-SKY/yourprompt">소스와 벤치마크</a>',
     loading: '채점기를 불러오는 중…',
-    sub_repo: (repo, files) => `이 서버에서 채점하며, <code>${repo}</code> 를 근거로 합니다 (${files}개 파일 인덱싱됨).`,
-    sub_none: '이 서버에서 채점합니다. 인덱싱된 저장소가 없어 그라운딩 축은 채점되지 않습니다.',
+    sub_repo: (repo, files) => `<code>${repo}</code> · ${files}개 파일 인덱싱 · 서버 밖으로 나가지 않음 · 결정론적`,
+    sub_none: '인덱싱된 저장소가 없어 그라운딩은 채점되지 않습니다 · 서버 밖으로 나가지 않음',
     sub_plain: '이 서버에서 채점합니다.',
     not_scored: '채점 안 함',
     no_index: '저장소 인덱스가 없어 나머지 축을 1000점으로 재조정했습니다.',
-    rescaled: '비접지 — 재조정됨',
+    rescaled: '비접지, 재조정됨',
     unreadable: '채점기가 입력을 읽지 못했습니다',
     server_err: s => '서버 응답 ' + s,
-    too_big: (n, kb) => `${n} 은(는) ${kb} KB — 최대 256 KB 입니다`,
+    too_big: (n, kb) => `${n} 은(는) ${kb} KB 로 최대 256 KB 를 넘습니다`,
     read_failed: n => `${n} 을(를) 읽지 못했습니다`,
     not_text: n => `${n} 은(는) 텍스트 파일이 아닌 것 같습니다`,
     attached: n => `${n} 첨부됨`,
@@ -352,7 +355,7 @@ function render(s) {
 function clearScore() {
   lastScore = null;
   $('download').disabled = true;
-  $('total').textContent = '—'; $('grade').textContent = '';
+  $('total').textContent = '--'; $('grade').textContent = '';
   $('fill').style.width = '0'; $('flag').textContent = '';
   $('axes').innerHTML = '';
 }
@@ -454,12 +457,12 @@ $('clear').addEventListener('click', () => {
 
 function axisSection(axis, id) {
   if (!axis) {
-    return `### ${axisName('grounding')} — ${T().not_scored}\n\n${T().rpt.no_index}\n`;
+    return `### ${axisName('grounding')}: ${T().not_scored}\n\n${T().rpt.no_index}\n`;
   }
   const rows = axis.components.map(c =>
     `| ${compName(c.id)} | ${c.earned.toFixed(1)} | ${c.max.toFixed(0)} | ${c.detail.replace(/\|/g, '\\|')} |`
   ).join('\n');
-  return `### ${axisName(id)} — ${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}\n\n` +
+  return `### ${axisName(id)}: ${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}\n\n` +
     `${T().rpt.head}\n|---|---:|---:|---|\n${rows}\n`;
 }
 
@@ -471,7 +474,7 @@ function buildReport(s, prompt) {
     : T().rpt.none;
   return [
     `# yourprompt`, ``,
-    `**${s.total.toFixed(1)} / 1000 — ${s.grade}**`, ``,
+    `**${s.total.toFixed(1)} / 1000 (${s.grade})**`, ``,
     `| | |`, `|---|---|`,
     `| ${T().rpt.generated} | ${new Date().toISOString()} |`,
     `| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`,
