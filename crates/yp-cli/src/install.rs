@@ -85,6 +85,12 @@ fn hook_command(exe: &str) -> String {
     format!("{} hook", quote_exe(exe))
 }
 
+fn index_command(exe: &str) -> String {
+    // --max-age makes an unconditional session-start hook cheap: a session
+    // opened minutes after the last one reuses the existing index.
+    format!("{} index --quiet --max-age 900", quote_exe(exe))
+}
+
 fn statusline_command(exe: &str, wrapping: Option<&str>) -> String {
     match wrapping {
         Some(existing) => format!("{} statusline --wrap {}", quote_exe(exe), quote(existing)),
@@ -129,7 +135,36 @@ pub fn apply(settings: &mut Value, exe: &str) -> Notes {
         }
     }
 
-    // ---- hook ---------------------------------------------------------
+    // ---- hooks --------------------------------------------------------
+    // Scoring on every prompt, and building the repository index once per
+    // session. The index build is deliberately *not* on the prompt path:
+    // indexing takes seconds and nothing may delay a prompt.
+    add_hook(
+        settings,
+        &mut notes,
+        "UserPromptSubmit",
+        "hook",
+        hook_command(exe),
+    );
+    add_hook(
+        settings,
+        &mut notes,
+        "SessionStart",
+        "index",
+        index_command(exe),
+    );
+
+    notes
+}
+
+/// Add one hook entry for `event`, unless one of ours is already there.
+fn add_hook(
+    settings: &mut Value,
+    notes: &mut Notes,
+    event: &str,
+    subcommand: &str,
+    command: String,
+) {
     let hooks = settings
         .as_object_mut()
         .expect("settings is an object")
@@ -141,36 +176,34 @@ pub fn apply(settings: &mut Value, exe: &str) -> Notes {
     let events = hooks
         .as_object_mut()
         .expect("hooks is an object")
-        .entry("UserPromptSubmit")
+        .entry(event)
         .or_insert_with(|| json!([]));
     if !events.is_array() {
         *events = json!([]);
     }
     let list = events.as_array_mut().expect("event list is an array");
 
-    let already = list.iter().any(|group| {
-        group
-            .get("hooks")
-            .and_then(Value::as_array)
-            .is_some_and(|inner| {
-                inner.iter().any(|h| {
-                    h.get("command")
-                        .and_then(Value::as_str)
-                        .is_some_and(|c| is_ours(c, "hook"))
-                })
-            })
-    });
-
-    if already {
-        notes.push("UserPromptSubmit hook already registered; left as is".into());
-    } else {
-        list.push(json!({
-            "hooks": [ { "type": "command", "command": hook_command(exe) } ]
-        }));
-        notes.push("registered the UserPromptSubmit hook".into());
+    if list.iter().any(|group| group_is_ours(group, subcommand)) {
+        notes.push(format!("{event} hook already registered; left as is"));
+        return;
     }
+    list.push(json!({
+        "hooks": [ { "type": "command", "command": command } ]
+    }));
+    notes.push(format!("registered the {event} hook"));
+}
 
-    notes
+fn group_is_ours(group: &Value, subcommand: &str) -> bool {
+    group
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|inner| {
+            inner.iter().any(|h| {
+                h.get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| is_ours(c, subcommand))
+            })
+        })
 }
 
 /// Remove everything [`apply`] added, restoring a wrapped status line.
@@ -204,27 +237,18 @@ pub fn remove(settings: &mut Value) -> Notes {
         }
     }
 
-    // ---- hook ---------------------------------------------------------
-    if let Some(list) = settings
-        .get_mut("hooks")
-        .and_then(|h| h.get_mut("UserPromptSubmit"))
-        .and_then(Value::as_array_mut)
-    {
-        let before = list.len();
-        list.retain(|group| {
-            !group
-                .get("hooks")
-                .and_then(Value::as_array)
-                .is_some_and(|inner| {
-                    inner.iter().any(|h| {
-                        h.get("command")
-                            .and_then(Value::as_str)
-                            .is_some_and(|c| is_ours(c, "hook"))
-                    })
-                })
-        });
-        if list.len() != before {
-            notes.push("removed the UserPromptSubmit hook".into());
+    // ---- hooks --------------------------------------------------------
+    for (event, subcommand) in [("UserPromptSubmit", "hook"), ("SessionStart", "index")] {
+        if let Some(list) = settings
+            .get_mut("hooks")
+            .and_then(|h| h.get_mut(event))
+            .and_then(Value::as_array_mut)
+        {
+            let before = list.len();
+            list.retain(|group| !group_is_ours(group, subcommand));
+            if list.len() != before {
+                notes.push(format!("removed the {event} hook"));
+            }
         }
     }
 
@@ -497,6 +521,29 @@ mod tests {
     fn an_unrelated_command_mentioning_statusline_is_not_ours() {
         assert!(!is_ours("~/bin/my-statusline.sh", "statusline"));
         assert!(!is_ours("python statusline.py", "statusline"));
+    }
+
+    #[test]
+    fn registers_the_session_start_index_build_too() {
+        let mut v = fresh();
+        apply(&mut v, EXE);
+        let command = v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(command.contains("index"), "got {command}");
+        // --max-age keeps an unconditional session-start hook cheap.
+        assert!(command.contains("--max-age"), "got {command}");
+    }
+
+    #[test]
+    fn uninstall_removes_both_hooks() {
+        let mut v = fresh();
+        apply(&mut v, EXE);
+        remove(&mut v);
+        for event in ["UserPromptSubmit", "SessionStart"] {
+            let list = v["hooks"][event].as_array().unwrap();
+            assert!(list.is_empty(), "{event} still has {list:?}");
+        }
     }
 
     #[test]

@@ -84,7 +84,22 @@ pub fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let Some(score) = yp_core::score(&input.prompt) else {
+    // Load the index if one exists; never build it. Indexing a large
+    // repository takes seconds, and nothing here may delay a prompt.
+    let cwd = if input.cwd.is_empty() {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    } else {
+        std::path::PathBuf::from(&input.cwd)
+    };
+    let corpus = crate::repo::load_for(&cwd);
+    if corpus.is_none() {
+        debug("no repository index; scoring without the grounding axis");
+    }
+
+    let Some(score) = yp_core::score_with(
+        &input.prompt,
+        corpus.as_ref().map(|c| c as &dyn yp_core::Corpus),
+    ) else {
         debug("language resources unavailable");
         return ExitCode::SUCCESS;
     };

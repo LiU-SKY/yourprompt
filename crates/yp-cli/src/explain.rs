@@ -46,7 +46,19 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let Some(score) = yp_core::score(&sidecar.latest_prompt) else {
+    // Ground against the repository the prompt was written in, not whichever
+    // directory the slash command happened to run from.
+    let root = if sidecar.cwd.is_empty() {
+        std::path::PathBuf::from(&cwd)
+    } else {
+        std::path::PathBuf::from(&sidecar.cwd)
+    };
+    let corpus = crate::repo::load_for(&root);
+
+    let Some(score) = yp_core::score_with(
+        &sidecar.latest_prompt,
+        corpus.as_ref().map(|c| c as &dyn yp_core::Corpus),
+    ) else {
         eprintln!("yp: bundled language resources failed to load");
         return ExitCode::FAILURE;
     };

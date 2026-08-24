@@ -18,7 +18,7 @@ pub struct Component {
 }
 
 impl Component {
-    fn new(id: &'static str, earned: f64, max: f64, detail: impl Into<String>) -> Self {
+    pub(crate) fn new(id: &'static str, earned: f64, max: f64, detail: impl Into<String>) -> Self {
         Self {
             id,
             earned,
@@ -38,7 +38,7 @@ pub struct Axis {
 }
 
 impl Axis {
-    fn from_components(id: &'static str, max: f64, components: Vec<Component>) -> Self {
+    pub(crate) fn from_components(id: &'static str, max: f64, components: Vec<Component>) -> Self {
         let earned = components.iter().map(|c| c.earned).sum();
         Self {
             id,
@@ -173,11 +173,23 @@ pub fn actionability(cues: &BTreeMap<CueId, Vec<String>>) -> Axis {
 /// Density, not count: three vague words in a four-word prompt is a different
 /// problem from three in a two-hundred-word one. Each category is capped
 /// first, so no single kind of vagueness can sink the axis on its own.
-pub fn clarity(totals: &BTreeMap<SmellId, usize>, lexicon: &Lexicon, stats: &PromptStats) -> Axis {
+pub fn clarity(
+    totals: &BTreeMap<SmellId, usize>,
+    lexicon: &Lexicon,
+    stats: &PromptStats,
+    waived: &[SmellId],
+) -> Axis {
     let mut weighted = 0.0;
     let mut worst: Vec<(SmellId, usize, f64)> = Vec::new();
 
     for (&id, &count) in totals {
+        // A category the grounding axis judged more precisely is not charged
+        // for twice. Vague pronouns are the case that matters: axis A asks
+        // whether an "it" actually has an antecedent, which is a better
+        // question than whether the word appears at all.
+        if waived.contains(&id) {
+            continue;
+        }
         let Some(category) = lexicon.category(id) else {
             continue;
         };
@@ -326,7 +338,7 @@ mod tests {
         let smells = total_by_category(&r.smells.find(text));
         (
             actionability(&cues),
-            clarity(&smells, &r.lexicon, &stats),
+            clarity(&smells, &r.lexicon, &stats, &[]),
             context(&cues, &stats),
         )
     }

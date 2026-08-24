@@ -49,6 +49,43 @@ pub mod actionability {
     pub const ACCEPTANCE_RATE: f64 = 0.90;
 }
 
+/// A -- grounding and referent resolution.
+pub mod grounding {
+    /// Can the things this prompt names be pinned down in this repository?
+    pub const RESOLUTION_MAX: f64 = 150.0;
+    /// How specific are its words relative to this repository's vocabulary?
+    pub const SPECIFICITY_MAX: f64 = 120.0;
+    /// Does it point at anything, or only gesture?
+    pub const DEIXIS_MAX: f64 = 80.0;
+
+    /// A word appearing in more than this fraction of files is treated as
+    /// prose rather than as a name. "the" and "return" are in nearly every
+    /// file; taking them as referents would drown the real ones.
+    pub const UBIQUITY_CUTOFF: f64 = 0.5;
+
+    /// Explicit names -- backticked code, paths, snake_case, camelCase --
+    /// count for full weight. A bare prose word that happens to exist in the
+    /// repository counts for less, because the user may not have meant it as
+    /// a name at all.
+    pub const EXPLICIT_WEIGHT: f64 = 1.0;
+    pub const PROSE_WEIGHT: f64 = 0.5;
+
+    /// Simplified Clarity Score at which specificity is worth half its
+    /// points. SCS is a Kullback-Leibler divergence between the prompt's
+    /// term distribution and the repository's, following the pre-retrieval
+    /// query-performance-prediction literature (Hauff et al., CIKM 2008).
+    pub const SCS_HALF_LIFE: f64 = 4.0;
+
+    /// Weight given to an unseen term when estimating its collection
+    /// probability, so a term absent from the repository does not make the
+    /// divergence infinite.
+    pub const UNSEEN_TERM_WEIGHT: f64 = 0.5;
+
+    /// Decay per dangling deictic -- an "it" or "그거" with nothing to
+    /// attach to.
+    pub const DEIXIS_DECAY: f64 = 0.6;
+}
+
 /// C -- freedom from ambiguity smells.
 pub mod clarity {
     /// Smell density is measured per content token, but the denominator never
@@ -136,6 +173,12 @@ mod tests {
     fn axis_maxima_sum_to_one_thousand() {
         assert_eq!(axis_max::TOTAL, 1000.0);
         assert_eq!(axis_max::WITHOUT_GROUNDING, 650.0);
+    }
+
+    #[test]
+    fn grounding_components_fill_their_axis() {
+        let sum = grounding::RESOLUTION_MAX + grounding::SPECIFICITY_MAX + grounding::DEIXIS_MAX;
+        assert_eq!(sum, axis_max::GROUNDING);
     }
 
     #[test]

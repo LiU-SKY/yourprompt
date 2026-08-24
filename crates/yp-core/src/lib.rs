@@ -13,18 +13,23 @@
 //! | C clarity | 250 | How densely is it packed with ambiguity smells? |
 //! | D context | 150 | Does it bound its own scope, show what it means, and come in a workable shape? |
 //!
-//! Axis A needs a repository index. Until one is available the axis is
+//! Axis A needs a repository index. When none is available the axis is
 //! dropped and B, C and D are renormalised to fill the full 1000, so the
-//! number stays comparable rather than silently capping at 650.
+//! number stays comparable rather than silently capping at 650 -- but the
+//! score is flagged as renormalised, because a grounded score and an
+//! ungrounded one are not the same measurement.
 
 pub mod axes;
+pub mod corpus;
 pub mod grade;
+pub mod grounding;
 pub mod params;
 pub mod stats;
 
 use serde::Serialize;
 
 pub use axes::{Axis, Component};
+pub use corpus::{Corpus, MapCorpus, TermFacts};
 pub use stats::PromptStats;
 
 /// A scored prompt.
@@ -60,6 +65,16 @@ impl Score {
 /// panicked on: this runs on every prompt the user types, and a crash here
 /// would be a crash in their editor.
 pub fn score(text: &str) -> Option<Score> {
+    score_with(text, None)
+}
+
+/// Score a prompt against a repository.
+///
+/// With a corpus, axis A is scored and the total spans all four axes. Without
+/// one, axis A is dropped and B, C and D are renormalised to fill the full
+/// 1000, so a score is never silently capped at 650 -- but `renormalized` is
+/// set so the two are never confused.
+pub fn score_with(text: &str, corpus: Option<&dyn Corpus>) -> Option<Score> {
     let resources = yp_lang::resources()?;
 
     // One tokenisation and one code-region scan, shared by every axis.
@@ -73,24 +88,49 @@ pub fn score(text: &str) -> Option<Score> {
     let cues = axes::distinct_by_category(&cue_hits);
     let smells = axes::total_by_category(&smell_hits);
 
+    let grounding_axis = corpus.map(|corpus| {
+        let offsets = grounding::pronoun_offsets(&smell_hits);
+        // Spans already claimed by a cue or a smell are instruction words,
+        // not names the user is pointing at.
+        let instruction_words: Vec<yp_lang::Span> = cue_hits
+            .iter()
+            .map(|h| h.span)
+            .chain(smell_hits.iter().map(|h| h.span))
+            .collect();
+        grounding::grounding(&tokens, &offsets, &instruction_words, corpus).0
+    });
+
+    // With grounding active, vague pronouns are judged there -- by whether
+    // they actually have an antecedent -- so clarity does not charge for them
+    // a second time.
+    let waived: &[yp_lang::SmellId] = if grounding_axis.is_some() {
+        &[yp_lang::SmellId::VaguePronoun]
+    } else {
+        &[]
+    };
+
     let actionability = axes::actionability(&cues);
-    let clarity = axes::clarity(&smells, &resources.lexicon, &stats);
+    let clarity = axes::clarity(&smells, &resources.lexicon, &stats, waived);
     let context = axes::context(&cues, &stats);
 
-    // Axis A lands in M3. Until then, rescale so the number still spans the
-    // full range instead of quietly topping out at 650.
-    let raw = actionability.earned + clarity.earned + context.earned;
-    let total = raw * (params::axis_max::TOTAL / params::axis_max::WITHOUT_GROUNDING);
+    let rest = actionability.earned + clarity.earned + context.earned;
+    let (total, renormalized) = match &grounding_axis {
+        Some(axis) => (axis.earned + rest, false),
+        None => (
+            rest * (params::axis_max::TOTAL / params::axis_max::WITHOUT_GROUNDING),
+            true,
+        ),
+    };
     let total = total.clamp(0.0, params::axis_max::TOTAL);
 
     Some(Score {
         total,
         grade: grade::grade(total),
-        grounding: None,
+        grounding: grounding_axis,
         actionability,
         clarity,
         context,
-        renormalized: true,
+        renormalized,
     })
 }
 

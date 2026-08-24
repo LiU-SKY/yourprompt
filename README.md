@@ -66,11 +66,38 @@ Then, in any session:
 
 `/score` explains the last prompt, axis by axis, and suggests one rewrite.
 
+## What repository grounding looks like
+
+The same three prompts, scored against this repository:
+
+```
+fix simplified_clarity_score in crates/yp-core/src/grounding.rs
+  grounding  338.1 / 350   resolution 150.0/150  all 2 name(s) resolve to exactly one thing
+
+fix the score handler
+  grounding  212.5 / 350   resolution  37.5/150  0 of 1 names resolve; "score" could be any of 8
+
+fix compute_paycheck in payroll.rs
+  grounding  264.5 / 350   resolution  75.0/150  1 of 2 names resolve; "payroll.rs" is not in this repository
+```
+
+"Fix the login handler" is not vague in the abstract. It is vague *here*,
+because `login` matches thirty-seven places and none of them is a definition.
+That is a fact about your codebase, not a matter of taste, and it is the one
+thing no other prompt scorer can tell you.
+
+The index is built by `yp index`, which the session-start hook runs for you.
+It is never built by the prompt hook: indexing takes seconds and nothing may
+delay a prompt. Without an index the grounding axis reports itself
+unavailable and the score is marked `~`.
+
 ## Status
 
-🚧 Early development. M1 and M2 are done: the score is live in the status line
-at zero context cost. The repository-grounding axis that makes the score
-*about your codebase* lands in M3. See [milestones](#milestones).
+🚧 Early development. M1 through M4 are done: the score is live in the status
+line at zero context cost, grounded in your repository, in English and
+Korean. The benchmark validation that turns the number from plausible into
+*checked* is M5, and until it lands the absolute values are provisional --
+only the ordering is meaningful. See [milestones](#milestones).
 
 ## Validation
 
@@ -80,8 +107,8 @@ _Benchmark numbers land here once `yp bench` is wired up (M5)._
 
 - [x] **M1** — core scoring engine (B/C/D axes), `yp score`
 - [x] **M2** — zero-context integration: `yp hook`, `yp statusline`, `yp install`
-- [ ] **M3** — A axis: tree-sitter repo symbol index, `resolve@1`, SCS
-- [ ] **M4** — Korean support
+- [x] **M3** — A axis: repository symbol index, `resolve@1`, SCS
+- [x] **M4** — Korean support (shipped with the lexicons from the start)
 - [ ] **M5** — `yp bench`, ablation table, marketplace listing
 
 ## Prior art & references

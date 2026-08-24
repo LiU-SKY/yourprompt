@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/yp-cli",
     "crates/yp-core",
+    "crates/yp-index",
     "crates/yp-lang",
 ]
 

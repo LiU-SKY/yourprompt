@@ -140,7 +140,7 @@ pub fn full(score: &Score, style: &Style) -> String {
         None => out.push_str(&format!(
             "  {:<16}{}\n",
             style.bold("grounding"),
-            style.dim("not scored -- no repository index (axis A lands in M3)")
+            style.dim("not scored -- no repository index here; run `yp index`")
         )),
     }
     out.push_str(&axis_block(&score.actionability, style));
