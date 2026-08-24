@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-targets
+      # --all-targets skips doctests, so run them separately.
+      - run: cargo test --workspace --doc
+
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  msrv:
+    name: minimum supported rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+
+  zero-context:
+    name: hook writes nothing to stdout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The one absolute requirement of this project: the UserPromptSubmit
+      # hook must emit zero bytes on stdout, because Claude Code injects that
+      # stdout straight into the model's context. Guarded here so it can never
+      # regress silently. Skipped until `yp hook` exists (M2).
+      - name: Check hook stdout is empty
+        run: |
+          if cargo run --quiet --bin yp -- hook --help >/dev/null 2>&1; then
+            out=$(printf '%s' '{"prompt":"fix it","session_id":"ci","cwd":"."}' \
+              | cargo run --quiet --bin yp -- hook | wc -c)
+            test "$out" -eq 0 || { echo "hook wrote $out bytes to stdout"; exit 1; }
+          else
+            echo "yp hook not implemented yet (M2); skipping"
+          fi

@@ -21,6 +21,7 @@ id = "action_verb"
 terms = [
   "add", "create", "implement", "write", "build", "generate", "scaffold",
   "fix", "repair", "debug", "patch", "resolve", "correct",
+  "change", "update", "modify", "adjust", "rewrite", "extend",
   "refactor", "rename", "move", "extract", "inline", "split", "merge",
   "delete", "remove", "drop", "replace", "swap", "revert", "roll back",
   "upgrade", "migrate", "port", "convert", "bump", "pin",
@@ -28,6 +29,9 @@ terms = [
   "test", "cover", "benchmark", "profile", "instrument", "log",
   "validate", "sanitize", "cache", "parse", "serialize", "deserialize",
   "lint", "format", "deploy", "publish", "release", "mock", "stub",
+  "enable", "disable", "throw", "emit", "print", "guard", "encode",
+  "decode", "normalize", "retry", "compile", "bundle", "sync", "restore",
+  "downgrade", "hook up", "silence", "suppress", "dedupe", "backfill",
 ]
 
 [[cue]]
@@ -50,6 +54,9 @@ terms = [
   "acceptance", "definition of done", "expected", "expect", "expects to",
   "so that", "must equal", "should equal", "no regression", "regression test",
   "green", "ci passes", "coverage", "reproduce", "repro", "steps to reproduce",
+  "must pass", "has to pass", "still pass", "still passes", "keeps passing",
+  "make sure", "ensure", "confirm", "succeeds", "fails with", "done when",
+  "criteria", "must hold", "should hold",
 ]
 
 [[cue]]

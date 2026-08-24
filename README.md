@@ -32,9 +32,24 @@ your prompt ─┬─▶ yp hook       stdout: ""  exit 0      → 0 tokens inje
              └─▶ yp statusline reads sidecar → renders  → never enters context
 ```
 
+## Try it
+
+```console
+$ yp score "fix the login handler"
+  294.3 / 1000  F  ▓▓▓░░░░░░░
+
+$ yp score "In src/auth/login.rs, change verify_token so it returns     Err(AuthError::Expired) instead of panicking when the token is expired.     Don't change the public signature of login().     tests/auth.rs::expired_token_is_rejected must pass."
+  722.4 / 1000  B+  ▓▓▓▓▓▓▓░░░
+```
+
+Every sub-score prints with the reason it came out that way -- the model is
+meant to be argued with, which it cannot be if it only prints a number.
+
 ## Status
 
-🚧 Early development. See [milestones](#milestones).
+🚧 Early development. M1 (scoring engine + CLI) is done; the status line
+integration that makes this free of context cost lands in M2. See
+[milestones](#milestones).
 
 ## Validation
 
@@ -42,7 +57,7 @@ _Benchmark numbers land here once `yp bench` is wired up (M5)._
 
 ## Milestones
 
-- [ ] **M1** — core scoring engine (B/C/D axes, English), `yp score`
+- [x] **M1** — core scoring engine (B/C/D axes), `yp score`
 - [ ] **M2** — zero-context integration: `yp hook`, `yp statusline`, `yp install`
 - [ ] **M3** — A axis: tree-sitter repo symbol index, `resolve@1`, SCS
 - [ ] **M4** — Korean support

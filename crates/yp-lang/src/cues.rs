@@ -197,6 +197,22 @@ mod tests {
     }
 
     #[test]
+    fn no_duplicate_terms_within_a_category() {
+        let cues = load_bundled().unwrap();
+        for id in CueId::ALL {
+            let mut seen = std::collections::HashSet::new();
+            for (term, cat) in cues.table.terms.iter().zip(&cues.table.categories) {
+                if *cat == id {
+                    assert!(
+                        seen.insert(term.to_lowercase()),
+                        "duplicate term {term:?} in {id}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cue_id_roundtrips_through_its_string_form() {
         for id in CueId::ALL {
             assert_eq!(id.as_str().parse::<CueId>().unwrap(), id);
