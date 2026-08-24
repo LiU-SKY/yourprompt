@@ -58,6 +58,14 @@ impl Score {
     }
 }
 
+/// Split a pasted snippet into tokens.
+///
+/// The snippet has already had its backticks stripped, so it is read as plain
+/// text: re-running code detection over it would mask the whole thing again.
+pub(crate) fn tokenize_snippet(text: &str) -> Vec<yp_lang::Token> {
+    yp_lang::tokenize(text)
+}
+
 /// Score a prompt.
 ///
 /// Returns `None` only if the bundled language resources failed to load, which

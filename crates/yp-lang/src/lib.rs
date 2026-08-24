@@ -15,7 +15,7 @@ pub use cues::{CueId, Cues};
 pub use lexicon::{Lexicon, SmellId};
 pub use matcher::{Hit, Matcher, SmellHit, TermTable};
 pub use span::Span;
-pub use token::{tokenize, Token, TokenKind};
+pub use token::{is_code_keyword, tokenize, Token, TokenKind};
 
 use once_cell::sync::OnceCell;
 

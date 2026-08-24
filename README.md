@@ -160,20 +160,46 @@ does one that merely rewards long prompts.
 yp bench --dataset swe --repos 6
 ```
 
-| Comparison | Issues | Own repository scores higher |
+| Comparison | Issues | Own repository scores higher | Mean margin |
+|---|---:|---:|---:|
+| versus the mean foreign repository | 270 | **80.4%** | +35.4 |
+| versus the *best* foreign repository | 270 | **59.3%** | +20.0 |
+
+| Repository | Issues | Own scores higher |
 |---|---:|---:|
-| versus the mean foreign repository | 270 | **47.0%** |
-| versus the *best* foreign repository | 270 | 22.6% |
+| scikit-learn | 23 | 100.0% |
+| django | 114 | 93.9% |
+| matplotlib | 23 | 87.0% |
+| sympy | 77 | 66.2% |
+| pytest | 17 | 58.8% |
+| sphinx | 16 | 37.5% |
 
-**It fails.** 47% is below chance, and the mean margin is −0.4 points: swapping
-the repository barely moves the score. Per repository the result is incoherent
-— matplotlib 87%, sphinx 6%. The gold-patch test (does an issue that names a
-file the fix actually touched score higher on resolution?) separates the two
-groups by 1.4 points out of 150, which is nothing.
+**The first run of this control failed outright: 47.0%, below chance, mean
+margin −0.4.** Swapping the repository barely moved the score. Three defects
+were behind it, and all three are the kind only a measurement finds:
 
-So the headline claim of this project is, as of this measurement, **not
-supported**. The full report is at [bench/grounding.md](bench/grounding.md).
-Diagnosis and what happened next are in the commits that follow.
+- **The specificity sub-score was inverted.** It used the Simplified Clarity
+  Score, which smooths terms the collection has never seen and so reads them as
+  maximally distinctive. Scoring against the *wrong* repository makes nearly
+  every term unseen — so the further a prompt was from a codebase, the better it
+  scored. A sympy issue scored higher specificity against matplotlib than
+  against sympy. Replaced with average IDF over the names a prompt uses, with
+  unfound names folded in as zero.
+- **Pasted code was thrown away.** A snippet became one referent, looked up
+  whole, and never resolved — discarding the most groundable content a prompt
+  can contain. Snippets are now read for the names inside them.
+- **A bare lowercase word inside backticks was treated as prose.** `ccode` and
+  `sinc` carry no underscore or camel hump, so the tokenizer filed them as
+  English. Inside a snippet they are names.
+
+sphinx still sits below chance and is not explained. The full report is at
+[bench/grounding.md](bench/grounding.md); the failing measurement is in the
+commit history, not edited out of it.
+
+The **gold-patch test** — does an issue that names a file the fix actually
+touched score higher on resolution? — separates the two groups by 1.2 points
+out of 150. That is nothing, and it did not improve. Naming the right file is
+apparently not what this axis is picking up on.
 
 ### Caveats worth stating
 
@@ -181,8 +207,7 @@ Diagnosis and what happened next are in the commits that follow.
   imperative requests a coding agent actually receives. The *ordering* is
   meaningful; the absolute scores on this dataset are not.
 - Grounding is inactive throughout, since these prompts have no repository. That
-  axis is measured separately, against real codebases — see
-  [Is the grounding axis real?](#is-the-grounding-axis-real) below.
+  axis is measured separately — see [Is the grounding axis real?](#is-the-grounding-axis-real).
 - Scoring parameters remain reasoned defaults rather than fitted ones.
 
 ## Milestones

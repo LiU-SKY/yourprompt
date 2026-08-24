@@ -8,17 +8,17 @@ Axis A claims to read your repository. This checks that claim the only way that 
 
 | Comparison | Issues | Own repository scores higher | Mean margin |
 |---|---:|---:|---:|
-| versus the mean foreign repository | 270 | **47.0%** | -0.4 |
-| versus the *best* foreign repository | 270 | **22.6%** | -8.6 |
+| versus the mean foreign repository | 270 | **80.4%** | 35.4 |
+| versus the *best* foreign repository | 270 | **59.3%** | 20.0 |
 
 | Repository | Issues | Own scores higher | Mean margin |
 |---|---:|---:|---:|
-| django/django | 114 | 33.3% | -2.5 |
-| matplotlib/matplotlib | 23 | 87.0% | 6.3 |
-| pytest-dev/pytest | 17 | 23.5% | -8.8 |
-| scikit-learn/scikit-learn | 23 | 60.9% | 3.0 |
-| sphinx-doc/sphinx | 16 | 6.2% | -12.4 |
-| sympy/sympy | 77 | 64.9% | 4.1 |
+| django/django | 114 | 93.9% | 63.9 |
+| matplotlib/matplotlib | 23 | 87.0% | 18.2 |
+| pytest-dev/pytest | 17 | 58.8% | -0.6 |
+| scikit-learn/scikit-learn | 23 | 100.0% | 36.3 |
+| sphinx-doc/sphinx | 16 | 37.5% | -5.7 |
+| sympy/sympy | 77 | 66.2% | 14.5 |
 
 ## Gold-patch test
 
@@ -26,10 +26,10 @@ The patch names the files that actually had to change. An issue naming one of th
 
 | Issue names a file the fix touched | Issues | Mean resolution |
 |---|---:|---:|
-| yes | 60 | **41.1** |
-| no | 210 | 39.7 |
+| yes | 60 | **39.9** |
+| no | 210 | 38.7 |
 
-Separation: **+1.4** points.
+Separation: **+1.2** points.
 
 ## Caveats
 

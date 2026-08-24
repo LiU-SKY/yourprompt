@@ -32,9 +32,31 @@ pub struct Referent {
     pub offset: usize,
     /// Explicit names weigh more than prose words that happen to exist.
     pub weight: f64,
-    /// How many things in the repository it could denote. `None` when the
-    /// repository has never heard of it.
-    pub candidates: Option<u32>,
+    /// True for backticked code, paths and identifiers -- things the user
+    /// clearly meant as names. False for a prose word that turned out to
+    /// exist in the repository.
+    pub explicit: bool,
+    /// What the repository knows about it. `None` when it has never heard of
+    /// it at all.
+    pub facts: Option<crate::corpus::TermFacts>,
+}
+
+impl Referent {
+    /// How many things in the repository this could denote.
+    pub fn candidates(&self) -> Option<u32> {
+        self.facts.map(|f| f.candidates())
+    }
+
+    /// Inverse document frequency: how much seeing this name narrows things
+    /// down *in this repository*. A name in one file out of five thousand is
+    /// worth a great deal; one in half of them is worth almost nothing.
+    pub fn idf(&self, documents: usize) -> Option<f64> {
+        let facts = self.facts?;
+        if facts.df == 0 {
+            return None;
+        }
+        Some((documents.max(1) as f64 / facts.df as f64).log2().max(0.0))
+    }
 }
 
 impl Referent {
@@ -46,7 +68,7 @@ impl Referent {
     /// one candidate and two matters enormously, between thirty and forty
     /// hardly at all -- both are already hopeless.
     pub fn resolution(&self) -> f64 {
-        match self.candidates {
+        match self.candidates() {
             None | Some(0) => 0.0,
             Some(1) => 1.0,
             Some(n) => 1.0 / (1.0 + (n as f64).log2()),
@@ -64,81 +86,139 @@ pub fn referents(
     instruction_words: &[Span],
     corpus: &dyn Corpus,
 ) -> Vec<Referent> {
-    let documents = corpus.documents().max(1) as f64;
     let mut out = Vec::new();
-
     for token in tokens {
-        let explicit = token.is_referent_candidate();
-        if !explicit && token.kind != TokenKind::Word {
-            continue;
-        }
-
-        if !explicit && instruction_words.iter().any(|s| s.overlaps(&token.span)) {
-            // A word already doing duty as an instruction -- "fix", "return",
-            // "only" -- is not the user naming something. Repositories are
-            // full of the word "fix"; counting it as a referent would let the
-            // verb of the sentence drag down the score for the nouns.
-            continue;
-        }
-
-        let facts = corpus.lookup(&token.text);
-
-        if !explicit {
-            // Prose. Only interesting if the repository knows the word and
-            // does not use it everywhere.
-            let Some(facts) = facts else { continue };
-            if facts.df as f64 / documents > g::UBIQUITY_CUTOFF {
-                continue;
+        match token.kind {
+            // A pasted snippet is the most groundable thing a prompt can
+            // contain -- it is made almost entirely of names from the
+            // codebase. Treating the whole block as one referent, as this
+            // used to, meant looking up an entire multi-line snippet as if it
+            // were an identifier, never resolving it, and throwing away the
+            // best evidence in the prompt. So the block is re-read and its
+            // own names are collected instead.
+            //
+            // Code is still excluded from the *smell* matcher, which is a
+            // different question: code is not vague prose.
+            TokenKind::CodeSpan => {
+                for inner in crate::tokenize_snippet(&token.text) {
+                    // Inside a snippet a bare lowercase word *is* a name --
+                    // `ccode`, `sinc` -- even though the tokenizer calls it a
+                    // Word because it carries no underscore or camel hump.
+                    // Language syntax is the exception: `import` and `return`
+                    // name nothing anyone could be pointing at.
+                    if yp_lang::is_code_keyword(&inner.text) {
+                        continue;
+                    }
+                    push_referent(&mut out, &inner, token.span.start, &[], corpus, true);
+                }
             }
+            _ => push_referent(
+                &mut out,
+                token,
+                token.span.start,
+                instruction_words,
+                corpus,
+                false,
+            ),
         }
-
-        out.push(Referent {
-            text: token.text.clone(),
-            offset: token.span.start,
-            weight: if explicit {
-                g::EXPLICIT_WEIGHT
-            } else {
-                g::PROSE_WEIGHT
-            },
-            candidates: facts.map(|f| f.candidates()),
-        });
     }
     out
 }
 
-/// Simplified Clarity Score: the divergence between the prompt's term
-/// distribution and the repository's.
-///
-/// `SCS = sum over query terms of P(w|q) * log2( P(w|q) / P(w|C) )`
-///
-/// A prompt made of words that are common in this repository diverges little
-/// and scores low; one that names something rare diverges sharply and scores
-/// high. Unseen terms are smoothed rather than treated as impossible, so a
-/// typo cannot send the score to infinity.
-pub fn simplified_clarity_score(terms: &[String], corpus: &dyn Corpus) -> f64 {
-    if terms.is_empty() {
-        return 0.0;
-    }
-    let total = corpus.total_terms().max(1) as f64;
-    let query_len = terms.len() as f64;
-
-    let mut counts: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
-    for term in terms {
-        *counts.entry(term.as_str()).or_default() += 1.0;
+/// Consider one token as a possible referent and record it if it qualifies.
+fn push_referent(
+    out: &mut Vec<Referent>,
+    token: &Token,
+    offset: usize,
+    instruction_words: &[Span],
+    corpus: &dyn Corpus,
+    in_code: bool,
+) {
+    let documents = corpus.documents().max(1) as f64;
+    let explicit = token.is_referent_candidate() || (in_code && token.kind == TokenKind::Word);
+    if !explicit && token.kind != TokenKind::Word {
+        return;
     }
 
-    let mut scs = 0.0;
-    for (term, count) in counts {
-        let p_query = count / query_len;
-        let cf = corpus
-            .lookup(term)
-            .map(|f| f.cf as f64)
-            .filter(|cf| *cf > 0.0)
-            .unwrap_or(g::UNSEEN_TERM_WEIGHT);
-        let p_collection = cf / total;
-        scs += p_query * (p_query / p_collection).log2();
+    if !explicit && instruction_words.iter().any(|s| s.overlaps(&token.span)) {
+        // A word already doing duty as an instruction -- "fix", "return",
+        // "only" -- is not the user naming something. Repositories are full of
+        // the word "fix"; counting it as a referent would let the verb of the
+        // sentence drag down the score for the nouns.
+        return;
     }
-    scs.max(0.0)
+
+    let facts = corpus.lookup(&token.text);
+
+    if !explicit {
+        // Prose. Only interesting if the repository knows the word and does
+        // not use it everywhere.
+        let Some(facts) = facts else { return };
+        if facts.df as f64 / documents > g::UBIQUITY_CUTOFF {
+            return;
+        }
+    }
+
+    out.push(Referent {
+        text: token.text.clone(),
+        offset,
+        weight: if explicit {
+            g::EXPLICIT_WEIGHT
+        } else {
+            g::PROSE_WEIGHT
+        },
+        explicit,
+        facts,
+    });
+}
+
+/// How much the names in this prompt narrow things down *in this repository*.
+///
+/// Returns `(mean information per name, share of names the repository knows)`.
+/// Only the first is scored; the second is carried for the report.
+///
+/// Each name contributes its inverse document frequency -- a name confined to
+/// one file in five thousand is worth about twelve bits, one spread across
+/// half of them close to nothing -- and a name the repository has never heard
+/// of contributes zero. Averaged over every name the prompt uses, that is the
+/// expected information gained per name mentioned.
+///
+/// # Why not the Simplified Clarity Score
+///
+/// SCS was the obvious pick from the pre-retrieval predictor survey and it was
+/// the wrong one, in two ways that only showed up under measurement.
+///
+/// It inverts across collections. Smoothing a term the collection has never
+/// seen gives it a large divergence, so scoring a prompt against the *wrong*
+/// repository -- where nearly every term is unseen -- reads as maximum
+/// specificity. On SWE-bench a sympy issue scored higher specificity against
+/// matplotlib than against sympy.
+///
+/// And it still points the wrong way once restricted to shared terms, because
+/// a prompt about sympy uses the words sympy uses constantly, which is *low*
+/// divergence. SCS measures how unusual a query is for a collection. The
+/// question here is the opposite one: does this prompt name things that belong
+/// here.
+///
+/// Average IDF, from the same survey, asks that directly -- provided unfound
+/// names are folded in as zero rather than dropped. Averaging over found names
+/// alone reintroduces the same bias from the other side, since a name is
+/// commonest exactly where it lives.
+pub fn specificity(found: &[Referent], documents: usize) -> (f64, f64) {
+    // Explicit names only. A prose word is admitted as a referent *because*
+    // the repository contains it, so including prose would make this
+    // tautologically high and destroy the discrimination it exists to provide.
+    let named: Vec<&Referent> = found.iter().filter(|r| r.explicit).collect();
+    if named.is_empty() {
+        return (0.0, 0.0);
+    }
+    let idfs: Vec<f64> = named
+        .iter()
+        .map(|r| r.idf(documents).unwrap_or(0.0))
+        .collect();
+    let mean_idf = idfs.iter().sum::<f64>() / named.len() as f64;
+    let known = idfs.iter().filter(|idf| **idf > 0.0).count();
+    (mean_idf, known as f64 / named.len() as f64)
 }
 
 /// Deictics with nothing to point at.
@@ -150,7 +230,7 @@ pub fn simplified_clarity_score(terms: &[String], corpus: &dyn Corpus) -> f64 {
 fn dangling_deixis(pronouns: &[usize], referents: &[Referent]) -> usize {
     let first_referent = referents
         .iter()
-        .filter(|r| r.candidates.is_some_and(|c| c > 0))
+        .filter(|r| r.candidates().is_some_and(|c| c > 0))
         .map(|r| r.offset)
         .min();
 
@@ -195,7 +275,7 @@ pub fn grounding(
         // one thing. Anything looser would flatter the score.
         let clean = found.iter().filter(|r| r.resolution() >= 1.0).count();
         let detail = match worst {
-            Some(r) => match r.candidates {
+            Some(r) => match r.candidates() {
                 None | Some(0) => format!(
                     "{clean} of {} names resolve; \"{}\" is not in this repository",
                     found.len(),
@@ -218,18 +298,14 @@ pub fn grounding(
     };
 
     // ---- specificity ---------------------------------------------------
-    let terms: Vec<String> = tokens
-        .iter()
-        .filter(|t| matches!(t.kind, TokenKind::Word | TokenKind::Ident | TokenKind::Path))
-        .map(|t| t.text.to_lowercase())
-        .collect();
-    let scs = simplified_clarity_score(&terms, corpus);
-    let specificity = Component::new(
+    let (mean_idf, coverage) = specificity(&found, corpus.documents());
+    let specificity_component = Component::new(
         "specificity",
-        g::SPECIFICITY_MAX * (1.0 - (-scs / g::SCS_HALF_LIFE).exp()),
+        g::SPECIFICITY_MAX * (1.0 - (-mean_idf / g::IDF_HALF_LIFE).exp()),
         g::SPECIFICITY_MAX,
         format!(
-            "clarity score {scs:.2} against {} files",
+            "{mean_idf:.1} bits per name, {:.0}% of the names it uses exist in these {} files",
+            coverage * 100.0,
             corpus.documents()
         ),
     );
@@ -250,7 +326,7 @@ pub fn grounding(
     let axis = Axis::from_components(
         "grounding",
         axis_max::GROUNDING,
-        vec![resolution, specificity, deixis],
+        vec![resolution, specificity_component, deixis],
     );
     (axis, found)
 }
@@ -380,10 +456,121 @@ mod tests {
             text: "verify_token".into(),
             offset: 4,
             weight: 1.0,
-            candidates: Some(1),
+            explicit: true,
+            facts: Some(crate::corpus::TermFacts {
+                df: 1,
+                cf: 3,
+                def: 1,
+            }),
         }];
         assert_eq!(dangling_deixis(&[20], &found), 0);
         assert_eq!(dangling_deixis(&[1], &found), 1);
+    }
+
+    #[test]
+    fn specificity_is_higher_against_the_repository_the_prompt_belongs_to() {
+        // The regression that left the whole axis at chance on SWE-bench.
+        // Under the old SCS formulation a foreign repository -- where nearly
+        // every term is unseen -- scored *maximum* divergence, so being
+        // further from a codebase read as being more specific.
+        let home = MapCorpus::new(50, &[("verify_token", 3, 12, 1), ("claims", 4, 20, 1)]);
+        let foreign = MapCorpus::new(50, &[("pyplot", 9, 90, 1), ("colormap", 7, 40, 1)]);
+
+        let axis_of = |corpus: &dyn Corpus| {
+            let tokens = tokenize("fix verify_token so it returns claims");
+            grounding(&tokens, &[], &[], corpus)
+                .0
+                .components
+                .iter()
+                .find(|c| c.id == "specificity")
+                .unwrap()
+                .earned
+        };
+        assert!(
+            axis_of(&home) > axis_of(&foreign),
+            "specificity: home {} vs foreign {}",
+            axis_of(&home),
+            axis_of(&foreign)
+        );
+    }
+
+    #[test]
+    fn a_rare_name_is_more_specific_than_a_ubiquitous_one() {
+        let corpus = MapCorpus::new(
+            1000,
+            &[("rare_helper", 1, 2, 1), ("common_util", 400, 900, 1)],
+        );
+        let mean = |text: &str| {
+            let found = referents(&tokenize(text), &[], &corpus);
+            specificity(&found, corpus.documents()).0
+        };
+        assert!(
+            mean("fix rare_helper") > mean("fix common_util"),
+            "rare {} vs common {}",
+            mean("fix rare_helper"),
+            mean("fix common_util")
+        );
+    }
+
+    #[test]
+    fn a_name_nothing_knows_contributes_nothing() {
+        let corpus = repo();
+        let found = referents(&tokenize("fix zzzz_nothing_here"), &[], &corpus);
+        let (mean_idf, coverage) = specificity(&found, corpus.documents());
+        assert_eq!(mean_idf, 0.0);
+        assert_eq!(coverage, 0.0);
+    }
+
+    #[test]
+    fn specificity_of_a_prompt_that_names_nothing_is_zero() {
+        let corpus = repo();
+        assert_eq!(specificity(&[], corpus.documents()), (0.0, 0.0));
+    }
+
+    #[test]
+    fn names_inside_a_pasted_snippet_are_resolved() {
+        // The other regression: a code block was looked up whole, never
+        // resolved, and counted as one failed referent -- discarding the most
+        // groundable content in the prompt.
+        let corpus = repo();
+        let found = referents(
+            &tokenize(
+                "this breaks:
+`verify_token(claims)`",
+            ),
+            &[],
+            &corpus,
+        );
+        assert!(
+            found.iter().any(|r| r.text == "verify_token"),
+            "got {:?}",
+            found.iter().map(|r| &r.text).collect::<Vec<_>>()
+        );
+        assert!(
+            !found.iter().any(|r| r.text.contains('(')),
+            "the whole snippet must not be a referent: {:?}",
+            found.iter().map(|r| &r.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_snippet_full_of_real_names_beats_one_full_of_invented_ones() {
+        let corpus = repo();
+        let resolution_of = |text: &str| {
+            grounding(&tokenize(text), &[], &[], &corpus)
+                .0
+                .components
+                .iter()
+                .find(|c| c.id == "resolution")
+                .unwrap()
+                .earned
+        };
+        assert!(
+            resolution_of("`verify_token(x)`") > resolution_of("`compute_paycheck(y)`"),
+            "real {} vs invented {}",
+            resolution_of("`verify_token(x)`"),
+            resolution_of("`compute_paycheck(y)`")
+        );
     }
 
     #[test]
@@ -411,7 +598,14 @@ mod tests {
                 text: "x".into(),
                 offset: 0,
                 weight: 1.0,
-                candidates: Some(n),
+                explicit: true,
+                // No definition sites, so `candidates` falls back to document
+                // frequency -- the ambiguous case this curve exists for.
+                facts: Some(crate::corpus::TermFacts {
+                    df: n,
+                    cf: n,
+                    def: 0,
+                }),
             }
             .resolution()
         };

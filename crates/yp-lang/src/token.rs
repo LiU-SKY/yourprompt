@@ -44,6 +44,122 @@ impl Token {
     }
 }
 
+/// Words that are programming-language syntax rather than names.
+///
+/// Inside a pasted snippet every bare word is a name in principle, but
+/// `import` and `return` name nothing a user could be pointing at. They exist
+/// in every repository equally, so they only dilute the measurement.
+const CODE_KEYWORDS: &[&str] = &[
+    "if",
+    "else",
+    "elif",
+    "for",
+    "while",
+    "do",
+    "switch",
+    "case",
+    "default",
+    "break",
+    "continue",
+    "return",
+    "yield",
+    "await",
+    "async",
+    "try",
+    "catch",
+    "except",
+    "finally",
+    "raise",
+    "throw",
+    "throws",
+    "import",
+    "from",
+    "export",
+    "require",
+    "include",
+    "use",
+    "using",
+    "package",
+    "namespace",
+    "def",
+    "class",
+    "fn",
+    "func",
+    "function",
+    "let",
+    "var",
+    "const",
+    "static",
+    "final",
+    "public",
+    "private",
+    "protected",
+    "abstract",
+    "virtual",
+    "override",
+    "extends",
+    "implements",
+    "interface",
+    "struct",
+    "enum",
+    "trait",
+    "impl",
+    "type",
+    "typedef",
+    "mod",
+    "pub",
+    "crate",
+    "super",
+    "self",
+    "this",
+    "new",
+    "delete",
+    "null",
+    "nil",
+    "none",
+    "true",
+    "false",
+    "and",
+    "or",
+    "not",
+    "in",
+    "is",
+    "as",
+    "with",
+    "pass",
+    "lambda",
+    "match",
+    "where",
+    "when",
+    "then",
+    "end",
+    "begin",
+    "void",
+    "int",
+    "str",
+    "bool",
+    "float",
+    "double",
+    "char",
+    "long",
+    "short",
+    "unsigned",
+    "print",
+    "println",
+    "echo",
+    "assert",
+    "del",
+    "global",
+    "nonlocal",
+    "raise",
+];
+
+/// True for a word that is language syntax rather than something named.
+pub fn is_code_keyword(word: &str) -> bool {
+    let lower = word.to_ascii_lowercase();
+    CODE_KEYWORDS.contains(&lower.as_str())
+}
+
 pub fn is_hangul(c: char) -> bool {
     matches!(c as u32,
         0xAC00..=0xD7A3   // syllables
@@ -294,6 +410,15 @@ mod tests {
         assert!(got.contains(&(TokenKind::Ident, "verify_token".into())));
         assert!(got.contains(&(TokenKind::Hangul, "이".into())));
         assert!(got.contains(&(TokenKind::Word, "panic".into())));
+    }
+
+    #[test]
+    fn language_syntax_is_recognised_as_such() {
+        assert!(is_code_keyword("import"));
+        assert!(is_code_keyword("RETURN"));
+        assert!(is_code_keyword("def"));
+        assert!(!is_code_keyword("ccode"));
+        assert!(!is_code_keyword("separability_matrix"));
     }
 
     #[test]

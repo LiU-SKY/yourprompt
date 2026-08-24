@@ -70,16 +70,14 @@ pub mod grounding {
     pub const EXPLICIT_WEIGHT: f64 = 1.0;
     pub const PROSE_WEIGHT: f64 = 0.5;
 
-    /// Simplified Clarity Score at which specificity is worth half its
-    /// points. SCS is a Kullback-Leibler divergence between the prompt's
-    /// term distribution and the repository's, following the pre-retrieval
-    /// query-performance-prediction literature (Hauff et al., CIKM 2008).
-    pub const SCS_HALF_LIFE: f64 = 4.0;
-
-    /// Weight given to an unseen term when estimating its collection
-    /// probability, so a term absent from the repository does not make the
-    /// divergence infinite.
-    pub const UNSEEN_TERM_WEIGHT: f64 = 0.5;
+    /// Mean information per name at which specificity is worth half its
+    /// points. Average IDF is one of the pre-retrieval predictors surveyed by
+    /// Hauff et al. (CIKM 2008).
+    /// Names the repository does not contain count as zero bits, so the mean
+    /// sits well below the IDF of any single rare name. Three bits per name
+    /// -- each name narrowing the repository to roughly an eighth of its
+    /// files -- is where this is worth half its points.
+    pub const IDF_HALF_LIFE: f64 = 3.0;
 
     /// Decay per dangling deictic -- an "it" or "그거" with nothing to
     /// attach to.
