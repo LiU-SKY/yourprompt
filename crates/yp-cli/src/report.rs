@@ -31,6 +31,18 @@ impl Style {
         Style { enabled: false }
     }
 
+    /// Colour on regardless of whether stdout is a terminal.
+    ///
+    /// The status line command's stdout is captured by Claude Code rather
+    /// than attached to a tty, so detection would always answer "no colour"
+    /// even though Claude Code renders ANSI perfectly well. `NO_COLOR` is
+    /// still honoured.
+    pub fn forced() -> Self {
+        Style {
+            enabled: std::env::var_os("NO_COLOR").is_none(),
+        }
+    }
+
     fn paint(&self, code: &str, text: &str) -> String {
         if self.enabled {
             format!("\x1b[{code}m{text}\x1b[0m")
