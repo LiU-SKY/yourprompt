@@ -105,9 +105,10 @@
     <h1>yourprompt</h1>
     <p class="sub" id="sub">Loading the scorer…</p>
     <p class="lede">
-      Scores how well an AI coding agent can understand your prompt, out of 1000,
-      with the reason for every point. Deterministic, and it runs entirely in
-      this page — nothing you type or attach is uploaded anywhere.
+      Scores how well an AI coding agent can understand your prompt, out of
+      1000, with the reason for every point. Add your own source files and it
+      scores against <em>your</em> codebase. Deterministic, and it all runs in
+      this page — nothing you type or add is uploaded anywhere.
     </p>
   </header>
 
@@ -118,11 +119,11 @@
 
 e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don't change the public signature of login(). tests/auth.rs must still pass."></textarea>
 
-    <p class="label" style="margin-top:16px">Attached context <span style="text-transform:none;letter-spacing:0">— files the agent should read, judged as evidence rather than as instructions</span></p>
+    <p class="label" style="margin-top:16px">Your codebase <span style="text-transform:none;letter-spacing:0">— drop source files here and the score is grounded in them: whether the things you name exist, and whether they point at one thing or forty</span></p>
     <div class="attachments" id="atts"></div>
 
     <div class="tools">
-      <button type="button" id="open">Attach a file…</button>
+      <button type="button" id="open">Add source files…</button>
       <button type="button" id="download" disabled>Download report</button>
       <button type="button" id="clear">Clear</button>
       <input type="file" id="file" hidden multiple accept=".txt,.md,.markdown,.rst,.text,text/*">
@@ -142,10 +143,9 @@ e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expi
 
   <footer>
     The whole scorer is compiled to WebAssembly and runs here; there is no
-    server and no model call. Grounding is measured against an index of
-    <a href="https://github.com/LiU-SKY/yourprompt">this project's own
-    repository</a> so you can see the axis work — point it at your own codebase
-    with <code>yp serve --repo .</code>.<br>
+    server and no model call. The files you add are indexed in your browser and
+    never leave it. For a whole repository rather than a handful of files, run
+    <code>yp serve --repo .</code> locally.<br>
     <a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>
   </footer>
 </div>
@@ -157,7 +157,7 @@ const MAX_BYTES = 256 * 1024;
 const enc = new TextEncoder(), dec = new TextDecoder();
 
 let wasm = null, indexBytes = null, lastScore = null;
-let attachments = [];   // { name, text }
+let files = [];         // { name, text } -- the visitor's codebase
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => (
@@ -188,18 +188,38 @@ function readAndFree(ptr) {
   return text;
 }
 
-function scoreNow(instruction, attached) {
-  const joined = attached.map(a => a.text).join('\u0000');
+function scoreNow(instruction) {
   const buffers = [];
   try {
     const [tp, tl] = write(enc.encode(instruction)); buffers.push([tp, tl]);
-    const [ap, al] = write(enc.encode(joined));      buffers.push([ap, al]);
+    const [ap, al] = write(new Uint8Array());        buffers.push([ap, al]);
     const [ip, il] = write(indexBytes || new Uint8Array()); buffers.push([ip, il]);
     const out = wasm.yp_score_parts(tp, tl, ap, al, ip, il);
     const json = readAndFree(out);
     return json ? JSON.parse(json) : null;
   } finally {
     for (const [ptr, len] of buffers) if (ptr) wasm.yp_free(ptr, len);
+  }
+}
+
+/// Index the visitor's files, in their browser. The files *are* the
+/// repository, so the grounding axis is about their code and not about
+/// whichever project happened to ship with the page.
+function rebuildIndex() {
+  if (!files.length) { indexBytes = null; return; }
+  const payload = files.map(f => f.name + '' + f.text).join('');
+  const bytes = enc.encode(payload);
+  const [p, l] = write(bytes);
+  try {
+    const out = wasm.yp_index_build(p, l);
+    if (!out) { indexBytes = null; return; }
+    const view = new DataView(wasm.memory.buffer);
+    const len = view.getUint32(out, true);
+    indexBytes = new Uint8Array(
+      new Uint8Array(wasm.memory.buffer, out + 4, len));  // copy before freeing
+    wasm.yp_free(out, 4 + len);
+  } finally {
+    if (p) wasm.yp_free(p, l);
   }
 }
 
@@ -251,13 +271,13 @@ function clearScore() {
   $('axes').innerHTML = '';
 }
 
-function renderAttachments() {
-  if (!attachments.length) {
+function renderFiles() {
+  if (!files.length) {
     $('atts').innerHTML =
-      '<div class="empty-att">Nothing attached. Drop a file here, or use the button below.</div>';
+      '<div class="empty-att">No files yet — grounding is not scored. Drop some source files here to score against your own codebase.</div>';
     return;
   }
-  $('atts').innerHTML = attachments.map((a, i) => `
+  $('atts').innerHTML = files.map((a, i) => `
     <div class="att">
       <span class="nm">${escapeHtml(a.name)}</span>
       <span class="sz">${(a.text.length / 1024).toFixed(1)} KB</span>
@@ -265,8 +285,9 @@ function renderAttachments() {
     </div>`).join('');
   $('atts').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => {
-      attachments.splice(Number(b.dataset.i), 1);
-      renderAttachments();
+      files.splice(Number(b.dataset.i), 1);
+      renderFiles();
+      rebuildIndex();
       score();
     }));
 }
@@ -277,9 +298,9 @@ let timer = null;
 function score() {
   if (!wasm) return;
   const text = $('p').value;
-  if (!text.trim() && !attachments.length) { clearScore(); return; }
+  if (!text.trim()) { clearScore(); return; }
   try {
-    const s = scoreNow(text, attachments);
+    const s = scoreNow(text);
     if (!s) throw new Error('the scorer could not read that');
     lastScore = s;
     $('download').disabled = false;
@@ -305,7 +326,7 @@ function looksBinary(text) {
   return replacements > 3 && replacements / Math.max(text.length, 1) > 0.001;
 }
 
-function attach(file) {
+function addFile(file) {
   if (!file) return;
   if (file.size > MAX_BYTES) {
     note(`${file.name} is ${(file.size / 1024).toFixed(0)} KB — the limit is 256 KB`, true);
@@ -316,9 +337,10 @@ function attach(file) {
   reader.onload = () => {
     const text = String(reader.result);
     if (looksBinary(text)) { note(`${file.name} does not look like text`, true); return; }
-    attachments.push({ name: file.name, text });
-    note(`attached ${file.name}`);
-    renderAttachments();
+    files.push({ name: file.name, text });
+    note(`added ${file.name}`);
+    renderFiles();
+    rebuildIndex();
     score();
   };
   reader.readAsText(file, 'utf-8');
@@ -326,7 +348,7 @@ function attach(file) {
 
 $('open').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', e => {
-  for (const f of e.target.files) attach(f);
+  for (const f of e.target.files) addFile(f);
   e.target.value = '';
 });
 
@@ -337,13 +359,13 @@ for (const target of [$('p'), $('atts')]) {
     target.addEventListener(k, () => target.classList.remove('dropping')));
   target.addEventListener('drop', e => {
     e.preventDefault();
-    for (const f of (e.dataTransfer.files || [])) attach(f);
+    for (const f of (e.dataTransfer.files || [])) addFile(f);
   });
 }
 
 $('clear').addEventListener('click', () => {
-  $('p').value = ''; attachments = []; note('');
-  renderAttachments(); clearScore(); $('p').focus();
+  $('p').value = ''; files = []; note('');
+  renderFiles(); rebuildIndex(); clearScore(); $('p').focus();
 });
 
 // --- the report ------------------------------------------------------------
@@ -362,8 +384,9 @@ function axisSection(axis, name) {
 function buildReport(s, prompt) {
   const longest = (prompt.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0);
   const fence = '`'.repeat(Math.max(3, longest + 1));
-  const attached = attachments.length
-    ? attachments.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('\n')
+  const listed = files.length
+    ? files.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('
+')
     : '- none';
   return [
     `# yourprompt`, ``,
@@ -372,7 +395,7 @@ function buildReport(s, prompt) {
     `| Generated | ${new Date().toISOString()} |`,
     `| Grounded | ${s.renormalized ? 'no (score rescaled from three axes)' : 'yes'} |`,
     ``, `## Prompt`, ``, fence, prompt, fence,
-    ``, `## Attached context`, ``, attached,
+    ``, `## Codebase indexed`, ``, listed,
     ``, `## Breakdown`, ``,
     axisSection(s.grounding, 'grounding'),
     axisSection(s.actionability, 'actionability'),
@@ -401,10 +424,9 @@ $('download').addEventListener('click', () => {
 // --- boot ------------------------------------------------------------------
 
 (async () => {
-  renderAttachments();
+  renderFiles();
   try {
-    const { instance } = await WebAssembly.instantiateStreaming(
-      fetch('yp.wasm'), {});
+    const { instance } = await WebAssembly.instantiateStreaming(fetch('yp.wasm'), {});
     wasm = instance.exports;
   } catch (e) {
     // instantiateStreaming needs the right MIME type; fall back if the host
@@ -418,19 +440,9 @@ $('download').addEventListener('click', () => {
       return;
     }
   }
-
-  let where = 'not grounded';
-  try {
-    const res = await fetch('repo-index.tsv');
-    if (res.ok) {
-      indexBytes = new Uint8Array(await res.arrayBuffer());
-      const header = dec.decode(indexBytes.slice(0, 120)).split('\n')[0].split('\t');
-      where = `grounded in ${header[2]} files of this project`;
-    }
-  } catch (e) { /* ungrounded is a valid state */ }
-
   const version = readAndFree(wasm.yp_version());
-  $('sub').textContent = `v${version} — running in your browser, ${where}.`;
+  $('sub').textContent =
+    `v${version} — running in your browser. Add source files to score against your own codebase.`;
   score();
 })();
 </script>

@@ -64,6 +64,12 @@ impl RepoIndex {
         self.distinct_terms
     }
 
+    /// The index in its on-disk form, for handing to a caller that has no
+    /// filesystem to save it to.
+    pub fn as_str(&self) -> &str {
+        &self.blob
+    }
+
     pub fn is_empty(&self) -> bool {
         self.distinct_terms == 0
     }
@@ -112,18 +118,37 @@ impl RepoIndex {
 
     /// Build an index by walking `root`.
     pub fn build(root: &Path) -> RepoIndex {
-        let files = walk::source_files(root);
-        let mut terms: HashMap<String, TermStat> = HashMap::new();
-        let mut indexed = 0usize;
+        let paths = walk::source_files(root);
+        let mut files: Vec<(String, String)> = Vec::with_capacity(paths.len());
 
-        for path in &files {
+        for path in &paths {
             // Non-UTF-8 files are skipped rather than lossily decoded: a
             // mis-decoded binary would inject thousands of junk terms.
             let Ok(text) = std::fs::read_to_string(path) else {
                 continue;
             };
-            extract::index_text(&text, &mut terms);
-            indexed += 1;
+            let name = path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push((name, text));
+        }
+
+        Self::from_files(&files)
+    }
+
+    /// Build an index from files already in memory, as `(path, contents)`.
+    ///
+    /// The same index the filesystem walk produces, minus the walking. That
+    /// is what makes the browser build possible, where there is no filesystem
+    /// and the repository is whatever the visitor dropped on the page.
+    pub fn from_files(files: &[(String, String)]) -> RepoIndex {
+        let mut terms: HashMap<String, TermStat> = HashMap::new();
+        let indexed = files.len();
+
+        for (_, text) in files {
+            extract::index_text(text, &mut terms);
         }
 
         // Paths are referents in their own right. A prompt saying
@@ -133,11 +158,8 @@ impl RepoIndex {
         // `fn` denotes one function. Two directories holding a `mod.rs` then
         // correctly make that bare name ambiguous, while the full path stays
         // unambiguous.
-        for path in &files {
-            let Ok(relative) = path.strip_prefix(root) else {
-                continue;
-            };
-            let text = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+        for (path, _) in files {
+            let text = path.to_lowercase();
 
             for name in [Some(text.as_str()), text.rsplit('/').next()]
                 .into_iter()
@@ -392,6 +414,32 @@ mod tests {
         assert!(RepoIndex::parse("#OTHER\t1\t1\t1\t1\n".to_string()).is_none());
         assert!(RepoIndex::parse("#YPIX\t999\t1\t1\t1\n".to_string()).is_none());
         assert!(RepoIndex::parse(String::new()).is_none());
+    }
+
+    #[test]
+    fn an_index_can_be_built_from_files_in_memory() {
+        // The browser has no filesystem to walk, so this path has to produce
+        // the same index the walk does.
+        let files = vec![
+            (
+                "src/auth/login.rs".to_string(),
+                "pub fn verify_token(t: &str) -> bool { t.len() > 3 }".to_string(),
+            ),
+            (
+                "src/main.rs".to_string(),
+                "fn main() { verify_token(\"x\"); }".to_string(),
+            ),
+        ];
+        let index = RepoIndex::from_files(&files);
+
+        assert_eq!(index.files(), 2);
+        // Defined once, used twice.
+        let token = index.lookup("verify_token").expect("the function");
+        assert_eq!(token.def, 1);
+        assert_eq!(token.df, 2);
+        // The path itself resolves to exactly one file.
+        assert_eq!(index.lookup("src/auth/login.rs").expect("the path").def, 1);
+        assert!(index.lookup("nothing_here").is_none());
     }
 
     #[test]

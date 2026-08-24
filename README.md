@@ -49,10 +49,11 @@ meant to be argued with, which it cannot be if it only prints a number.
 
 **<https://liu-sky.github.io/yourprompt/>**
 
-The whole scorer is compiled to WebAssembly and runs in the page — no server,
-no model call, and nothing you type or attach is uploaded anywhere. It ships
-with an index of this repository, so the grounding axis is live and you can
-watch it react to names that exist here and names that do not.
+The whole scorer is compiled to WebAssembly and runs in the page — no server
+and no model call. Drop your own source files on it and they are indexed in
+your browser, so the grounding axis is about **your** codebase: whether the
+things you name exist in it, and whether they point at one thing or forty.
+Nothing you type or add is uploaded anywhere.
 
 ## Install
 

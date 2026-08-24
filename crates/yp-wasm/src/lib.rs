@@ -197,6 +197,42 @@ pub unsafe extern "C" fn yp_score_parts(
     }
 }
 
+/// Build an index from files the visitor supplied.
+///
+/// Input is one record per file: the path, a unit-separator byte, then the
+/// contents; records separated by a record-separator byte. Neither appears in
+/// source text. Returns a length-prefixed index blob for [`yp_score_parts`],
+/// or null if the input was not valid UTF-8 or held no files.
+///
+/// This is what lets the published page ground scores in *your* codebase
+/// rather than in whichever repository happened to be shipped with it: the
+/// files you drop on the page are the repository.
+///
+/// # Safety
+///
+/// As [`yp_score`]. The returned buffer must be released with [`yp_free`].
+#[no_mangle]
+pub unsafe extern "C" fn yp_index_build(ptr: *const u8, len: usize) -> *mut u8 {
+    let Some(payload) = as_str(ptr, len) else {
+        return std::ptr::null_mut();
+    };
+
+    let files: Vec<(String, String)> = payload
+        .split('\u{1e}')
+        .filter(|record| !record.is_empty())
+        .map(|record| match record.split_once('\u{1f}') {
+            Some((name, body)) => (name.to_string(), body.to_string()),
+            None => (String::new(), record.to_string()),
+        })
+        .collect();
+
+    if files.is_empty() {
+        return std::ptr::null_mut();
+    }
+
+    into_buffer(yp_index::RepoIndex::from_files(&files).as_str())
+}
+
 /// The crate version, for the page to display.
 ///
 /// # Safety

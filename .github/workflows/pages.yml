@@ -30,20 +30,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # The page is the scorer, not a description of it: yp-core compiles to
-      # WebAssembly and runs in the visitor's browser, so nothing they type is
-      # uploaded anywhere and the site needs no backend.
+      # WebAssembly and runs in the visitor's browser. The files they drop on
+      # the page are indexed there too, so grounding is about *their* codebase
+      # and nothing they add is ever uploaded.
       - name: Build the scorer for the browser
         run: |
           cargo build -p yp-wasm --release --target wasm32-unknown-unknown
           cp target/wasm32-unknown-unknown/release/yp_wasm.wasm docs/yp.wasm
-
-      # Ship an index of this repository so visitors can see the grounding
-      # axis actually work rather than reading about it.
-      - name: Index this repository for the grounding axis
-        run: |
-          cargo build --release --bin yp
-          YP_STATE_DIR="$RUNNER_TEMP/yp" ./target/release/yp index
-          cp "$RUNNER_TEMP/yp/index/"*.tsv docs/repo-index.tsv
 
       - name: Check the page carries no control characters
         run: |
