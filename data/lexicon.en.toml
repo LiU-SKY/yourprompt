@@ -1,0 +1,143 @@
+# English lexicon for yourprompt.
+#
+# Smell categories follow the Requirements Smells taxonomy derived from
+# ISO/IEC/IEEE 29148 (Femmer et al., "Rapid quality assurance with
+# Requirements Smells", JSS 2017), adapted to the vocabulary that actually
+# shows up in prompts to coding agents.
+#
+# `weight` scales the per-hit penalty. `cap` is the maximum number of hits
+# that can count for a category -- this is the anti-gaming ceiling: no single
+# category can dominate the score no matter how many times it fires.
+
+lang = "en"
+
+[[smell]]
+id = "subjective_language"
+iso = "unambiguous"
+weight = 1.0
+cap = 4
+terms = [
+  "user friendly", "user-friendly", "easy", "simple", "straightforward",
+  "nice", "nicer", "clean", "cleaner", "tidy", "elegant", "beautiful",
+  "pretty", "modern", "professional", "intuitive", "seamless", "smooth",
+  "readable", "maintainable", "idiomatic", "sensible", "reasonable",
+  "robust", "solid", "decent", "good", "great", "bad", "ugly", "messy",
+]
+
+[[smell]]
+id = "comparative"
+iso = "verifiable"
+weight = 1.0
+cap = 3
+terms = [
+  "better", "faster", "quicker", "slower", "cheaper", "safer", "smaller",
+  "bigger", "larger", "shorter", "longer", "stronger", "improve", "improved",
+  "enhance", "enhanced", "optimize", "optimise", "optimized", "streamline",
+  "more efficient", "less code", "more readable", "speed up", "clean up",
+]
+
+[[smell]]
+id = "superlative"
+iso = "verifiable"
+weight = 1.2
+cap = 3
+terms = [
+  "best", "worst", "fastest", "slowest", "cleanest", "simplest", "optimal",
+  "perfect", "perfectly", "ideal", "maximum", "minimum", "most", "least",
+  "as much as possible", "as fast as possible", "as clean as possible",
+  "state of the art", "world class", "production grade", "production-grade",
+]
+
+[[smell]]
+id = "passive_voice"
+iso = "singular"
+weight = 0.6
+cap = 3
+terms = [
+  "should be", "must be", "needs to be", "has to be", "is handled",
+  "are handled", "is processed", "are processed", "is updated", "are updated",
+  "is called", "are called", "gets called", "be refactored", "be fixed",
+  "be added", "be removed", "be changed", "be implemented",
+]
+
+[[smell]]
+id = "uncertain_verb"
+iso = "unambiguous"
+weight = 1.1
+cap = 4
+terms = [
+  "might", "may", "could", "would probably", "perhaps", "maybe", "possibly",
+  "i think", "i guess", "i believe", "i suppose", "not sure", "unsure",
+  "seems", "seem to", "appears to", "kind of", "sort of", "somehow",
+  "or something", "or whatever", "if i remember", "iirc",
+]
+
+[[smell]]
+id = "ambiguous_adverb"
+iso = "unambiguous"
+weight = 1.0
+cap = 4
+terms = [
+  "almost", "nearly", "mostly", "generally", "usually", "typically",
+  "roughly", "approximately", "somewhat", "quite", "fairly", "rather",
+  "significantly", "minimally", "substantially", "appropriately",
+  "properly", "correctly", "accordingly", "adequately", "suitably",
+  "as needed", "as required", "reasonably",
+]
+
+[[smell]]
+id = "vague_noun"
+iso = "unambiguous"
+weight = 0.9
+cap = 5
+terms = [
+  "thing", "things", "stuff", "item", "items", "part", "parts", "piece",
+  "bit", "bits", "logic", "flow", "the code", "some code", "the system",
+  "the app", "the thing", "data", "info", "state", "context", "config",
+  "setup", "handler", "manager", "helper", "utility", "utils", "service",
+  "component", "module", "wrapper", "stuff like that",
+]
+
+[[smell]]
+id = "vague_pronoun"
+iso = "complete"
+weight = 1.4
+cap = 4
+terms = [
+  "it", "this", "that", "they", "them", "these", "those", "its", "their",
+  "the above", "the former", "the latter", "the same", "there",
+]
+
+[[smell]]
+id = "open_ended"
+iso = "complete"
+weight = 1.3
+cap = 3
+terms = [
+  "etc", "etc.", "and so on", "and so forth", "among others", "and more",
+  "including but not limited to", "such as", "like that", "any other",
+  "whatever", "and the rest", "and others", "or similar",
+]
+
+[[smell]]
+id = "loophole"
+iso = "verifiable"
+weight = 1.3
+cap = 3
+terms = [
+  "if possible", "if needed", "if necessary", "if applicable", "if you can",
+  "where applicable", "where possible", "as appropriate", "as you see fit",
+  "feel free to", "up to you", "your call", "you decide", "whatever works",
+  "to the extent", "ideally", "preferably", "optionally",
+]
+
+[[smell]]
+id = "polysemous_verb"
+iso = "unambiguous"
+weight = 0.8
+cap = 4
+terms = [
+  "handle", "process", "manage", "support", "deal with", "take care of",
+  "work on", "look at", "look into", "check", "review", "update", "touch",
+  "sort out", "figure out", "make it work", "do something about",
+]

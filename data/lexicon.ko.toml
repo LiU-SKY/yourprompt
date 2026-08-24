@@ -1,0 +1,128 @@
+# Korean lexicon for yourprompt.
+#
+# Same Requirements Smells taxonomy as the English lexicon, but the terms are
+# chosen from how Korean developers actually talk to coding agents rather than
+# translated word-for-word.
+#
+# Terms are matched as stems. A trailing Korean particle (조사) is tolerated,
+# so "그거" also matches "그거를", "그거는", "그거랑". See yp-lang's matcher.
+
+lang = "ko"
+
+[[smell]]
+id = "subjective_language"
+iso = "unambiguous"
+weight = 1.0
+cap = 4
+terms = [
+  "예쁘게", "이쁘게", "깔끔하게", "깔끔히", "좋게", "괜찮게", "자연스럽게",
+  "세련되게", "직관적으로", "직관적", "사용자 친화적", "보기 좋게",
+  "읽기 좋게", "쉽게", "간단하게", "심플하게", "모던하게", "프로페셔널",
+  "그럴듯하게", "멋있게", "멋지게", "지저분", "더럽게",
+]
+
+[[smell]]
+id = "comparative"
+iso = "verifiable"
+weight = 1.0
+cap = 3
+terms = [
+  "더 빠르게", "더 좋게", "더 낫게", "더 깔끔", "더 간단", "개선", "향상",
+  "최적화", "리팩터링만", "성능 올려", "빠르게 만들어", "줄여줘", "늘려줘",
+  "낫게",
+]
+
+[[smell]]
+id = "superlative"
+iso = "verifiable"
+weight = 1.2
+cap = 3
+terms = [
+  "최고", "최적", "최선", "최대한", "가능한 한", "가능한한", "제일",
+  "완벽하게", "완벽히", "완전하게", "끝내주게", "프로덕션 급", "역대급",
+]
+
+[[smell]]
+id = "passive_voice"
+iso = "singular"
+weight = 0.6
+cap = 3
+terms = [
+  "되어야", "돼야", "되도록", "되게", "처리되", "수정되", "반영되",
+  "구현되", "적용되", "삭제되", "추가되",
+]
+
+[[smell]]
+id = "uncertain_verb"
+iso = "unambiguous"
+weight = 1.1
+cap = 4
+terms = [
+  "아마", "아마도", "인 것 같", "것 같", "듯한", "듯이", "듯 함", "인듯",
+  "싶은데", "혹시", "잘 모르겠", "모르겠는데", "확실하지", "일 수도",
+  "인가 싶", "같은데",
+]
+
+[[smell]]
+id = "ambiguous_adverb"
+iso = "unambiguous"
+weight = 1.0
+cap = 4
+terms = [
+  "적당히", "알아서", "대충", "그냥", "약간", "조금", "살짝", "어느 정도",
+  "대체로", "거의", "웬만하면", "적절히", "제대로", "올바르게", "잘 좀",
+  "좀 더", "많이", "빨리",
+]
+
+[[smell]]
+id = "vague_noun"
+iso = "unambiguous"
+weight = 0.9
+cap = 5
+terms = [
+  "부분", "쪽", "로직", "기능", "처리", "관리", "세팅", "설정",
+  "데이터", "상태", "코드", "시스템", "구조", "흐름", "어떤 거",
+  "그런 거", "이런 거", "그런 식", "비슷한 거",
+]
+
+[[smell]]
+id = "vague_pronoun"
+iso = "complete"
+weight = 1.4
+cap = 4
+terms = [
+  "그거", "저거", "이거", "그것", "저것", "이것", "여기", "저기", "거기",
+  "아까", "방금", "그때", "위에 거", "아까 그", "그 부분", "저 부분",
+  "걔", "얘", "쟤",
+]
+
+[[smell]]
+id = "open_ended"
+iso = "complete"
+weight = 1.3
+cap = 3
+terms = [
+  "등등", "기타 등등", "기타", "등의", "같은 거", "뭐 그런", "뭐 그런 거",
+  "이것저것", "나머지도", "그 외에도",
+]
+
+[[smell]]
+id = "loophole"
+iso = "verifiable"
+weight = 1.3
+cap = 3
+terms = [
+  "가능하면", "되면", "할 수 있으면", "필요하면", "여유 되면", "편한 대로",
+  "알아서 해", "알아서 판단", "네가 판단", "맡길게", "원하는 대로",
+  "괜찮으면", "시간 되면",
+]
+
+[[smell]]
+id = "polysemous_verb"
+iso = "unambiguous"
+weight = 0.8
+cap = 4
+terms = [
+  "처리해", "관리해", "손봐", "손 좀", "만져", "봐줘", "확인해", "체크해",
+  "정리해", "고쳐", "손보", "어떻게 좀", "잘 되게", "작동하게",
+]
