@@ -307,6 +307,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_page_carries_no_control_characters() {
+        // A stray NUL or replacement character would be served verbatim and,
+        // worse, would mean an editing accident had gone unnoticed.
+        assert!(!PAGE.contains('\u{0}'), "NUL byte in the page source");
+        assert!(
+            !PAGE.contains('\u{FFFD}'),
+            "replacement character in the page source"
+        );
+    }
+
+    #[test]
+    fn the_page_offers_opening_a_file_and_downloading_a_report() {
+        assert!(PAGE.contains("type=\"file\""), "no file input");
+        assert!(PAGE.contains("id=\"download\""), "no download control");
+        // Both happen in the browser, so the server keeps its three routes and
+        // gains no upload surface.
+        assert!(PAGE.contains("FileReader"), "file is not read client-side");
+        assert!(
+            PAGE.contains("createObjectURL"),
+            "report is not built client-side"
+        );
+        assert!(!PAGE.contains("/api/upload"), "an upload route crept in");
+    }
+
+    #[test]
+    fn the_client_side_limit_matches_the_server_one() {
+        // The page refuses an oversized file with an explanation rather than
+        // letting the server answer with an opaque 400.
+        assert!(
+            PAGE.contains("256 * 1024"),
+            "page does not state the same cap as MAX_BODY"
+        );
+        assert_eq!(MAX_BODY, 256 * 1024);
+    }
+
+    #[test]
     fn the_page_is_self_contained() {
         // It is served from memory with no filesystem access, so every asset
         // has to be inline. An external reference would simply fail to load.

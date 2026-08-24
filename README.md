@@ -76,6 +76,11 @@ Type a prompt and watch it scored as you go, with every component and the
 reason it scored what it did. `--repo` indexes a codebase at startup so the
 grounding axis is live.
 
+Open a text file (or drop one on the box) to score a prompt you already
+wrote, and download the result as a Markdown report with the full breakdown.
+Both happen in the browser: the file is read locally and only its text is
+scored, so the server keeps its three routes and gains no upload surface.
+
 The server is `std::net` and nothing else — no async runtime, no framework, no
 dependency. It serves one page compiled into the binary and two JSON routes,
 never touches the filesystem in response to a request, caps bodies and headers,
