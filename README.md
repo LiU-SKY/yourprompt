@@ -66,6 +66,22 @@ Then, in any session:
 
 `/score` explains the last prompt, axis by axis, and suggests one rewrite.
 
+## In a browser
+
+```bash
+yp serve --repo .          # http://127.0.0.1:8787
+```
+
+Type a prompt and watch it scored as you go, with every component and the
+reason it scored what it did. `--repo` indexes a codebase at startup so the
+grounding axis is live.
+
+The server is `std::net` and nothing else — no async runtime, no framework, no
+dependency. It serves one page compiled into the binary and two JSON routes,
+never touches the filesystem in response to a request, caps bodies and headers,
+and binds to loopback unless you pass `--bind 0.0.0.0`. Scoring stays local:
+no model is called and nothing is stored.
+
 ## What repository grounding looks like
 
 The same three prompts, scored against this repository:

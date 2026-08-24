@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yourprompt</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --dim: #6b6b66;
+    --line: #e4e4e0; --accent: #2f6f4f; --warn: #8a6d1f; --bad: #9b3a2f;
+    --track: #ecece8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1d1e22; --ink: #e8e8e4; --dim: #96968f;
+      --line: #2c2d32; --accent: #6fbf90; --warn: #d6b45c; --bad: #e08a7c;
+      --track: #26272c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+          "Noto Sans KR", Roboto, sans-serif;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { margin-bottom: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
+  .sub code { font-size: 12.5px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px;
+  }
+  textarea {
+    width: 100%; min-height: 150px; resize: vertical; padding: 12px;
+    background: transparent; color: inherit; border: 1px solid var(--line);
+    border-radius: 8px; font: 14px/1.6 ui-monospace, SFMono-Regular,
+    "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .bar-row { display: flex; align-items: baseline; gap: 14px; margin: 20px 0 6px; }
+  .total { font-size: 40px; font-weight: 650; letter-spacing: -0.02em;
+           font-variant-numeric: tabular-nums; }
+  .grade { font-size: 20px; font-weight: 600; }
+  .of { color: var(--dim); font-size: 13px; }
+  .flag { color: var(--dim); font-size: 12.5px; margin-left: auto; }
+
+  .track { height: 8px; background: var(--track); border-radius: 999px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; transition: width .18s ease; }
+
+  .axes { margin-top: 26px; display: grid; gap: 14px; }
+  .axis { border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+  .axis > .head {
+    display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px;
+  }
+  .axis .name { font-weight: 600; text-transform: capitalize; }
+  .axis .num { margin-left: auto; color: var(--dim); font-size: 13px;
+               font-variant-numeric: tabular-nums; }
+  .comp { display: grid; grid-template-columns: 128px 74px 1fr; gap: 10px;
+          align-items: baseline; padding: 4px 0; font-size: 13.5px; }
+  .comp .cn { color: var(--dim); }
+  .comp .cv { font-variant-numeric: tabular-nums; }
+  .comp .cd { color: var(--dim); overflow-wrap: anywhere; }
+  .muted { color: var(--dim); font-style: italic; }
+  footer { margin-top: 30px; color: var(--dim); font-size: 12.5px; }
+  a { color: var(--accent); }
+  .err { color: var(--bad); }
+  @media (max-width: 620px) {
+    .comp { grid-template-columns: 1fr; gap: 2px; }
+    .comp .cd { margin-bottom: 6px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>yourprompt</h1>
+    <p class="sub" id="sub">Type a prompt. It is scored as you go, out of 1000.</p>
+  </header>
+
+  <div class="panel">
+    <textarea id="p" spellcheck="false" autofocus
+      placeholder="e.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don't change the public signature of login(). tests/auth.rs must still pass."></textarea>
+
+    <div class="bar-row">
+      <span class="total" id="total">—</span>
+      <span class="of">/ 1000</span>
+      <span class="grade" id="grade"></span>
+      <span class="flag" id="flag"></span>
+    </div>
+    <div class="track"><div class="fill" id="fill" style="width:0"></div></div>
+  </div>
+
+  <div class="axes" id="axes"></div>
+
+  <footer>
+    Deterministic and local — no model is called, and nothing you type leaves
+    this server. <a href="https://github.com/LiU-SKY/yourprompt">source</a>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const colourFor = r => r >= 0.70 ? 'var(--accent)' : r >= 0.50 ? 'var(--warn)' : 'var(--bad)';
+
+function renderAxis(axis, absent) {
+  if (absent) {
+    return `<div class="axis"><div class="head"><span class="name">grounding</span>
+      <span class="num">not scored</span></div>
+      <div class="muted">No repository indexed, so the remaining axes were
+      rescaled to 1000. Start the server with <code>--repo PATH</code> to
+      ground scores in a codebase.</div></div>`;
+  }
+  const r = axis.max ? axis.earned / axis.max : 0;
+  const comps = axis.components.map(c => `
+    <div class="comp">
+      <span class="cn">${c.id}</span>
+      <span class="cv">${c.earned.toFixed(1)} / ${c.max.toFixed(0)}</span>
+      <span class="cd">${escapeHtml(c.detail)}</span>
+    </div>`).join('');
+  return `<div class="axis">
+    <div class="head">
+      <span class="name">${axis.id}</span>
+      <span class="num">${axis.earned.toFixed(1)} / ${axis.max.toFixed(0)}</span>
+    </div>
+    <div class="track" style="margin-bottom:8px">
+      <div class="fill" style="width:${(r*100).toFixed(1)}%;background:${colourFor(r)}"></div>
+    </div>
+    ${comps}</div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function render(s) {
+  const r = s.total / 1000;
+  $('total').textContent = s.total.toFixed(1);
+  $('grade').textContent = s.grade;
+  $('grade').style.color = colourFor(r);
+  $('fill').style.width = (r * 100).toFixed(1) + '%';
+  $('fill').style.background = colourFor(r);
+  $('flag').textContent = s.renormalized ? 'no repository indexed — rescaled' : '';
+  $('axes').innerHTML =
+    renderAxis(s.grounding, !s.grounding) +
+    renderAxis(s.actionability) + renderAxis(s.clarity) + renderAxis(s.context);
+}
+
+let timer = null, inflight = null;
+async function score() {
+  const text = $('p').value;
+  if (!text.trim()) {
+    $('total').textContent = '—'; $('grade').textContent = '';
+    $('fill').style.width = '0'; $('flag').textContent = '';
+    $('axes').innerHTML = ''; return;
+  }
+  if (inflight) inflight.abort();
+  inflight = new AbortController();
+  try {
+    const res = await fetch('/api/score', {
+      method: 'POST', body: text, signal: inflight.signal,
+      headers: {'Content-Type': 'text/plain; charset=utf-8'},
+    });
+    if (!res.ok) throw new Error('server returned ' + res.status);
+    render(await res.json());
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    $('axes').innerHTML = '<div class="axis err">' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+$('p').addEventListener('input', () => {
+  clearTimeout(timer);
+  timer = setTimeout(score, 140);
+});
+
+fetch('/api/info').then(r => r.json()).then(i => {
+  if (i.repo) {
+    $('sub').innerHTML = 'Type a prompt. Scored as you go, out of 1000, grounded in <code>'
+      + escapeHtml(i.repo) + '</code> (' + i.files + ' files indexed).';
+  }
+}).catch(() => {});
+</script>
+</body>
+</html>

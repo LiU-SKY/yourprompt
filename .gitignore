@@ -5,3 +5,6 @@ Cargo.lock.bak
 /bench/cache
 /bench/report.md
 *.pdb
+
+# Windows reserved device name, occasionally created by a stray redirect
+nul
