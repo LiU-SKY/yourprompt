@@ -4,12 +4,19 @@
   "version": "0.1.0",
   "description": "Scores how well Claude can understand your prompt, for zero context tokens",
   "author": {
-    "name": "LiU-SKY",
-    "email": "33451609+LiU-SKY@users.noreply.github.com"
+    "name": "LiU-SKY"
   },
   "homepage": "https://github.com/LiU-SKY/yourprompt",
   "license": "MIT",
-  "keywords": ["prompt", "quality", "score", "statusline", "hook"],
+  "keywords": [
+    "prompt",
+    "quality",
+    "score",
+    "statusline",
+    "hook"
+  ],
   "hooks": "./hooks/hooks.json",
-  "commands": ["./commands/"]
+  "commands": [
+    "./commands/"
+  ]
 }

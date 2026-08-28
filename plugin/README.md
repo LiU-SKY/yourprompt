@@ -1,4 +1,4 @@
-# yourprompt — Claude Code plugin
+# yourprompt plugin for Claude Code
 
 Registers the `UserPromptSubmit` hook that scores each prompt, and the
 `/score` command that explains the last one.
@@ -17,7 +17,7 @@ cargo install --git https://github.com/LiU-SKY/yourprompt yp-cli
 
 ## The status line
 
-Claude Code plugins can ship hooks but **cannot** ship a `statusLine` — a
+Claude Code plugins can ship hooks but **cannot** ship a `statusLine` - a
 plugin's settings only honour `agent` and `subagentStatusLine`. So the piece
 that actually displays the score has to go in your own settings:
 
