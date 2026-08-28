@@ -23,6 +23,7 @@ pub mod axes;
 pub mod corpus;
 pub mod grade;
 pub mod grounding;
+pub mod marks;
 pub mod params;
 pub mod prompt;
 pub mod stats;
@@ -31,6 +32,7 @@ use serde::Serialize;
 
 pub use axes::{Axis, Component};
 pub use corpus::{Corpus, MapCorpus, TermFacts};
+pub use marks::{Mark, Tone};
 pub use stats::PromptStats;
 
 /// A scored prompt.
@@ -49,6 +51,10 @@ pub struct Score {
     /// Surfaced in the status line so a renormalised score is never mistaken
     /// for a grounded one.
     pub renormalized: bool,
+    /// Where in the text each verdict was made: the words that cost clarity
+    /// points, the names that did or did not resolve, the clauses that earned
+    /// credit. Byte ranges into the text as the caller gave it.
+    pub marks: Vec<Mark>,
 }
 
 impl Score {
@@ -148,7 +154,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     let smells = axes::total_by_category(&smell_hits);
     let request = request_factor(&cues);
 
-    let grounding_axis = corpus.map(|corpus| {
+    let grounded = corpus.map(|corpus| {
         let offsets = grounding::pronoun_offsets(&smell_hits);
         // Spans already claimed by a cue or a smell are instruction words,
         // not names the user is pointing at.
@@ -165,8 +171,11 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
             corpus,
             stats.diversity() * request,
         )
-        .0
     });
+    let (grounding_axis, referents) = match grounded {
+        Some((axis, referents)) => (Some(axis), Some(referents)),
+        None => (None, None),
+    };
 
     // With grounding active, vague pronouns are judged there -- by whether
     // they actually have an antecedent -- so clarity does not charge for them
@@ -191,6 +200,15 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     };
     let total = total.clamp(0.0, params::axis_max::TOTAL);
 
+    let marks = marks::collect(&marks::Evidence {
+        parts,
+        tokens: &tokens,
+        cue_hits: &cue_hits,
+        smell_hits: &smell_hits,
+        referents: referents.as_deref(),
+        objectives: cues.get(&yp_lang::CueId::ActionVerb).map_or(0, |v| v.len()),
+    });
+
     Some(Score {
         total,
         grade: grade::grade(total),
@@ -199,6 +217,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
         clarity,
         context,
         renormalized,
+        marks,
     })
 }
 

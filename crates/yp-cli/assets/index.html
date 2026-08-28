@@ -9,12 +9,16 @@
     --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --dim: #6b6b66;
     --line: #e4e4e0; --accent: #2f6f4f; --warn: #8a6d1f; --bad: #9b3a2f;
     --track: #ecece8; --drop: rgba(47,111,79,.08);
+    --m-good: rgba(47,111,79,.20); --m-warn: rgba(214,166,50,.30);
+    --m-bad: rgba(200,70,50,.22);
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #16171a; --panel: #1d1e22; --ink: #e8e8e4; --dim: #96968f;
       --line: #2c2d32; --accent: #6fbf90; --warn: #d6b45c; --bad: #e08a7c;
       --track: #26272c; --drop: rgba(111,191,144,.10);
+      --m-good: rgba(111,191,144,.26); --m-warn: rgba(214,180,92,.30);
+      --m-bad: rgba(224,138,124,.30);
     }
   }
   * { box-sizing: border-box; }
@@ -64,6 +68,31 @@
   }
   textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .dropping { border-color: var(--accent) !important; background: var(--drop); }
+
+  .editor { position: relative; }
+  .editor textarea { position: relative; display: block; }
+  .hl {
+    position: absolute; inset: 0; margin: 0; padding: 12px; overflow: hidden;
+    border: 1px solid transparent; border-radius: 8px;
+    font: 14px/1.6 ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo,
+    Consolas, monospace; white-space: pre-wrap; overflow-wrap: break-word;
+    color: transparent; pointer-events: none;
+  }
+  .hl mark { color: transparent; border-radius: 3px; background: var(--m-good); }
+  .hl mark.warn { background: var(--m-warn); }
+  .hl mark.bad { background: var(--m-bad); }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px;
+            color: var(--dim); margin: 8px 0 0; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+              vertical-align: -1px; margin-right: 5px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 12.5px; padding: 2px 8px; border-radius: 6px;
+          border: 1px solid var(--line); color: var(--ink); }
+  .chip b { font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo,
+            Consolas, monospace; font-weight: 500; }
+  .chip.good { background: var(--m-good); }
+  .chip.warn { background: var(--m-warn); }
+  .chip.bad { background: var(--m-bad); }
 
   .attachments { margin-top: 10px; display: grid; gap: 6px; }
   .att {
@@ -124,7 +153,12 @@
 
   <div class="panel">
     <p class="label" id="label-prompt">Prompt</p>
-    <textarea id="p" spellcheck="false" autofocus></textarea>
+    <div class="editor">
+      <pre class="hl" id="hl" aria-hidden="true"></pre>
+      <textarea id="p" spellcheck="false" autofocus></textarea>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="chips" id="chips"></div>
 
     <p class="label" style="margin-top:16px" id="label-att"></p>
     <div class="attachments" id="atts"></div>
@@ -166,6 +200,34 @@ let serverInfo = null;  // /api/info, kept so language switches re-render it
 
 const STR = {
   en: {
+    marks: {
+      legend: { good: 'earns points', warn: 'unclear', bad: 'costs points' },
+      kinds: {
+        'cue:action_verb': 'names the action',
+        'cue:io_spec': 'says what the result looks like',
+        'cue:acceptance': 'says how to tell it is done',
+        'cue:scope_constraint': 'bounds the work',
+        'cue:example_marker': 'introduces an example',
+        'cue:conjunction': 'joins a second objective',
+        'name:unique': 'defined once in your code',
+        'name:ambiguous': n => `could be any of ${n}`,
+        'name:missing': 'not in your code',
+        'pronoun:dangling': 'points at nothing named before it',
+        'pronoun:anchored': 'pronoun; probably the name before it',
+        'attachment': 'attachment, judged as evidence',
+        'smell:subjective_language': 'subjective',
+        'smell:comparative': 'comparative with no baseline',
+        'smell:superlative': 'superlative with no baseline',
+        'smell:passive_voice': 'passive voice',
+        'smell:uncertain_verb': 'hedge',
+        'smell:ambiguous_adverb': 'vague adverb',
+        'smell:vague_noun': 'vague noun',
+        'smell:vague_pronoun': 'pronoun with nothing to point at',
+        'smell:open_ended': 'open-ended',
+        'smell:loophole': 'escape clause',
+        'smell:polysemous_verb': 'verb that names no specific action',
+      },
+    },
     lede: 'Scores how well an AI coding agent can understand your prompt, with a reason for every point.',
     placeholder: 'What do you want the agent to do?\n\ne.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.',
     label_prompt: 'Prompt',
@@ -204,6 +266,34 @@ const STR = {
            foot: 'Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the browser. Deterministic; no model was called.' },
   },
   ko: {
+    marks: {
+      legend: { good: '점수를 얻음', warn: '애매함', bad: '점수를 잃음' },
+      kinds: {
+        'cue:action_verb': '할 일을 말함',
+        'cue:io_spec': '결과의 형태를 말함',
+        'cue:acceptance': '완료 기준을 말함',
+        'cue:scope_constraint': '범위를 한정함',
+        'cue:example_marker': '예시를 제시함',
+        'cue:conjunction': '두 번째 목표를 이어 붙임',
+        'name:unique': '코드에 한 번 정의됨',
+        'name:ambiguous': n => `${n}개 중 무엇인지 불분명`,
+        'name:missing': '코드에 없음',
+        'pronoun:dangling': '앞에 가리킬 대상이 없음',
+        'pronoun:anchored': '지시어, 앞의 이름을 가리키는 듯',
+        'attachment': '첨부, 근거로 판단함',
+        'smell:subjective_language': '주관적 표현',
+        'smell:comparative': '기준 없는 비교',
+        'smell:superlative': '기준 없는 최상급',
+        'smell:passive_voice': '수동태',
+        'smell:uncertain_verb': '불확실한 표현',
+        'smell:ambiguous_adverb': '모호한 부사',
+        'smell:vague_noun': '모호한 명사',
+        'smell:vague_pronoun': '가리킬 대상 없는 지시어',
+        'smell:open_ended': '열린 결말',
+        'smell:loophole': '도피 조항',
+        'smell:polysemous_verb': '구체적 행동을 말하지 않는 동사',
+      },
+    },
     lede: 'AI 코딩 에이전트가 프롬프트를 얼마나 이해할 수 있는지, 모든 점수의 사유와 함께 채점합니다.',
     placeholder: '에이전트가 무엇을 하길 원하나요?\n\n예: src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.',
     label_prompt: '프롬프트',
@@ -350,7 +440,72 @@ function render(s) {
   $('axes').innerHTML =
     renderAxis(s.grounding, !s.grounding) +
     renderAxis(s.actionability) + renderAxis(s.clarity) + renderAxis(s.context);
+  paintMarks($('p').value, s.marks || []);
 }
+
+// --- marks -----------------------------------------------------------------
+// The engine reports byte ranges of the prompt; JavaScript strings are UTF-16.
+// Map each UTF-8 byte offset to the string index it starts at.
+function byteToCharMap(text) {
+  const map = [];
+  let b = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.codePointAt(i);
+    map[b] = i;
+    b += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+    if (c > 0xffff) i++;
+  }
+  map[b] = text.length;
+  return map;
+}
+
+function markLabel(m) {
+  const k = T().marks.kinds[m.kind];
+  if (typeof k === 'function') return k(m.count);
+  return k || m.note;
+}
+
+function paintMarks(text, marks) {
+  const map = byteToCharMap(text);
+  let html = '', at = 0;
+  const chips = [], seen = new Set();
+  for (const m of marks) {
+    const s = map[m.start], e = map[m.end];
+    if (s == null || e == null || s < at || e <= s) continue;
+    const term = text.slice(s, e);
+    html += escapeHtml(text.slice(at, s)) +
+      '<mark class="' + m.tone + '">' + escapeHtml(term) + '</mark>';
+    at = e;
+    const key = m.kind + '|' + term.toLowerCase();
+    if (m.kind === 'attachment' || seen.has(key)) continue;
+    seen.add(key);
+    chips.push('<span class="chip ' + m.tone + '"><b>' +
+      escapeHtml(term.length > 28 ? term.slice(0, 27) + '…' : term) + '</b> · ' +
+      escapeHtml(markLabel(m)) + '</span>');
+  }
+  html += escapeHtml(text.slice(at)) + '\n';
+  $('hl').innerHTML = html;
+  syncMarks();
+  const L = T().marks.legend;
+  $('legend').innerHTML = marks.length ? ['good', 'warn', 'bad'].map(t =>
+    '<span><i style="background:var(--m-' + t + ')"></i>' + escapeHtml(L[t]) + '</span>'
+  ).join('') : '';
+  $('chips').innerHTML = chips.slice(0, 30).join('');
+}
+
+function clearMarks() {
+  $('hl').innerHTML = ''; $('legend').innerHTML = ''; $('chips').innerHTML = '';
+}
+
+// Keep the painted layer under the same text: same scroll position, and the
+// same wrapping width once the textarea grows a scrollbar.
+function syncMarks() {
+  const ta = $('p'), hl = $('hl');
+  hl.scrollTop = ta.scrollTop;
+  const bar = Math.max(0, (ta.offsetWidth || 0) - (ta.clientWidth || 0) - 2);
+  hl.style.paddingRight = (12 + bar) + 'px';
+}
+$('p').addEventListener('scroll', syncMarks);
 
 function clearScore() {
   lastScore = null;
@@ -358,6 +513,7 @@ function clearScore() {
   $('total').textContent = '--'; $('grade').textContent = '';
   $('fill').style.width = '0'; $('flag').textContent = '';
   $('axes').innerHTML = '';
+  clearMarks();
 }
 
 function renderAttachments() {

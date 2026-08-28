@@ -220,8 +220,8 @@ fn handle(stream: &mut TcpStream, context: &Context) {
                 .flat_map(|p| p.attachments.iter().map(String::as_str))
                 .collect();
             let parts = match &parsed {
-                Some(parsed) => yp_core::prompt::from_parts(parsed.prompt.trim(), &attached),
-                None => yp_core::prompt::split(request.body.trim()),
+                Some(parsed) => yp_core::prompt::from_parts(&parsed.prompt, &attached),
+                None => yp_core::prompt::split(&request.body),
             };
 
             let Some(score) = yp_core::score_parts(&parts, context.corpus()) else {

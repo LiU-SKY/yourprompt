@@ -38,6 +38,9 @@ one place or forty, and whether you said what done looks like.
   input, same score, every time. Nothing leaves your machine.
 - **Explains itself.** `/score` prints every component with the reason it got
   that number.
+- **Shows it in place.** In the web UI the prompt is coloured as you type:
+  green where it earned points, yellow where it is unclear, red where it lost
+  them, with a chip per word saying why.
 - **English and Korean.**
 
 ## Try it

@@ -34,6 +34,22 @@ pub struct Parts<'a> {
     pub instruction: String,
     /// Pasted or uploaded material, in the order it appeared.
     pub attachments: Vec<&'a str>,
+    /// Where each attachment marker sits in `instruction`, and the bytes of
+    /// the original text it stands in for. Lets a span found in the
+    /// instruction be mapped back onto what the user actually has in front
+    /// of them.
+    cuts: Vec<Cut>,
+    /// Length of the text the instruction was cut from.
+    original_len: usize,
+}
+
+/// One place where the instruction departs from the original text.
+#[derive(Debug, Clone, Copy)]
+struct Cut {
+    /// Byte offset in `instruction` where the marker begins.
+    at: usize,
+    /// The region of the original text the marker replaces.
+    original: Span,
 }
 
 impl Parts<'_> {
@@ -44,6 +60,41 @@ impl Parts<'_> {
 
     pub fn has_attachments(&self) -> bool {
         !self.attachments.is_empty()
+    }
+
+    /// Map a byte range of the instruction back onto the original text.
+    ///
+    /// `None` when the range touches an attachment marker, which stands for
+    /// nothing the user wrote, or falls past the end of the original.
+    pub fn to_original(&self, span: Span) -> Option<Span> {
+        let marker_len = p::ATTACHMENT_MARKER.len();
+        let mut shift: isize = 0;
+        for cut in &self.cuts {
+            let marker = Span::new(cut.at, cut.at + marker_len);
+            if span.start >= marker.end {
+                shift += cut.original.len() as isize - marker_len as isize;
+                continue;
+            }
+            if span.overlaps(&marker) {
+                return None;
+            }
+            break;
+        }
+        let start = span.start as isize + shift;
+        let end = span.end as isize + shift;
+        if start < 0 || end > self.original_len as isize {
+            return None;
+        }
+        Some(Span::new(start as usize, end as usize))
+    }
+
+    /// The byte ranges of the original text that were taken as attachments.
+    pub fn attachment_spans(&self) -> Vec<Span> {
+        self.cuts
+            .iter()
+            .map(|c| c.original)
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 }
 
@@ -85,6 +136,7 @@ fn is_attachment(text: &str) -> bool {
 pub fn split(text: &str) -> Parts<'_> {
     let regions: Vec<Span> = yp_lang::token::code_regions(text);
     let mut attachments = Vec::new();
+    let mut cuts = Vec::new();
     let mut instruction = String::with_capacity(text.len());
     let mut cursor = 0usize;
 
@@ -96,6 +148,10 @@ pub fn split(text: &str) -> Parts<'_> {
         instruction.push_str(&text[cursor..region.start]);
         // A short stand-in, so the prompt still contains code evidence and the
         // sentence around the paste does not run into itself.
+        cuts.push(Cut {
+            at: instruction.len(),
+            original: region,
+        });
         instruction.push_str(p::ATTACHMENT_MARKER);
         cursor = region.end;
         attachments.push(strip_fence(body));
@@ -105,6 +161,8 @@ pub fn split(text: &str) -> Parts<'_> {
     Parts {
         instruction,
         attachments,
+        cuts,
+        original_len: text.len(),
     }
 }
 
@@ -112,14 +170,23 @@ pub fn split(text: &str) -> Parts<'_> {
 /// separated, as the web page does.
 pub fn from_parts<'a>(instruction: &str, attachments: &[&'a str]) -> Parts<'a> {
     let mut text = instruction.to_string();
+    let mut cuts = Vec::new();
     if !attachments.is_empty() {
-        // The instruction still counts as carrying evidence.
+        // The instruction still counts as carrying evidence. The marker
+        // stands for nothing in the caller's text, so it maps to an empty
+        // region at its end.
         text.push(' ');
+        cuts.push(Cut {
+            at: text.len(),
+            original: Span::new(instruction.len(), instruction.len()),
+        });
         text.push_str(p::ATTACHMENT_MARKER);
     }
     Parts {
         instruction: text,
         attachments: attachments.to_vec(),
+        cuts,
+        original_len: instruction.len(),
     }
 }
 

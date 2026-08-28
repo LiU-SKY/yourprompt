@@ -299,14 +299,18 @@ pub fn specificity(found: &[Referent], documents: usize) -> (f64, f64) {
 /// clear; one that opens with "fix it" and never names anything is not. So a
 /// deictic counts as dangling when no referent appears before it -- and when
 /// the prompt names nothing at all, every one of them dangles.
-fn dangling_deixis(pronouns: &[usize], referents: &[Referent]) -> usize {
-    let first_referent = referents
+/// The position of the first name the repository knows, if any: the earliest
+/// point from which a pronoun has something to point back at.
+pub fn first_anchor(referents: &[Referent]) -> Option<usize> {
+    referents
         .iter()
         .filter(|r| r.candidates().is_some_and(|c| c > 0))
         .map(|r| r.offset)
-        .min();
+        .min()
+}
 
-    match first_referent {
+fn dangling_deixis(pronouns: &[usize], referents: &[Referent]) -> usize {
+    match first_anchor(referents) {
         None => pronouns.len(),
         Some(first) => pronouns.iter().filter(|&&at| at < first).count(),
     }
