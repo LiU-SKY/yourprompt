@@ -355,6 +355,16 @@ const KO_FILLERS: &[&str] = &[
     "흠",
 ];
 
+/// True for ㅋ and ㅎ, the jamo Korean laughter is typed in.
+///
+/// "ㅋㅋㅋ" and "ㅎㅎ" are what "lol" is in English: a tone of voice, of any
+/// length, that asks for nothing. Read as words they counted: "버그 고쳐줘
+/// ㅋㅋ" scored 305.4 where "버그 고쳐줘" scores 249.2, and "넵 ㅎㅎ" was
+/// graded, 41.0, where "넵" is a reply.
+pub fn is_laughter(c: char) -> bool {
+    matches!(c, '\u{314B}' | '\u{314E}')
+}
+
 /// English courtesies and hesitation fillers. "fix the bug pls" asks for
 /// exactly what "fix the bug" asks for, and once scored 33 points higher for
 /// the extra word. Sorted, for binary search.
@@ -371,7 +381,10 @@ const EN_FILLERS: &[&str] = &[
 /// the way punctuation is: neither evidence for nor against.
 pub fn is_filler(token: &Token) -> bool {
     match token.kind {
-        TokenKind::Hangul => KO_FILLERS.binary_search(&token.text.as_str()).is_ok(),
+        TokenKind::Hangul => {
+            KO_FILLERS.binary_search(&token.text.as_str()).is_ok()
+                || token.text.chars().all(is_laughter)
+        }
         TokenKind::Word => EN_FILLERS
             .binary_search(&token.text.to_ascii_lowercase().as_str())
             .is_ok(),
@@ -517,5 +530,22 @@ mod tests {
         assert!(is_filler(&filler[0]));
         // Not punished as mash, not credited as language.
         assert_eq!(legible_share(&tokenize("음... 어... 음... 어...")), 0.0);
+    }
+
+    #[test]
+    fn laughter_is_a_filler_however_long() {
+        for text in ["ㅋ", "ㅋㅋ", "ㅎㅎㅎ", "ㅋㅋㅋㅎㅎ"] {
+            assert!(is_filler(&tokenize(text)[0]), "{text}");
+        }
+        // Other jamo are still a mashed keyboard, and a syllable makes the
+        // token a word.
+        for text in ["ㅁㄴㅇㄹ", "ㅋㅌㅊㅍ", "넵ㅎㅎ"] {
+            assert!(!is_filler(&tokenize(text)[0]), "{text}");
+        }
+        // Laughter after a request neither adds to it nor reads as mash.
+        assert_eq!(
+            legible_share(&tokenize("버그 고쳐줘 ㅋㅋ")),
+            legible_share(&tokenize("버그 고쳐줘"))
+        );
     }
 }
