@@ -186,6 +186,30 @@ impl RepoIndex {
             }
         }
 
+        // Directories, too: "add a test in crates/yp-cli" names one place,
+        // and used to be reported as "not in this repository". Only nested
+        // directories are added, so a top-level "src" or "docs" stays a prose
+        // word and is not promoted to a definition.
+        let mut dirs: HashMap<String, u32> = HashMap::new();
+        for (path, _) in files {
+            let text = path.to_lowercase();
+            let mut end = 0;
+            while let Some(i) = text[end..].find('/') {
+                end += i;
+                let dir = &text[..end];
+                if dir.contains('/') && dir.len() <= MAX_PATH_TERM {
+                    *dirs.entry(dir.to_string()).or_default() += 1;
+                }
+                end += 1;
+            }
+        }
+        for (dir, count) in dirs {
+            let entry = terms.entry(dir).or_default();
+            entry.df = entry.df.saturating_add(count);
+            entry.cf = entry.cf.saturating_add(count);
+            entry.def = entry.def.saturating_add(1);
+        }
+
         Self::from_terms(indexed, terms)
     }
 
@@ -367,6 +391,20 @@ mod tests {
         ] {
             assert!(index.lookup(missing).is_none(), "invented {missing:?}");
         }
+    }
+
+    #[test]
+    fn a_nested_directory_is_a_definition() {
+        let files = vec![
+            ("crates/yp-cli/src/main.rs".to_string(), String::new()),
+            ("crates/yp-cli/src/hook.rs".to_string(), String::new()),
+        ];
+        let index = RepoIndex::from_files(&files);
+        let dir = index.lookup("crates/yp-cli").expect("directory indexed");
+        assert_eq!(dir.def, 1);
+        assert_eq!(dir.df, 2);
+        // A top-level directory stays a prose word.
+        assert!(index.lookup("crates").is_none_or(|t| t.def == 0));
     }
 
     #[test]
