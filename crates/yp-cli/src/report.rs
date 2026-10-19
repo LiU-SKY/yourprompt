@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use yp_core::{Axis, Score};
+use yp_core::{Axis, Kind, Score};
 
 /// Width of the progress bars, in cells.
 const BAR_CELLS: usize = 10;
@@ -81,8 +81,25 @@ pub fn bar(ratio: f64) -> String {
     s
 }
 
+/// Why a prompt of this kind has no grade, or `None` for a task, which does.
+pub fn not_graded(kind: Kind, language: Option<&str>) -> Option<String> {
+    match kind {
+        Kind::Task => None,
+        Kind::Command => Some("slash command".to_string()),
+        Kind::FollowUp => Some("a follow-up like this leans on the conversation".to_string()),
+        Kind::Unsupported => Some(match language {
+            Some(name) => format!("looks like {name}; yourprompt reads English and Korean only"),
+            None => "looks like neither English nor Korean, the only languages yourprompt reads"
+                .to_string(),
+        }),
+    }
+}
+
 /// The one-line form, as it appears in the status line.
 pub fn one_line(score: &Score, style: &Style) -> String {
+    if let Some(why) = not_graded(score.kind, score.language) {
+        return style.dim(&format!("not graded: {why}"));
+    }
     let ratio = score.total / 1000.0;
     let head = format!(
         "{:.1} {} {}",
@@ -123,7 +140,14 @@ fn axis_block(axis: &Axis, style: &Style) -> String {
 ///
 /// Every sub-score is shown with the reason it came out that way. The model is
 /// meant to be argued with, which it cannot be if it only prints a number.
+///
+/// A prompt that is not a task gets one line saying why it was not graded,
+/// and no breakdown: a column of sub-scores reads as a grade whatever the
+/// heading says. `--json` still carries every number.
 pub fn full(score: &Score, style: &Style) -> String {
+    if let Some(why) = not_graded(score.kind, score.language) {
+        return format!("\n  {} {why}\n\n", style.bold("not graded:"));
+    }
     let ratio = score.total / 1000.0;
     let mut out = String::new();
 
@@ -191,6 +215,41 @@ mod tests {
     fn one_line_marks_a_renormalised_score() {
         let line = one_line(&score("refactor parse_args"), &Style::plain());
         assert!(line.ends_with(" ~"), "got {line:?}");
+    }
+
+    #[test]
+    fn a_prompt_that_is_not_a_task_says_why_instead_of_grading() {
+        for (text, why) in [
+            ("/compact keep the API notes", "slash command"),
+            ("ok do it", "follow-up"),
+            (
+                "arregla el bug en src/auth/login.rs para que verify_token devuelva \
+                 Err(AuthError::Expired). Los tests deben pasar.",
+                "looks like Spanish; yourprompt reads English and Korean only",
+            ),
+        ] {
+            let s = score(text);
+            let line = one_line(&s, &Style::plain());
+            assert!(line.starts_with("not graded: "), "got {line:?}");
+            assert!(line.contains(why), "got {line:?}");
+            assert_eq!(line.lines().count(), 1);
+
+            let report = full(&s, &Style::plain());
+            assert!(report.contains("not graded:"), "got {report}");
+            assert!(report.contains(why), "got {report}");
+            assert!(!report.contains("/ 1000"), "a grade leaked: {report}");
+            assert!(
+                !report.contains("actionability"),
+                "a breakdown leaked: {report}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unnamed_language_is_still_explained() {
+        let why = not_graded(Kind::Unsupported, None).unwrap();
+        assert!(why.contains("English") && why.contains("Korean"), "{why}");
+        assert_eq!(not_graded(Kind::Task, None), None);
     }
 
     #[test]

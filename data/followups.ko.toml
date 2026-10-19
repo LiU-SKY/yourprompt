@@ -1,0 +1,72 @@
+# Korean follow-up replies for yourprompt.
+#
+# Same groups as followups.en.toml, and the same rule: a prompt is a follow-up
+# only when every word in it is covered by these terms, fillers ("음", "제발"),
+# punctuation and emoji aside. One word from outside the list and it is a task
+# again, graded exactly as before.
+#
+# Korean is matched a character at a time, with spaces ignored, so that
+# "계속해줘", "계속 해줘" and "계속해 줘" are one reply -- casual spacing is
+# not something a follow-up should depend on. It also means stems and endings
+# combine: "계속" + "해줘", "진행" + "해주세요", "다시" + "해줘". Endings are
+# listed once, under the group they most often close.
+#
+# No term may name work on its own or point at something: "그거 다시 해줘"
+# has to stay a task, so "그거", "이거" and "그렇게" are absent, and so are
+# verbs like "고쳐" and "추가해". "재시도" is also an action verb in
+# cues.ko.toml; alone it can only mean the last thing again.
+#
+# "#" stands for a choice number of one or two digits: "2", "2번".
+
+lang = "ko"
+
+[[reply]]
+id = "affirm"
+terms = [
+  "응", "웅", "엉", "ㅇ", "ㅇㅇ", "네", "넵", "넹", "예", "옙", "ㅇㅋ",
+  "오케이", "오키", "콜", "굿", "그래", "그래요", "좋아", "좋아요",
+  "좋습니다", "좋네", "좋네요", "좋다", "알겠어", "알겠어요", "알겠습니다",
+  "알았어", "알았어요", "맞아", "맞아요", "맞습니다", "괜찮아", "괜찮아요",
+  "완벽해", "최고",
+]
+
+[[reply]]
+id = "decline"
+terms = ["아니", "아니야", "아니요", "아뇨", "노", "놉", "ㄴㄴ", "아직", "나중에", "됐어", "됐어요"]
+
+[[reply]]
+id = "proceed"
+terms = [
+  "계속", "진행", "고", "고고", "ㄱㄱ", "가자", "다음",
+  "해", "해줘", "해요", "해주세요", "하자", "하세요", "해봐", "해보자", "하시죠",
+  "시켜", "시켜줘",
+]
+
+[[reply]]
+id = "halt"
+terms = [
+  "멈춰", "그만", "그만둬", "잠깐", "잠깐만", "잠시만", "취소", "중지", "중단", "스톱",
+  "하지 마",
+]
+
+[[reply]]
+id = "retry"
+terms = ["다시", "재시도", "다시 시도", "한 번 더", "또"]
+
+[[reply]]
+id = "thank"
+terms = [
+  "고마워", "고마워요", "고맙습니다", "감사", "감사합니다", "땡큐", "ㄳ", "ㄱㅅ",
+  "수고했어", "수고했어요", "수고하셨습니다", "잘했어", "잘했어요",
+]
+
+[[reply]]
+id = "choose"
+terms = [
+  "#", "#번", "#번째", "#번으로", "#번이요", "둘 다", "첫 번째", "두 번째",
+  "세 번째", "마지막", "아무거나",
+]
+
+[[reply]]
+id = "join"
+terms = ["그리고", "그럼", "그냥", "이제", "일단"]

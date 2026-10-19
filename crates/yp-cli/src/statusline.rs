@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::process::{Command, ExitCode, Stdio};
 
 use serde::Deserialize;
+use yp_core::Kind;
 
 use crate::report::{bar, Style};
 use crate::session::{self, Sidecar};
@@ -33,8 +34,23 @@ fn trend(sidecar: &Sidecar) -> &'static str {
     }
 }
 
+/// What the segment says in place of a number for a prompt it did not grade.
+fn ungraded(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Unsupported => "not graded · EN/KO only",
+        // Commands and follow-ups are never recorded, so they never get here.
+        _ => "not graded",
+    }
+}
+
 /// The segment this tool contributes, e.g. `⟦ 742.3 ▓▓▓▓▓▓▓░░░ A- ▲ ⟧`.
 pub fn segment(sidecar: &Sidecar, style: &Style) -> String {
+    if !sidecar.latest.is_graded() {
+        // Showing the previous task's number here would pass it off as this
+        // prompt's, and grading a language the lexicons cannot read would be
+        // an F that measures the lexicons. So: why there is no number.
+        return style.dim(&format!("⟦ {} ⟧", ungraded(sidecar.latest.kind)));
+    }
     let ratio = sidecar.latest.total / 1000.0;
     let body = format!(
         "{:.1} {} {} {}",
@@ -134,7 +150,51 @@ mod tests {
             grade: "A-".into(),
             renormalized,
             prompt_chars: 40,
+            kind: Kind::Task,
+            language: None,
         }
+    }
+
+    fn unsupported(total: f64) -> Entry {
+        Entry {
+            kind: Kind::Unsupported,
+            language: Some("Spanish".into()),
+            grade: "F".into(),
+            ..entry(total, true)
+        }
+    }
+
+    #[test]
+    fn an_unsupported_prompt_says_why_instead_of_showing_a_number() {
+        let mut s = sidecar(742.3, vec![600.0]);
+        s.latest = unsupported(149.1);
+        let text = segment(&s, &Style::plain());
+        assert_eq!(text, "⟦ not graded · EN/KO only ⟧");
+        assert_eq!(text.lines().count(), 1);
+        assert!(!text.contains(|c: char| c.is_ascii_digit()), "got {text}");
+        assert!(!text.contains('▓') && !text.contains('░'), "got {text}");
+        assert!(!text.ends_with('~'), "got {text}");
+    }
+
+    #[test]
+    fn an_unsupported_prompt_is_dim_when_coloured() {
+        let mut s = sidecar(742.3, vec![]);
+        s.latest = unsupported(149.1);
+        let text = segment(&s, &Style::forced());
+        if std::env::var_os("NO_COLOR").is_none() {
+            assert!(text.starts_with("\x1b[2m"), "got {text:?}");
+        }
+    }
+
+    #[test]
+    fn the_trend_skips_an_ungraded_prompt() {
+        // 500 after a 700 task is down, whatever the unsupported prompt in
+        // between happened to score.
+        let mut s = sidecar(500.0, vec![]);
+        s.history = vec![unsupported(100.0), entry(700.0, true)];
+        assert_eq!(trend(&s), "▼");
+        s.history = vec![unsupported(900.0)];
+        assert_eq!(trend(&s), " ");
     }
 
     fn sidecar(latest: f64, history: Vec<f64>) -> Sidecar {

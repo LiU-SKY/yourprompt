@@ -2,10 +2,13 @@
 //! dictionary matcher that finds smell and cue occurrences in a prompt.
 //!
 //! This crate holds everything language-specific so that `yp-core` can stay a
-//! pure scoring engine. Adding a language means adding two TOML files here, not
-//! touching the scorer.
+//! pure scoring engine. Adding a language means adding its TOML files here --
+//! cues, smells and follow-up replies -- and taking it off the list of
+//! languages [`foreign`] reports as unread, not touching the scorer.
 
 pub mod cues;
+pub mod followup;
+pub mod foreign;
 pub mod legible;
 pub mod lexicon;
 pub mod matcher;
@@ -13,6 +16,8 @@ pub mod span;
 pub mod token;
 
 pub use cues::{CueId, Cues};
+pub use followup::FollowUps;
+pub use foreign::Foreign;
 pub use legible::{is_filler, is_legible, legible_share};
 pub use lexicon::{Lexicon, SmellId};
 pub use matcher::{Hit, Matcher, SmellHit, TermTable};
@@ -27,6 +32,9 @@ pub struct Resources {
     pub smells: Matcher<SmellId>,
     pub cues: Cues,
     pub cue_matcher: Matcher<CueId>,
+    /// Replies that only make sense inside a conversation, which are not
+    /// graded at all.
+    pub follow_ups: FollowUps,
 }
 
 static RESOURCES: OnceCell<Option<Resources>> = OnceCell::new();
@@ -44,11 +52,13 @@ pub fn resources() -> Option<&'static Resources> {
             let smells = Matcher::new(&lexicon.table).ok()?;
             let cues = cues::load_bundled().ok()?;
             let cue_matcher = Matcher::new(&cues.table).ok()?;
+            let follow_ups = followup::load_bundled().ok()?;
             Some(Resources {
                 lexicon,
                 smells,
                 cues,
                 cue_matcher,
+                follow_ups,
             })
         })
         .as_ref()
@@ -65,6 +75,7 @@ mod tests {
         assert!(!r.cues.table.is_empty());
         assert!(!r.smells.find("just make it nicer").is_empty());
         assert!(!r.cue_matcher.find("refactor the parser").is_empty());
+        assert!(r.follow_ups.is_follow_up(&tokenize("ok do it")));
     }
 
     #[test]

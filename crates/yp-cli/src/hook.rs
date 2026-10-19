@@ -16,11 +16,22 @@
 //! prompt* and erase it; any other non-zero code puts an error notice in their
 //! transcript. A scoring tool has no business doing either, so every error
 //! path here ends in a silent `ExitCode::SUCCESS`.
+//!
+//! # What is recorded
+//!
+//! Only what the status line should report. A slash command and a follow-up
+//! such as "continue" are skipped entirely: in a live session "continue",
+//! "yes" and "ok do it" each replaced the last task's score with an F, and
+//! `/score` -- which reaches this hook before Claude Code expands it -- was
+//! recorded and then explained in place of the prompt the user asked about.
+//! A prompt in a language the lexicons cannot read is recorded with its kind,
+//! so the status line can say it was not graded.
 
 use std::io::Read;
 use std::process::ExitCode;
 
 use serde::Deserialize;
+use yp_core::Kind;
 
 use crate::session;
 
@@ -84,6 +95,18 @@ pub fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // Classified before the index is loaded, so a "yes" costs no file read.
+    // The sidecar keeps the last task, which is what the status line and
+    // `/score` should still be showing.
+    let (kind, _) = yp_core::kind_of(&input.prompt);
+    if matches!(kind, Kind::Command | Kind::FollowUp) {
+        debug(&format!(
+            "session={} kind={kind:?}; not recorded",
+            input.session_id
+        ));
+        return ExitCode::SUCCESS;
+    }
+
     // Load the index if one exists; never build it. Indexing a large
     // repository takes seconds, and nothing here may delay a prompt.
     let cwd = if input.cwd.is_empty() {
@@ -106,8 +129,8 @@ pub fn run() -> ExitCode {
 
     let entry = session::Entry::from_score(&score, &input.prompt);
     debug(&format!(
-        "session={} total={} grade={}",
-        input.session_id, entry.total, entry.grade
+        "session={} kind={:?} total={} grade={}",
+        input.session_id, entry.kind, entry.total, entry.grade
     ));
 
     if let Err(e) = session::record(&input.session_id, &input.cwd, &input.prompt, entry) {

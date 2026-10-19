@@ -1,0 +1,81 @@
+# English follow-up replies for yourprompt.
+#
+# A follow-up is a reply that only makes sense inside a running conversation:
+# "yes", "continue", "ok do it". It names nothing and asks for nothing the
+# previous turn did not already ask for, so grading it grades the
+# conversation, not the prompt. In a live session "continue" scored 0.0,
+# "yes" 15.1 and "ok do it" 24.5, and each one replaced a real task's score
+# with an F. Follow-ups are not graded and not recorded.
+#
+# A prompt is a follow-up only when *every* word in it is covered by these
+# terms. Fillers ("please", "hmm"), punctuation and emoji are skipped; any
+# other word -- a name, a path, an action verb, a pronoun that points at
+# something -- makes it a task again, graded exactly as before. So:
+#   - No term may name work on its own. "fix", "test" and "commit" are absent
+#     on purpose, and "it" appears only inside the fixed phrase "do it".
+#     "do that" is absent too: "그거 다시 해줘" has to stay a task, and
+#     "do that again" is its English twin.
+#   - "retry" is also an action verb in cues.en.toml. Alone it can only mean
+#     the last thing again; with an object ("retry the upload") it is a task.
+#
+# Terms are matched word by word, case-insensitively. "#" stands for a choice
+# number of one or two digits: "2", "option 2".
+#
+# The ids only group the terms for the reader; matching treats them alike.
+# followups.ko.toml keeps the same ids, so a group added here gets its Korean
+# counterpart there.
+
+lang = "en"
+
+[[reply]]
+id = "affirm"
+terms = [
+  "yes", "y", "yeah", "yea", "yep", "yup", "ya", "sure", "sure thing",
+  "ok", "okay", "k", "kk", "alright", "all right", "right", "exactly",
+  "agreed", "absolutely", "of course", "sounds good", "looks good", "lgtm",
+  "good", "great", "perfect", "nice", "cool", "awesome", "fine",
+  "that works", "works for me", "that's fine", "that's right",
+  "makes sense", "got it", "understood", "noted",
+]
+
+[[reply]]
+id = "decline"
+terms = ["no", "n", "nope", "nah", "not yet", "not now", "no thanks"]
+
+[[reply]]
+id = "proceed"
+terms = [
+  "continue", "proceed", "go", "go ahead", "go on", "keep going",
+  "carry on", "resume", "next", "do it", "go for it", "let's go", "lets go",
+]
+
+[[reply]]
+id = "halt"
+terms = [
+  "stop", "wait", "hold on", "hang on", "cancel", "abort", "pause",
+  "never mind", "nevermind", "nvm", "don't", "dont", "do not",
+]
+
+[[reply]]
+id = "retry"
+terms = ["again", "try again", "retry", "redo", "one more time", "once more"]
+
+[[reply]]
+id = "thank"
+terms = [
+  "thanks", "thank you", "thx", "ty", "tysm", "cheers", "appreciate it",
+  "much appreciated", "good job", "great job", "nice job", "nice work",
+  "well done",
+]
+
+[[reply]]
+id = "choose"
+terms = [
+  "#", "option #", "number #", "both", "either", "either one", "neither",
+  "first one", "second one", "third one", "the first one",
+  "the second one", "the third one", "go with",
+]
+
+[[reply]]
+id = "join"
+terms = ["and", "then", "and then", "just", "now"]

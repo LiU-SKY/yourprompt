@@ -84,6 +84,41 @@ fn json_output_is_valid_and_carries_every_axis() {
     // unavailable and the rest are rescaled.
     assert!(value["grounding"].is_null(), "should be ungrounded here");
     assert_eq!(value["renormalized"], true);
+    assert_eq!(value["kind"], "task");
+    assert!(value["language"].is_null());
+}
+
+/// The showcase prompt in Spanish, which scored 149.1 (F) when it was graded.
+const SPANISH: &str = "arregla el bug en src/auth/login.rs para que verify_token devuelva \
+                       Err(AuthError::Expired). Los tests deben pasar.";
+
+#[test]
+fn score_says_why_a_prompt_is_not_graded() {
+    for (prompt, why, kind) in [
+        ("yes", "follow-up", "follow_up"),
+        ("/compact keep the API notes", "slash command", "command"),
+        (SPANISH, "looks like Spanish", "unsupported"),
+    ] {
+        let out = run(&["score", prompt]);
+        assert!(out.status.success(), "stderr: {:?}", out.stderr);
+        let text = stdout(&out);
+        assert!(text.contains("not graded"), "{prompt}: {text}");
+        assert!(text.contains(why), "{prompt}: {text}");
+        assert!(!text.contains("/ 1000"), "{prompt} was graded: {text}");
+
+        let oneline = stdout(&run(&["score", "--oneline", prompt]));
+        assert_eq!(oneline.lines().count(), 1, "got {oneline:?}");
+        assert!(oneline.contains("not graded"), "got {oneline:?}");
+
+        // The number is still computed; consumers decide what to show.
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout(&run(&["score", "--json", prompt]))).unwrap();
+        assert_eq!(json["kind"], kind, "{prompt}");
+        assert!(json["total"].is_number(), "{prompt}");
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&["score", "--json", SPANISH]))).unwrap();
+    assert_eq!(json["language"], "Spanish");
 }
 
 #[test]
@@ -322,6 +357,111 @@ fn the_status_line_shows_the_trend_across_prompts() {
     );
     let line = stdout(&out);
     assert!(line.contains('▲'), "score went up, expected ▲ in {line:?}");
+}
+
+fn sidecar_of(state: &std::path::Path, session: &str) -> serde_json::Value {
+    let path = state.join("sessions").join(format!("{session}.json"));
+    serde_json::from_str(&std::fs::read_to_string(path).expect("sidecar")).expect("valid JSON")
+}
+
+#[test]
+fn commands_and_follow_ups_leave_the_last_task_in_place() {
+    // "continue", "yes" and "ok do it" each used to replace the last task's
+    // score with an F, and "/score" -- seen here before Claude Code expands
+    // it -- was recorded and then explained instead of the real prompt.
+    let scratch = Scratch::new("not-recorded");
+    let session = "kinds-session";
+    let task = "refactor parse_args in src/cli.rs so it returns Config";
+    run_isolated(scratch.path(), &["hook"], &hook_payload(task, session));
+
+    for prompt in [
+        "/score",
+        "continue",
+        "yes",
+        "ok do it",
+        "응 계속해줘",
+        "/compact keep the API notes",
+    ] {
+        let out = run_isolated(scratch.path(), &["hook"], &hook_payload(prompt, session));
+        assert_eq!(out.status.code(), Some(0), "{prompt}");
+        assert_eq!(out.stdout.len(), 0, "{prompt}");
+    }
+
+    let sidecar = sidecar_of(scratch.path(), session);
+    assert_eq!(sidecar["latest_prompt"], task);
+    assert_eq!(sidecar["latest"]["kind"], "task");
+    assert!(sidecar["history"].as_array().unwrap().is_empty());
+
+    let line = stdout(&run_isolated(
+        scratch.path(),
+        &["statusline"],
+        &format!("{{\"session_id\": \"{session}\"}}"),
+    ));
+    assert!(line.contains('▓') || line.contains('░'), "got {line:?}");
+
+    let explained = stdout(&run_isolated(
+        scratch.path(),
+        &["explain", "--no-color", "--session", session],
+        "",
+    ));
+    assert!(explained.contains("/ 1000"), "got {explained}");
+    assert!(explained.contains("objective"), "got {explained}");
+}
+
+#[test]
+fn a_prompt_in_another_language_is_recorded_but_not_graded() {
+    let scratch = Scratch::new("unsupported");
+    let session = "unsupported-session";
+    run_isolated(
+        scratch.path(),
+        &["hook"],
+        &hook_payload("refactor parse_args in src/cli.rs", session),
+    );
+    run_isolated(scratch.path(), &["hook"], &hook_payload(SPANISH, session));
+
+    let sidecar = sidecar_of(scratch.path(), session);
+    assert_eq!(sidecar["latest"]["kind"], "unsupported");
+    assert_eq!(sidecar["latest"]["language"], "Spanish");
+
+    let line = stdout(&run_isolated(
+        scratch.path(),
+        &["statusline"],
+        &format!("{{\"session_id\": \"{session}\"}}"),
+    ));
+    assert!(line.contains("not graded"), "got {line:?}");
+    assert_eq!(line.lines().count(), 1, "got {line:?}");
+    assert!(!line.contains('▓') && !line.contains('░'), "got {line:?}");
+
+    let explained = stdout(&run_isolated(
+        scratch.path(),
+        &["explain", "--no-color", "--session", session],
+        "",
+    ));
+    assert!(explained.contains("not graded"), "got {explained}");
+    assert!(explained.contains("Spanish"), "got {explained}");
+    assert!(explained.contains("last graded prompt"), "got {explained}");
+}
+
+#[test]
+fn the_trend_ignores_a_prompt_that_was_not_graded() {
+    // High, then unsupported, then lower than the first: that is down, even
+    // though it is up on the Spanish prompt's ungraded 149.1.
+    let scratch = Scratch::new("trend-skip");
+    let session = "trend-skip-session";
+    for prompt in [
+        "fix verify_token in src/auth/login.rs so it returns \
+         Err(AuthError::Expired) instead of panicking; tests/auth.rs must pass",
+        SPANISH,
+        "fix the login handler",
+    ] {
+        run_isolated(scratch.path(), &["hook"], &hook_payload(prompt, session));
+    }
+    let line = stdout(&run_isolated(
+        scratch.path(),
+        &["statusline"],
+        &format!("{{\"session_id\": \"{session}\"}}"),
+    ));
+    assert!(line.contains('▼'), "expected ▼ in {line:?}");
 }
 
 #[test]

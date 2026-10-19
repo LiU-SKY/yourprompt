@@ -14,9 +14,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use yp_core::Score;
+use yp_core::{Kind, Score};
 
 /// Bump when the on-disk shape changes in a way older readers cannot handle.
+///
+/// Still 1 after `kind` and `language` were added to [`Entry`]: both default
+/// when absent, so sidecars written before them load as the tasks they were,
+/// and older readers ignore fields they do not know.
 pub const SIDECAR_VERSION: u32 = 1;
 
 /// How many past scores to keep, for trend display.
@@ -48,6 +52,15 @@ pub struct Entry {
     /// Length of the prompt in characters, for debugging and for the
     /// eventual session report.
     pub prompt_chars: usize,
+    /// What the prompt was. Commands and follow-ups are never recorded, so
+    /// this is a task, or an unsupported prompt the status line has to say
+    /// it did not grade.
+    #[serde(default)]
+    pub kind: Kind,
+    /// The language an unsupported prompt looked like, when that could be
+    /// told.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl Entry {
@@ -57,7 +70,15 @@ impl Entry {
             grade: score.grade.to_string(),
             renormalized: score.renormalized,
             prompt_chars: prompt.chars().count(),
+            kind: score.kind,
+            language: score.language.map(str::to_string),
         }
+    }
+
+    /// True when `total` and `grade` describe the prompt. They are stored
+    /// for every entry, but only a task's are meant to be shown.
+    pub fn is_graded(&self) -> bool {
+        self.kind.is_graded()
     }
 }
 
@@ -85,9 +106,12 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
-    /// The previous score in this session, if there is one.
+    /// The previous graded score in this session, if there is one.
+    ///
+    /// An ungraded entry has no number worth comparing against, so the trend
+    /// arrow and `yp explain` look past it to the last task.
     pub fn previous(&self) -> Option<&Entry> {
-        self.history.first()
+        self.history.iter().find(|entry| entry.is_graded())
     }
 }
 
@@ -324,7 +348,43 @@ mod tests {
             grade: "B".into(),
             renormalized: true,
             prompt_chars: 10,
+            kind: Kind::Task,
+            language: None,
         }
+    }
+
+    #[test]
+    fn a_sidecar_written_before_kinds_existed_still_loads() {
+        // v0.1.0 wrote entries with no kind; every one of them was graded,
+        // so each must come back as a task rather than fail to parse.
+        let _s = Scratch::new("pre-kind");
+        let dir = sessions_dir().unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        let old = r#"{"version":1,"session_id":"old","updated_unix":1,"cwd":"",
+            "latest":{"total":512.3,"grade":"C","renormalized":true,"prompt_chars":9},
+            "latest_prompt":"fix it","prompt_truncated":false,
+            "history":[{"total":208.0,"grade":"F","renormalized":true,"prompt_chars":6}]}"#;
+        fs::write(dir.join("old.json"), old).unwrap();
+
+        let loaded = load("old").expect("an old sidecar must still load");
+        assert_eq!(loaded.latest.kind, Kind::Task);
+        assert_eq!(loaded.latest.language, None);
+        assert_eq!(loaded.previous().unwrap().total, 208.0);
+    }
+
+    #[test]
+    fn the_previous_score_skips_an_ungraded_prompt() {
+        let _s = Scratch::new("skip-ungraded");
+        record("s", "", "fix the parser", entry(300.0)).unwrap();
+        let mut unsupported = entry(149.1);
+        unsupported.kind = Kind::Unsupported;
+        unsupported.language = Some("Spanish".into());
+        record("s", "", "arregla el bug", unsupported).unwrap();
+        record("s", "", "fix the parser in src/cli.rs", entry(500.0)).unwrap();
+
+        let loaded = load("s").unwrap();
+        assert_eq!(loaded.history[0].kind, Kind::Unsupported);
+        assert_eq!(loaded.previous().unwrap().total, 300.0);
     }
 
     #[test]
