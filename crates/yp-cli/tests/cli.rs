@@ -22,19 +22,27 @@ fn shared_state() -> std::path::PathBuf {
     dir
 }
 
-fn run(args: &[&str]) -> Output {
-    Command::new(YP)
-        .args(args)
+/// `yp`, with nothing from the caller's environment that would change which
+/// session it reads: run inside Claude Code, as these tests may be,
+/// CLAUDE_CODE_SESSION_ID names the session that is running them.
+fn yp() -> Command {
+    let mut command = Command::new(YP);
+    command
         .env("NO_COLOR", "1")
+        .env_remove("CLAUDE_CODE_SESSION_ID");
+    command
+}
+
+fn run(args: &[&str]) -> Output {
+    yp().args(args)
         .env("YP_STATE_DIR", shared_state())
         .output()
         .expect("failed to run yp")
 }
 
 fn run_with_stdin(args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(YP)
+    let mut child = yp()
         .args(args)
-        .env("NO_COLOR", "1")
         .env("YP_STATE_DIR", shared_state())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -184,9 +192,8 @@ fn conflicting_output_flags_are_rejected() {
 /// Run `yp` with an isolated state directory, so hook/statusline tests never
 /// touch the real `~/.claude` and never collide with each other.
 fn run_isolated(state: &std::path::Path, args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(YP)
+    let mut child = yp()
         .args(args)
-        .env("NO_COLOR", "1")
         .env("YP_STATE_DIR", state)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -724,4 +731,628 @@ fn an_unreadable_index_is_refused_rather_than_silently_ignored() {
     );
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("could not read an index"));
+}
+
+/// Mark `dir` as a repository root without making it a repository. yp only
+/// looks for `.git`; git refuses a `.git` file that points nowhere, so the
+/// index is built by yp's own walk rather than from whatever repository
+/// happens to enclose the temporary directory.
+fn mark_as_root(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(".git"), "gitdir: nowhere\n").unwrap();
+}
+
+#[test]
+fn one_directory_spelt_another_way_still_finds_its_index() {
+    // Indexed as Git Bash types the path, then scored from a hook payload
+    // spelling it the Windows way: 529.8 grounded became 356.4 ungrounded.
+    let scratch = Scratch::new("spelling");
+    let project = scratch.path().join("project");
+    mark_as_root(&project);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("src").join("auth.rs"),
+        "pub fn verify_token(token: &str) -> bool { !token.is_empty() }\n",
+    )
+    .unwrap();
+    let state = scratch.path().join("state");
+    let text = project.to_string_lossy().into_owned();
+    let (indexed_as, scored_from) = if cfg!(windows) {
+        let lower_drive = text[..1].to_ascii_lowercase() + &text[1..];
+        (text.replace('\\', "/"), format!("{lower_drive}\\"))
+    } else {
+        (format!("{text}/"), format!("{text}/./"))
+    };
+
+    let out = run_isolated(&state, &["index", "--root", &indexed_as], "");
+    assert!(out.status.success(), "stderr: {:?}", out.stderr);
+    let payload = serde_json::json!({
+        "session_id": "spelling",
+        "cwd": scored_from,
+        "prompt": "fix verify_token in src/auth.rs so it rejects an empty token",
+    });
+    run_isolated(&state, &["hook"], &payload.to_string());
+    let sidecar = sidecar_of(&state, "spelling");
+    assert_eq!(sidecar["latest"]["renormalized"], false, "{sidecar}");
+    let indexes = std::fs::read_dir(state.join("index")).unwrap().count();
+    assert_eq!(indexes, 1);
+}
+
+#[test]
+fn an_index_named_before_roots_were_canonical_is_still_found() {
+    // An upgrade must not cost grounding until the next rebuild. Earlier
+    // versions named an index after the root exactly as it was spelt, here
+    // with a trailing separator.
+    let scratch = Scratch::new("old-index-name");
+    let project = scratch.path().join("project");
+    mark_as_root(&project);
+    std::fs::write(
+        project.join("auth.rs"),
+        "pub fn verify_token(token: &str) -> bool { !token.is_empty() }\n",
+    )
+    .unwrap();
+    let state = scratch.path().join("state");
+    let out = run_isolated(&state, &["index", "--root", &project.to_string_lossy()], "");
+    assert!(out.status.success(), "{out:?}");
+
+    let spelt = format!("{}{}", project.to_string_lossy(), std::path::MAIN_SEPARATOR);
+    let index_dir = state.join("index");
+    let built = std::fs::read_dir(&index_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let earlier = index_dir.join(yp_index::index_file_name(std::path::Path::new(&spelt)));
+    assert_ne!(built, earlier);
+    std::fs::rename(&built, &earlier).unwrap();
+
+    let payload = serde_json::json!({
+        "session_id": "old-name",
+        "cwd": spelt,
+        "prompt": "fix verify_token in auth.rs so it rejects an empty token",
+    });
+    run_isolated(&state, &["hook"], &payload.to_string());
+    let sidecar = sidecar_of(&state, "old-name");
+    assert_eq!(sidecar["latest"]["renormalized"], false, "{sidecar}");
+}
+
+#[test]
+fn a_home_directory_under_git_is_not_indexed() {
+    // With a .git in the home directory, a session opened anywhere below it
+    // used to index up to 20,000 home files.
+    let scratch = Scratch::new("home-git");
+    let home = scratch.path().join("home");
+    let downloads = home.join("Downloads");
+    mark_as_root(&home);
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::write(home.join("notes.txt"), "fn something_at_home() {}\n").unwrap();
+    std::fs::write(downloads.join("a.rs"), "fn downloaded() {}\n").unwrap();
+    let state = scratch.path().join("state");
+
+    let index = |cwd: &std::path::Path, quiet: bool| {
+        let mut command = yp();
+        command.arg("index").current_dir(cwd);
+        if quiet {
+            command.arg("--quiet");
+        }
+        command
+            .env("YP_STATE_DIR", &state)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .output()
+            .unwrap()
+    };
+
+    let out = index(&home, false);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("home directory"),
+        "{out:?}"
+    );
+    assert!(!state.join("index").exists(), "home was indexed");
+    let quiet = index(&home, true);
+    assert!(quiet.status.success());
+    assert!(
+        quiet.stdout.is_empty() && quiet.stderr.is_empty(),
+        "{quiet:?}"
+    );
+
+    // Below home, the directory itself is indexed, not home.
+    let out = index(&downloads, false);
+    assert!(out.status.success(), "{out:?}");
+    let said = stdout(&out);
+    assert!(said.contains("indexed 1 files"), "{said}");
+    assert!(said.trim_end().ends_with("Downloads"), "{said}");
+}
+
+// ---------------------------------------------------------------------------
+// /score picks the session it is typed in
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explain_explains_the_session_claude_code_says_it_is_in() {
+    // Two sessions in one repository: /score typed in the first used to
+    // explain the second's "fix the bug", because it was written last.
+    let scratch = Scratch::new("explain-session");
+    let task = "refactor parse_args in src/cli.rs so it returns Config";
+    run_isolated(scratch.path(), &["hook"], &hook_payload(task, "sess-A"));
+    run_isolated(
+        scratch.path(),
+        &["hook"],
+        &hook_payload("fix the bug", "sess-B"),
+    );
+    let total = |session: &str| {
+        let total = sidecar_of(scratch.path(), session)["latest"]["total"]
+            .as_f64()
+            .unwrap();
+        format!("{total:.1} / 1000")
+    };
+
+    let explain_in = |session: &str| {
+        let out = yp()
+            .args(["explain", "--no-color"])
+            .env("YP_STATE_DIR", scratch.path())
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .output()
+            .unwrap();
+        stdout(&out)
+    };
+    let a = explain_in("sess-A");
+    assert!(a.contains(&total("sess-A")), "{a}");
+    assert!(!a.contains(&total("sess-B")), "{a}");
+    assert!(explain_in("sess-B").contains(&total("sess-B")));
+
+    let none = explain_in("sess-never-prompted");
+    assert!(
+        none.contains("No scored prompt found yet in this session"),
+        "{none}"
+    );
+}
+
+#[test]
+fn explain_says_when_the_score_did_not_move() {
+    // The status line showed "·" while explain said "down 0.0".
+    let scratch = Scratch::new("explain-same");
+    let task = "In crates/yp-cli/src/hook.rs, change run so it skips scoring when the \
+                prompt is longer than 64 KB. Done means: cargo test -p yp-cli passes.";
+    for _ in 0..2 {
+        run_isolated(scratch.path(), &["hook"], &hook_payload(task, "same"));
+    }
+    let text = stdout(&run_isolated(
+        scratch.path(),
+        &["explain", "--no-color", "--session", "same"],
+        "",
+    ));
+    assert!(
+        text.contains("same as your previous prompt in this session"),
+        "{text}"
+    );
+    assert!(!text.contains("down 0.0"), "{text}");
+}
+
+// ---------------------------------------------------------------------------
+// yp install, as Claude Code runs what it writes
+// ---------------------------------------------------------------------------
+
+/// The shell Claude Code hands command strings to here: `sh` on macOS and
+/// Linux, Git Bash on Windows, found the way `yp` finds it. `None` on Windows
+/// without Git Bash.
+fn claude_shell() -> Option<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    if !cfg!(windows) {
+        return Some(PathBuf::from("sh"));
+    }
+    if let Some(bash) = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from) {
+        if bash.is_file() {
+            return Some(bash);
+        }
+    }
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        if !dir.join("git.exe").is_file() {
+            continue;
+        }
+        for root in [dir.parent().and_then(Path::parent), dir.parent()]
+            .into_iter()
+            .flatten()
+        {
+            let bash = root.join("bin").join("bash.exe");
+            if bash.is_file() {
+                return Some(bash);
+            }
+        }
+    }
+    let bash = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+    bash.is_file().then_some(bash)
+}
+
+/// Every shell a generated command must run in here: Claude Code's, and
+/// bash as well where `sh` is something else.
+fn shells() -> Vec<std::path::PathBuf> {
+    let mut shells: Vec<_> = claude_shell().into_iter().collect();
+    let bash_too = !cfg!(windows)
+        && Command::new("bash")
+            .args(["-c", "true"])
+            .status()
+            .is_ok_and(|s| s.success());
+    if bash_too {
+        shells.push("bash".into());
+    }
+    shells
+}
+
+/// An isolated Claude Code configuration: a settings directory, a state
+/// directory and a home, all scratch, and a copy of yp in a directory whose
+/// name needs quoting, as `C:\Users\John Smith` does.
+struct Setup {
+    _scratch: Scratch,
+    config: std::path::PathBuf,
+    state: std::path::PathBuf,
+    home: std::path::PathBuf,
+    project: std::path::PathBuf,
+    yp: std::path::PathBuf,
+}
+
+impl Setup {
+    fn new(name: &str) -> Self {
+        Setup::with_bin(name, "yp's bin")
+    }
+
+    /// The same, with yp in a directory called `bin`.
+    fn with_bin(name: &str, bin: &str) -> Self {
+        let scratch = Scratch::new(name);
+        let base = scratch.path().to_path_buf();
+        let bin = base.join(bin);
+        let project = base.join("project");
+        for dir in ["config", "state", "home"] {
+            std::fs::create_dir_all(base.join(dir)).unwrap();
+        }
+        std::fs::create_dir_all(&bin).unwrap();
+        mark_as_root(&project);
+        std::fs::write(project.join("lib.rs"), "pub fn parse_args() {}\n").unwrap();
+        let yp = bin.join(std::path::Path::new(YP).file_name().unwrap());
+        std::fs::copy(YP, &yp).unwrap();
+        Setup {
+            config: base.join("config"),
+            state: base.join("state"),
+            home: base.join("home"),
+            project,
+            yp,
+            _scratch: scratch,
+        }
+    }
+
+    /// `command` with this setup's environment, and nothing of the real one
+    /// that would point it at the real ~/.claude.
+    fn isolate<'a>(&self, command: &'a mut Command) -> &'a mut Command {
+        command
+            .env("CLAUDE_CONFIG_DIR", &self.config)
+            .env("YP_STATE_DIR", &self.state)
+            .env("HOME", &self.home)
+            .env("NO_COLOR", "1")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .current_dir(&self.project)
+    }
+
+    fn install(&self, args: &[&str]) -> Output {
+        let mut command = Command::new(&self.yp);
+        command.arg("install").args(args);
+        self.isolate(&mut command).output().unwrap()
+    }
+
+    fn settings(&self) -> serde_json::Value {
+        let text = std::fs::read_to_string(self.config.join("settings.json")).unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    /// Run a command string as Claude Code would: through `shell`, or with
+    /// no shell at all for the exec form.
+    fn run(&self, shell: &std::path::Path, handler: &serde_json::Value, input: &str) -> Output {
+        let command = handler["command"].as_str().unwrap();
+        let mut process = match handler["args"].as_array() {
+            Some(args) => {
+                let mut process = Command::new(command);
+                process.args(args.iter().map(|a| a.as_str().unwrap()));
+                process
+            }
+            None => {
+                let mut process = Command::new(shell);
+                process.args(["-c", command]);
+                process
+            }
+        };
+        let mut child = self
+            .isolate(&mut process)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+}
+
+/// Our handler for `event`: the one that is not the user's `echo`.
+fn our_handler(settings: &serde_json::Value, event: &str) -> serde_json::Value {
+    settings["hooks"][event]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+        .find(|h| !h["command"].as_str().unwrap().starts_with("echo"))
+        .cloned()
+        .unwrap()
+}
+
+#[test]
+fn every_command_yp_install_writes_runs_in_the_shell_claude_code_uses() {
+    // v0.1.1 wrote unquoted backslash paths, and under Git Bash every one of
+    // its commands exited 127, so nothing was ever scored.
+    let shells = shells();
+    if shells.is_empty() {
+        eprintln!("no Git Bash here; Claude Code would use PowerShell");
+        return;
+    }
+    let setup = Setup::new("install-shells");
+    // A status line that reads its own stdin: wrapped by v0.1.1, the outer
+    // shell ran its $(cat) and the whole line came out blank.
+    let theirs = r#"input=$(cat); echo "mine:${#input}""#;
+    std::fs::write(
+        setup.config.join("settings.json"),
+        serde_json::json!({ "statusLine": { "type": "command", "command": theirs } }).to_string(),
+    )
+    .unwrap();
+    let out = setup.install(&[]);
+    assert!(out.status.success(), "{out:?}");
+    let settings = setup.settings();
+
+    for shell in &shells {
+        let session = format!("shell-{}", shell.file_stem().unwrap().to_string_lossy());
+        let payload = serde_json::json!({
+            "session_id": session,
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": setup.project,
+            "prompt": "refactor parse_args in lib.rs so it returns Config",
+        })
+        .to_string();
+        let hook = setup.run(shell, &our_handler(&settings, "UserPromptSubmit"), &payload);
+        assert_eq!(hook.status.code(), Some(0), "{shell:?} hook: {hook:?}");
+        assert!(hook.stdout.is_empty(), "{shell:?} hook printed: {hook:?}");
+        assert!(
+            setup
+                .state
+                .join("sessions")
+                .join(format!("{session}.json"))
+                .exists(),
+            "{shell:?}: the hook ran but recorded nothing"
+        );
+
+        let start = serde_json::json!({ "session_id": session, "hook_event_name": "SessionStart" });
+        let index = setup.run(
+            shell,
+            &our_handler(&settings, "SessionStart"),
+            &start.to_string(),
+        );
+        assert_eq!(index.status.code(), Some(0), "{shell:?} index: {index:?}");
+        assert!(
+            index.stdout.is_empty() && index.stderr.is_empty(),
+            "{index:?}"
+        );
+        assert!(setup
+            .state
+            .join("index")
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_some());
+
+        let status_json =
+            serde_json::json!({ "session_id": session, "cwd": setup.project }).to_string();
+        let line = setup.run(shell, &settings["statusLine"], &status_json);
+        assert_eq!(
+            line.status.code(),
+            Some(0),
+            "{shell:?} status line: {line:?}"
+        );
+        let text = stdout(&line);
+        assert!(
+            text.contains(&format!("mine:{}", status_json.len())),
+            "{shell:?}: their status line lost its stdin: {text:?}"
+        );
+        assert!(text.contains('⟦'), "{shell:?}: no score in {text:?}");
+        assert_eq!(text.lines().count(), 1, "{text:?}");
+    }
+}
+
+#[test]
+fn a_hook_run_without_its_arguments_does_not_block_the_prompt() {
+    // A Claude Code older than 2.1.139 that skips a hook's `args` hands the
+    // bare executable to its shell. clap's usage error exits 2, which would
+    // block every prompt.
+    let scratch = Scratch::new("bare");
+    let out = run_isolated(
+        scratch.path(),
+        &[],
+        &hook_payload("fix the login handler", "bare"),
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+
+    let Some(shell) = shells().into_iter().next() else {
+        return;
+    };
+    let setup = Setup::with_bin("install-bare", "bin");
+    assert!(setup.install(&[]).status.success());
+    let settings = setup.settings();
+    for event in ["UserPromptSubmit", "SessionStart"] {
+        let bare = serde_json::json!({ "command": our_handler(&settings, event)["command"] });
+        let out = setup.run(&shell, &bare, &hook_payload("fix the login handler", "old"));
+        assert_eq!(out.status.code(), Some(0), "{event}: {out:?}");
+        assert!(out.stdout.is_empty(), "{event}: {out:?}");
+    }
+}
+
+#[test]
+fn reinstalling_from_a_new_place_points_every_command_there() {
+    // cargo install first, then install.ps1 with the first binary gone:
+    // v0.1.1 said "already registered" and kept the dead path.
+    let setup = Setup::new("install-moved");
+    let old_bin = setup.config.parent().unwrap().join("old bin");
+    std::fs::create_dir_all(&old_bin).unwrap();
+    let old = old_bin.join(setup.yp.file_name().unwrap());
+    std::fs::copy(&setup.yp, &old).unwrap();
+    let mut first = Command::new(&old);
+    first.arg("install");
+    assert!(setup.isolate(&mut first).output().unwrap().status.success());
+    std::fs::remove_file(&old).unwrap();
+
+    let out = setup.install(&[]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        stdout(&out).matches("which no longer exists").count(),
+        3,
+        "{out:?}"
+    );
+    let settings = setup.settings();
+    let mut commands = vec![settings["statusLine"]["command"].clone()];
+    for event in ["UserPromptSubmit", "SessionStart"] {
+        commands.push(our_handler(&settings, event)["command"].clone());
+        assert_eq!(settings["hooks"][event].as_array().unwrap().len(), 1);
+    }
+    // The status line spells "yp's" the way its shell needs it quoted.
+    for command in commands {
+        let command = command.as_str().unwrap();
+        assert!(command.contains("s bin/yp"), "{command}");
+        assert!(!command.contains("old bin"), "{command}");
+    }
+}
+
+#[test]
+fn install_twice_then_uninstall_gives_back_the_settings_and_the_backup() {
+    let setup = Setup::new("install-roundtrip");
+    let original = serde_json::json!({
+        "model": "opus",
+        "statusLine": {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-command.sh",
+            "padding": 0
+        },
+        "hooks": {
+            "UserPromptSubmit": [
+                { "hooks": [ { "type": "command", "command": "echo other-hook" } ] }
+            ]
+        }
+    });
+    let original_text = serde_json::to_string_pretty(&original).unwrap();
+    std::fs::write(setup.config.join("settings.json"), &original_text).unwrap();
+    let backup = setup.config.join("settings.json.yp-backup");
+    let score = setup.config.join("commands").join("score.md");
+
+    assert!(setup.install(&[]).status.success());
+    let installed = setup.settings();
+    assert_eq!(installed["statusLine"]["padding"], 0);
+    assert_eq!(
+        std::fs::read_to_string(&score).unwrap(),
+        include_str!("../../../plugin/commands/score.md")
+    );
+    let second = setup.install(&[]);
+    assert!(second.status.success());
+    assert_eq!(
+        setup.settings(),
+        installed,
+        "the second install changed settings"
+    );
+    assert!(stdout(&second).contains("needed no change"), "{second:?}");
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), original_text);
+
+    let out = setup.install(&["--uninstall"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(setup.settings(), original);
+    assert!(!score.exists(), "/score was left behind");
+    assert!(!setup.state.join("install.json").exists());
+    // Uninstall neither writes the backup nor removes it.
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), original_text);
+    assert!(stdout(&out).contains("yp-backup"), "{out:?}");
+}
+
+#[test]
+fn install_leaves_a_score_command_it_did_not_write() {
+    let setup = Setup::new("install-theirs");
+    let commands = setup.config.join("commands");
+    std::fs::create_dir_all(&commands).unwrap();
+    let theirs = "---\ndescription: my own score\n---\nSomething else entirely.\n";
+    std::fs::write(commands.join("score.md"), theirs).unwrap();
+
+    let out = setup.install(&[]);
+    assert!(out.status.success());
+    assert!(stdout(&out).contains("left your own"), "{out:?}");
+    assert!(setup.install(&["--uninstall"]).status.success());
+    assert_eq!(
+        std::fs::read_to_string(commands.join("score.md")).unwrap(),
+        theirs
+    );
+}
+
+#[test]
+fn print_only_shows_everything_and_writes_nothing() {
+    let setup = Setup::new("install-print");
+    let out = setup.install(&["--print-only"]);
+    assert!(out.status.success());
+    let text = stdout(&out);
+    assert!(text.contains("commands"), "{text}");
+    assert!(text.contains("#   !`yp explain --no-color`"), "{text}");
+    // Without its comment lines, the output is the JSON it would write.
+    let json: String = text
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let would: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert!(would["statusLine"]["command"].is_string());
+    assert!(!setup.config.join("settings.json").exists());
+    assert!(!setup.config.join("commands").exists());
+    assert_eq!(setup.state.read_dir().unwrap().count(), 0);
+}
+
+#[test]
+fn a_status_line_wrapped_by_v011_keeps_working_and_moves_on_reinstall() {
+    let shells = shells();
+    let Some(shell) = shells.first() else {
+        return;
+    };
+    let setup = Setup::new("install-legacy");
+    // What v0.1.1 wrote: the original quoted into our own command line.
+    let exe = setup
+        .yp
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('\'', r"'\''");
+    let legacy = format!(r#"'{exe}' statusline --wrap "echo legacy-line""#);
+    std::fs::write(
+        setup.config.join("settings.json"),
+        serde_json::json!({ "statusLine": { "type": "command", "command": legacy } }).to_string(),
+    )
+    .unwrap();
+
+    let before = setup.run(shell, &setup.settings()["statusLine"], "{}");
+    assert!(stdout(&before).contains("legacy-line"), "{before:?}");
+
+    assert!(setup.install(&[]).status.success());
+    let settings = setup.settings();
+    let command = settings["statusLine"]["command"].as_str().unwrap();
+    assert!(command.ends_with("statusline --wrapped"), "{command}");
+    let after = setup.run(shell, &settings["statusLine"], "{}");
+    assert!(stdout(&after).contains("legacy-line"), "{after:?}");
+
+    assert!(setup.install(&["--uninstall"]).status.success());
+    assert_eq!(
+        setup.settings()["statusLine"]["command"],
+        "echo legacy-line"
+    );
 }
