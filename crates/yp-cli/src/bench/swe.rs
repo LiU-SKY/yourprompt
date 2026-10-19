@@ -31,8 +31,8 @@
 //! Instances of the same repository sit at different base commits, but a
 //! repository's vocabulary barely moves between nearby commits, so a single
 //! index per repository is built at the base commit of its first instance.
-//! That turns three hundred downloads into twelve. It is an approximation and
-//! is named as one.
+//! That turns one download per issue into one per repository. It is an
+//! approximation and is named as one.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -281,7 +281,7 @@ fn render(trials: &[Trial], repos: &[String]) -> String {
     out.push_str("# yourprompt benchmark -- grounding\n\n");
     out.push_str(&format!(
         "Dataset: [SWE-bench Lite](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite), \
-         {} real GitHub issues across {} repositories.\n\n\
+         {} real GitHub issues from its {} largest repositories.\n\n\
          Axis A claims to read your repository. This checks that claim the only \
          way that cannot be satisfied by accident: score each issue against the \
          codebase it was actually filed against, then against unrelated ones. A \
@@ -390,8 +390,8 @@ fn render(trials: &[Trial], repos: &[String]) -> String {
         "\n## Caveats\n\n\
          - One index per repository, built at the base commit of that \
          repository's first instance. Repositories evolve, but their \
-         vocabulary barely moves between nearby commits, and this turns three \
-         hundred downloads into a dozen. It is an approximation.\n\
+         vocabulary barely moves between nearby commits, and this turns one \
+         download per issue into one per repository. It is an approximation.\n\
          - SWE-bench issues are written by maintainers and users to be filed, \
          not typed at a coding agent. They are far longer than a typical \
          prompt.\n\
