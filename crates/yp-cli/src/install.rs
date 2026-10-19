@@ -39,10 +39,12 @@
 //!
 //! A status line that gets wrapped is kept verbatim, every field of it, in
 //! `install.json` in the state directory, and `yp statusline --wrapped` runs
-//! it from there. Quoting it into our own command line, as v0.1.1 did, handed
-//! it to the outer shell first: `$(...)`, `$VAR` and backticks were expanded
-//! before yp started, embedded quotes came out garbled, and `input=$(cat)`
-//! swallowed the status JSON meant for both of us, so the line went blank.
+//! it from there, or from the backup of the settings when the state
+//! directory has been cleared. Quoting it into our own command line, as
+//! v0.1.1 did, handed it to the outer shell first: `$(...)`, `$VAR` and
+//! backticks were expanded before yp started, embedded quotes came out
+//! garbled, and `input=$(cat)` swallowed the status JSON meant for both of
+//! us, so the line went blank.
 //! `install.json` also records the `/score` command file as written, so a
 //! later run can tell it from one the user wrote or edited.
 //!
@@ -73,10 +75,54 @@ const INDEX_ARGS: [&str; 4] = ["index", "--quiet", "--max-age", "900"];
 
 /// Seconds Claude Code gives each hook, as the plugin's hooks.json sets them.
 /// It cancels a hook that runs out of time and goes on without it, so
-/// scoring can never hold a prompt longer than this. Its own default for a
-/// `UserPromptSubmit` hook is 30 seconds.
+/// scoring can never hold a prompt longer than this. A handler without one
+/// gets Claude Code's own default: 30 seconds for a `UserPromptSubmit` hook,
+/// and 600 for a `SessionStart` one.
 const HOOK_TIMEOUT: u64 = 5;
 const INDEX_TIMEOUT: u64 = 60;
+
+/// One of the hooks yp registers, as a fresh install writes it.
+struct Hook {
+    event: &'static str,
+    /// The arguments yp runs with, the subcommand first.
+    args: &'static [&'static str],
+    timeout: u64,
+    /// Whether Claude Code runs it in the background, `"async": true`,
+    /// rather than waiting for it.
+    background: bool,
+}
+
+impl Hook {
+    fn subcommand(&self) -> &'static str {
+        self.args[0]
+    }
+}
+
+/// Scoring, on every prompt. It has to finish before the prompt is sent.
+const PROMPT_HOOK: Hook = Hook {
+    event: "UserPromptSubmit",
+    args: &["hook"],
+    timeout: HOOK_TIMEOUT,
+    background: false,
+};
+
+/// Building the repository index, once per session, in the background.
+///
+/// Claude Code waits for a `SessionStart` hook before the session goes on,
+/// and the first index of a 5,934-file repository took 40 to 71 s: past
+/// [`INDEX_TIMEOUT`], which cancelled it, so nothing was saved and the next
+/// session started over. Nothing waits for the index -- the prompt hook
+/// scores without one until it exists -- so the hook need not be waited for
+/// either. Claude Code does not enforce the timeout of a hook it runs in the
+/// background; it is kept for one that does not know `async`.
+const INDEX_HOOK: Hook = Hook {
+    event: "SessionStart",
+    args: &INDEX_ARGS,
+    timeout: INDEX_TIMEOUT,
+    background: true,
+};
+
+const HOOKS: [&Hook; 2] = [&PROMPT_HOOK, &INDEX_HOOK];
 
 /// The shell that will read the status line command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,22 +480,9 @@ pub fn apply(settings: &mut Value, exe: &str, shell: Shell, saved: &mut Saved) -
     // session. The index build is deliberately *not* on the prompt path:
     // indexing takes seconds and nothing may delay a prompt.
     let target = Target { exe, shell };
-    register(
-        settings,
-        &mut notes,
-        &target,
-        "UserPromptSubmit",
-        &["hook"],
-        HOOK_TIMEOUT,
-    );
-    register(
-        settings,
-        &mut notes,
-        &target,
-        "SessionStart",
-        &INDEX_ARGS,
-        INDEX_TIMEOUT,
-    );
+    for hook in HOOKS {
+        register(settings, &mut notes, &target, hook);
+    }
 
     if plugin_enabled(settings) {
         notes.push(
@@ -605,32 +638,69 @@ fn update_handler(
     )
 }
 
+/// Give one of our handlers what a fresh install gives it and it lacks: a
+/// timeout, and for the index build, running in the background. A value the
+/// user set, `"async": false` among them, is theirs and stays.
+///
+/// Handlers written before these fields existed had neither, so they got
+/// Claude Code's defaults: a prompt could wait 30 s for scoring, and a
+/// session 600 s for its index.
+fn complete(handler: &mut Value, hook: &Hook, what: &str) -> Option<String> {
+    let fields = handler.as_object_mut()?;
+    let timeout = !fields.contains_key("timeout");
+    if timeout {
+        fields.insert("timeout".into(), json!(hook.timeout));
+    }
+    let background = hook.background && !fields.contains_key("async");
+    if background {
+        fields.insert("async".into(), json!(true));
+    }
+    match (timeout, background) {
+        (_, true) => Some(format!(
+            "the {what} now runs in the background, so a session no longer waits \
+             while a large repository is indexed"
+        )),
+        (true, false) => Some(format!(
+            "gave the {what} the {} s timeout a fresh install sets, so a prompt never \
+             waits longer than that for its score",
+            hook.timeout
+        )),
+        (false, false) => None,
+    }
+}
+
 /// True when a handler of ours is in the exec form, which needs a Claude Code
 /// that reads `args`.
 fn uses_exec_form(settings: &Value) -> bool {
-    [("UserPromptSubmit", "hook"), ("SessionStart", "index")]
-        .into_iter()
-        .any(|(event, subcommand)| {
-            settings["hooks"][event]
+    HOOKS.into_iter().any(|hook| {
+        settings["hooks"][hook.event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|h| our_handler(h, hook.subcommand()))
+            .any(|found| found.rest.is_none())
+    })
+}
+
+/// True when anything yp writes is in `settings`: its status line, or one of
+/// its hooks.
+fn has_ours(settings: &Value) -> bool {
+    let status_line = settings["statusLine"]["command"]
+        .as_str()
+        .is_some_and(|command| ours(command, "statusline").is_some());
+    status_line
+        || HOOKS.into_iter().any(|hook| {
+            settings["hooks"][hook.event]
                 .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|group| group.get("hooks").and_then(Value::as_array))
-                .flatten()
-                .filter_map(|h| our_handler(h, subcommand))
-                .any(|found| found.rest.is_none())
+                .is_some_and(|groups| groups.iter().any(|g| group_has(g, hook.subcommand())))
         })
 }
 
-/// Add our handler for `event`, or bring the one already there up to date.
-fn register(
-    settings: &mut Value,
-    notes: &mut Notes,
-    target: &Target,
-    event: &str,
-    args: &[&str],
-    timeout: u64,
-) {
+/// Add our handler for `hook`, or bring the one already there up to date.
+fn register(settings: &mut Value, notes: &mut Notes, target: &Target, hook: &Hook) {
+    let event = hook.event;
     let hooks = settings
         .as_object_mut()
         .expect("settings is an object")
@@ -649,7 +719,7 @@ fn register(
     }
     let list = events.as_array_mut().expect("event list is an array");
 
-    let subcommand = args[0];
+    let subcommand = hook.subcommand();
     let what = format!("{event} hook");
     if list.iter().any(|group| group_has(group, subcommand)) {
         let mut changed = Vec::new();
@@ -660,6 +730,7 @@ fn register(
             for handler in inner.iter_mut() {
                 if let Some(found) = our_handler(handler, subcommand) {
                     changed.extend(update_handler(handler, found, target, subcommand, &what));
+                    changed.extend(complete(handler, hook, &what));
                 }
             }
         }
@@ -670,9 +741,10 @@ fn register(
         return;
     }
 
-    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    let args: Vec<String> = hook.args.iter().map(|a| a.to_string()).collect();
     let mut handler = hook_handler(target.exe, &args);
-    handler["timeout"] = json!(timeout);
+    // Said of a handler that had to gain them; this one starts with them.
+    let _ = complete(&mut handler, hook, &what);
     list.push(json!({ "hooks": [handler] }));
     notes.push(format!("registered the {what}"));
 }
@@ -736,8 +808,8 @@ pub fn remove(settings: &mut Value, saved: &mut Saved) -> Notes {
     }
 
     // ---- hooks --------------------------------------------------------
-    for (event, subcommand) in [("UserPromptSubmit", "hook"), ("SessionStart", "index")] {
-        unregister(object, &mut notes, event, subcommand);
+    for hook in HOOKS {
+        unregister(object, &mut notes, hook.event, hook.subcommand());
     }
 
     notes
@@ -837,6 +909,34 @@ fn plan_command(
     plan
 }
 
+/// What happens to `settings.json.yp-backup` before the settings change.
+#[derive(Debug, PartialEq, Eq)]
+enum Backup {
+    Keep,
+    Write,
+    /// Write it over the one there, which is of older settings.
+    Replace,
+}
+
+/// Decide about the backup, given the settings as read, `raw`, parsed, and
+/// the backup already there, `earlier`.
+///
+/// There is one backup, of the settings as they were before yp changed them.
+/// Writing it on every run replaced it with yp's own output the second time
+/// round, which left nothing to go back to, so a backup is kept while the
+/// settings hold anything of yp's. Settings that hold nothing of it are the
+/// user's own, as after an uninstall, and they replace a backup from before
+/// an earlier install: kept, that one went on standing for settings since
+/// changed, and restoring it by hand lost every change made after the first
+/// install.
+fn plan_backup(raw: &str, settings: &Value, earlier: Option<&[u8]>) -> Backup {
+    match earlier {
+        None => Backup::Write,
+        Some(earlier) if earlier == raw.as_bytes() || has_ours(settings) => Backup::Keep,
+        Some(_) => Backup::Replace,
+    }
+}
+
 /// Where `yp install` keeps [`Saved`].
 fn saved_path() -> Option<PathBuf> {
     session::state_dir().map(|d| d.join("install.json"))
@@ -865,9 +965,32 @@ fn store(saved: &Saved) -> io::Result<()> {
 }
 
 /// The status line `yp install` wrapped, for `yp statusline --wrapped`.
+///
+/// It is kept in the state directory, beside the session files and the
+/// indexes, which reach 19 MB for one repository: a folder people clear.
+/// Once it was cleared, the status line yp had wrapped disappeared without a
+/// word, and only the next `yp install` brought it back, from the backup of
+/// the settings. So the backup is read here too, as it is there.
 pub fn wrapped_status_line() -> Option<String> {
-    let line = load_saved().status_line?;
+    wrapped_in(load_saved(), backup_path().as_deref())
+}
+
+/// The command of the status line kept in `saved`, or else of the one in the
+/// backup at `backup`.
+fn wrapped_in(saved: Saved, backup: Option<&Path>) -> Option<String> {
+    let line = saved
+        .status_line
+        .or_else(|| backed_up_status_line(backup?))?;
     line.get("command")?.as_str().map(str::to_string)
+}
+
+/// The backup of the settings `yp install` makes before changing them.
+fn backup_path() -> Option<PathBuf> {
+    settings_path().as_deref().map(backup_of)
+}
+
+fn backup_of(settings: &Path) -> PathBuf {
+    settings.with_extension("json.yp-backup")
 }
 
 /// True when the status line in `settings` is ours, running one kept in
@@ -879,8 +1002,8 @@ fn runs_a_kept_status_line(settings: &Value) -> bool {
         .is_some_and(|(_, rest)| runs_kept(rest))
 }
 
-/// The status line in the backup of the settings from before yp first
-/// changed them, if it is not one of ours.
+/// The status line in the backup of the settings from before yp changed
+/// them, if it is not one of ours.
 fn backed_up_status_line(backup: &Path) -> Option<Value> {
     let text = fs::read_to_string(backup).ok()?;
     let settings: Value =
@@ -906,6 +1029,80 @@ fn settings_path() -> Option<PathBuf> {
         return Some(PathBuf::from(dir).join("settings.json"));
     }
     session::home_dir().map(|h| h.join(".claude").join("settings.json"))
+}
+
+/// How a settings file was written out, so that it is written back the same
+/// way.
+///
+/// The JSON parser keeps none of it, and every file used to come back with
+/// two-space indents and bare line feeds. One saved by a Windows editor,
+/// with a byte order mark, CRLF line endings and four-space indents, came
+/// back from an install and an uninstall equal in content but 130 bytes
+/// instead of 136. What still changes is beyond a JSON value: an object
+/// written on one line comes back spread over several, and a character
+/// written as an escape comes back as itself. The backup has the exact
+/// bytes.
+#[derive(Debug, Clone, PartialEq)]
+struct Layout {
+    bom: bool,
+    crlf: bool,
+    /// One level of indentation.
+    indent: String,
+    final_newline: bool,
+}
+
+impl Default for Layout {
+    /// How Claude Code itself writes the file.
+    fn default() -> Self {
+        Layout {
+            bom: false,
+            crlf: false,
+            indent: "  ".into(),
+            final_newline: true,
+        }
+    }
+}
+
+impl Layout {
+    fn of(raw: &str) -> Self {
+        let default = Layout::default();
+        // The first indented line holds one level, in a file pretty-printed
+        // with nothing on the line of its opening brace.
+        let indent = raw
+            .lines()
+            .skip(1)
+            .find(|line| !line.trim().is_empty())
+            .map(|line| &line[..line.len() - line.trim_start_matches([' ', '\t']).len()])
+            .filter(|indent| !indent.is_empty())
+            .map_or(default.indent, str::to_string);
+        Layout {
+            bom: raw.starts_with('\u{feff}'),
+            crlf: raw.contains("\r\n"),
+            indent,
+            final_newline: raw.ends_with('\n'),
+        }
+    }
+
+    fn render(&self, settings: &Value) -> serde_json::Result<String> {
+        let mut out = Vec::new();
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(self.indent.as_bytes());
+        settings.serialize(&mut serde_json::Serializer::with_formatter(
+            &mut out, formatter,
+        ))?;
+        // serde_json writes UTF-8, and escapes every line break inside a
+        // string, so each one left is between tokens.
+        let mut text = String::from_utf8(out).map_err(serde::ser::Error::custom)?;
+        if self.final_newline {
+            text.push('\n');
+        }
+        if self.crlf {
+            text = text.replace('\n', "\r\n");
+        }
+        if self.bom {
+            text.insert(0, '\u{feff}');
+        }
+        Ok(text)
+    }
 }
 
 fn current_exe() -> String {
@@ -953,14 +1150,14 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
     let original = settings.clone();
     let saved_before = load_saved();
     let mut saved = saved_before.clone();
-    let backup = path.with_extension("json.yp-backup");
+    let backup = backup_of(&path);
     let exe = current_exe();
 
     let mut notes = Notes::new();
     if saved.status_line.is_none() && runs_a_kept_status_line(&settings) {
         // What yp kept of the status line it wraps is gone, as when its
         // state directory was cleared. The backup still holds the one from
-        // before the first install, which beats losing it.
+        // before yp changed the settings, which beats losing it.
         if let Some(line) = backed_up_status_line(&backup) {
             notes.push(format!(
                 "nothing was kept of the status line yp wrapped, so it comes from {}",
@@ -1006,8 +1203,12 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
         ));
     }
 
-    let rendered = match serde_json::to_string_pretty(&settings) {
-        Ok(s) => s + "\n",
+    let layout = raw
+        .as_deref()
+        .filter(|r| !r.trim_start_matches('\u{feff}').trim().is_empty())
+        .map_or_else(Layout::default, Layout::of);
+    let rendered = match layout.render(&settings) {
+        Ok(text) => text,
         Err(e) => {
             eprintln!("yp: could not serialise settings: {e}");
             return ExitCode::FAILURE;
@@ -1021,7 +1222,13 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
         for note in &notes {
             println!("# - {note}");
         }
-        print!("{rendered}");
+        let shown = Layout {
+            bom: false,
+            crlf: false,
+            final_newline: true,
+            ..layout
+        };
+        print!("{}", shown.render(&settings).unwrap_or_default());
         match command_plan {
             CommandFile::Write => {
                 println!("# would write {}:", command_path.display());
@@ -1050,19 +1257,21 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
     let changed = settings != original;
 
     if !uninstall {
-        // One backup, of the settings as they were before yp first changed
-        // them. Writing it on every run replaced it with yp's own output the
-        // second time round, which left nothing to go back to.
-        let worth_keeping = raw
-            .as_deref()
-            .is_some_and(|r| !matches!(r.trim(), "" | "{}"));
-        if changed && worth_keeping {
-            if backup.exists() {
+        let worth_keeping = raw.as_deref().filter(|r| !matches!(r.trim(), "" | "{}"));
+        if let (true, Some(raw)) = (changed, worth_keeping) {
+            let plan = plan_backup(raw, &original, fs::read(&backup).ok().as_deref());
+            if plan == Backup::Keep {
                 println!("kept your earlier backup: {}", backup.display());
-            } else if let Err(e) = fs::write(&backup, raw.as_deref().unwrap_or_default()) {
+            } else if let Err(e) = fs::write(&backup, raw) {
                 eprintln!("yp: could not write a backup to {}: {e}", backup.display());
                 eprintln!("    refusing to modify your settings without one");
                 return ExitCode::FAILURE;
+            } else if plan == Backup::Replace {
+                println!(
+                    "backed up your settings to {}, over the backup an earlier install \
+                     made: that install was undone since, and these settings are newer",
+                    backup.display()
+                );
             } else {
                 println!("backed up your settings to {}", backup.display());
             }
@@ -1127,7 +1336,7 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
     if uninstall {
         if backup.exists() {
             println!(
-                "\nYour settings from before the first yp install are still in {}",
+                "\nYour settings from before yp install changed them are still in {}",
                 backup.display()
             );
         }
@@ -1189,10 +1398,91 @@ mod tests {
                 "type": "command",
                 "command": "/usr/local/bin/yp",
                 "args": ["index", "--quiet", "--max-age", "900"],
-                "timeout": INDEX_TIMEOUT
+                "timeout": INDEX_TIMEOUT,
+                "async": true
             })
         );
         assert!(uses_exec_form(&v));
+    }
+
+    #[test]
+    fn the_index_is_built_in_the_background_as_the_plugin_builds_it() {
+        // Claude Code waits for a synchronous SessionStart hook, and the
+        // first index of a 5,934-file repository took 40 to 71 s.
+        let mut v = fresh();
+        install(&mut v, EXE, &mut Saved::default());
+        assert_eq!(handler_of(&v, "SessionStart")["async"], true);
+        assert!(handler_of(&v, "UserPromptSubmit").get("async").is_none());
+
+        let plugin: Value =
+            serde_json::from_str(include_str!("../../../plugin/hooks/hooks.json")).unwrap();
+        let index = handler_of(&plugin, "SessionStart");
+        assert_eq!(index["async"], true, "{index}");
+        assert_eq!(index["timeout"], INDEX_TIMEOUT, "{index}");
+        let hook = handler_of(&plugin, "UserPromptSubmit");
+        assert!(hook.get("async").is_none(), "{hook}");
+        assert_eq!(hook["timeout"], HOOK_TIMEOUT, "{hook}");
+    }
+
+    #[test]
+    fn a_handler_from_an_earlier_install_gets_the_fields_a_fresh_one_has() {
+        // What main's `yp install` wrote on Windows: shell commands with
+        // backslash paths and no timeouts. Moved to the exec form, they
+        // kept only what they had, so a prompt could wait 30 s for its
+        // score and a session 600 s for its index.
+        let old = r"C:\yp\yp.exe";
+        let mut v = json!({ "hooks": {
+            "UserPromptSubmit": [ { "hooks": [
+                { "type": "command", "command": format!("{old} hook") }
+            ] } ],
+            "SessionStart": [ { "hooks": [
+                { "type": "command", "command": format!("{old} index --quiet --max-age 900") }
+            ] } ]
+        } });
+        let notes = apply(&mut v, old, Shell::Posix, &mut Saved::default());
+        assert_eq!(
+            *handler_of(&v, "UserPromptSubmit"),
+            json!({
+                "type": "command",
+                "command": "C:/yp/yp.exe",
+                "args": ["hook"],
+                "timeout": HOOK_TIMEOUT
+            })
+        );
+        assert_eq!(
+            *handler_of(&v, "SessionStart"),
+            json!({
+                "type": "command",
+                "command": "C:/yp/yp.exe",
+                "args": ["index", "--quiet", "--max-age", "900"],
+                "timeout": INDEX_TIMEOUT,
+                "async": true
+            })
+        );
+        assert!(notes.iter().any(|n| n.contains("5 s timeout")), "{notes:?}");
+        assert!(
+            notes.iter().any(|n| n.contains("in the background")),
+            "{notes:?}"
+        );
+
+        // A timeout, or "async": false, that the user set stays theirs.
+        let mut v = json!({ "hooks": { "SessionStart": [ { "hooks": [ {
+            "type": "command",
+            "command": "/usr/local/bin/yp",
+            "args": ["index", "--quiet", "--max-age", "900"],
+            "timeout": 300,
+            "async": false
+        } ] } ] } });
+        let before = v.clone();
+        let notes = install(&mut v, EXE, &mut Saved::default());
+        assert_eq!(
+            v["hooks"]["SessionStart"], before["hooks"]["SessionStart"],
+            "{notes:?}"
+        );
+        assert!(
+            notes.contains(&"SessionStart hook already registered; left as is".to_string()),
+            "{notes:?}"
+        );
     }
 
     #[test]
@@ -1594,7 +1884,12 @@ mod tests {
         );
         assert_eq!(
             *handler_of(&v, "UserPromptSubmit"),
-            json!({ "type": "command", "command": "C:/Users/me/.cargo/bin/yp.exe", "args": ["hook"] })
+            json!({
+                "type": "command",
+                "command": "C:/Users/me/.cargo/bin/yp.exe",
+                "args": ["hook"],
+                "timeout": HOOK_TIMEOUT
+            })
         );
         assert_eq!(
             handler_of(&v, "SessionStart")["args"],
@@ -1616,9 +1911,9 @@ mod tests {
     }
 
     #[test]
-    fn what_v011_wrote_on_unix_is_left_as_it_is() {
-        // It runs under sh, and it runs under a Claude Code too old for the
-        // exec form as well.
+    fn what_v011_wrote_on_unix_keeps_its_commands() {
+        // They run under sh, and under a Claude Code too old for the exec
+        // form as well. Only the timeouts they lacked are added.
         let mut v = json!({
             "statusLine": { "type": "command", "command": "/usr/local/bin/yp statusline" },
             "hooks": {
@@ -1632,8 +1927,25 @@ mod tests {
         });
         let before = v.clone();
         let notes = install(&mut v, EXE, &mut Saved::default());
-        assert_eq!(v, before, "{notes:?}");
+        assert_eq!(v["statusLine"], before["statusLine"], "{notes:?}");
+        assert_eq!(
+            *handler_of(&v, "UserPromptSubmit"),
+            json!({ "type": "command", "command": "/usr/local/bin/yp hook", "timeout": HOOK_TIMEOUT })
+        );
+        assert_eq!(
+            *handler_of(&v, "SessionStart"),
+            json!({
+                "type": "command",
+                "command": "/usr/local/bin/yp index --quiet --max-age 900",
+                "timeout": INDEX_TIMEOUT,
+                "async": true
+            })
+        );
         assert!(!uses_exec_form(&v));
+
+        let after = v.clone();
+        install(&mut v, EXE, &mut Saved::default());
+        assert_eq!(v, after, "a second install changed it again");
     }
 
     #[test]
@@ -1696,7 +2008,8 @@ mod tests {
                 "type": "command",
                 "command": "/usr/local/bin/yp",
                 "args": ["index", "--quiet", "--max-age", "3600"],
-                "timeout": 120
+                "timeout": 120,
+                "async": true
             })
         );
     }
@@ -1706,7 +2019,7 @@ mod tests {
         let mut v = json!({
             "statusLine": { "type": "command", "command": "yp statusline" },
             "hooks": { "UserPromptSubmit": [ { "hooks": [
-                { "type": "command", "command": "yp hook" }
+                { "type": "command", "command": "yp hook", "timeout": 10 }
             ] } ] }
         });
         let before = v.clone();
@@ -1715,6 +2028,15 @@ mod tests {
         assert_eq!(
             v["hooks"]["UserPromptSubmit"],
             before["hooks"]["UserPromptSubmit"]
+        );
+        // Without a timeout it still follows PATH, and gains the timeout.
+        let mut v = json!({ "hooks": { "UserPromptSubmit": [ { "hooks": [
+            { "type": "command", "command": "yp hook" }
+        ] } ] } });
+        install(&mut v, EXE, &mut Saved::default());
+        assert_eq!(
+            *handler_of(&v, "UserPromptSubmit"),
+            json!({ "type": "command", "command": "yp hook", "timeout": HOOK_TIMEOUT })
         );
     }
 
@@ -1875,5 +2197,139 @@ mod tests {
     fn the_score_command_is_the_plugins() {
         assert!(SCORE_COMMAND.contains("yp explain --no-color"));
         assert!(SCORE_COMMAND.starts_with("---"));
+    }
+
+    /// A scratch directory, removed when the test ends.
+    struct Dir(PathBuf);
+
+    impl Dir {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("yp-install-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Dir(dir)
+        }
+    }
+
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_wrapped_status_line_outlives_the_state_directory() {
+        // With ~/.claude/yourprompt deleted, "[Opus] main" vanished from the
+        // status line while the settings still ran `statusline --wrapped`.
+        let dir = Dir::new("wrapped");
+        let backup = dir.0.join("settings.json.yp-backup");
+        fs::write(
+            &backup,
+            "{\n  \"statusLine\": {\n    \"type\": \"command\",\n    \"command\": \"echo [Opus] main\"\n  }\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            wrapped_in(Saved::default(), Some(&backup)).as_deref(),
+            Some("echo [Opus] main")
+        );
+        // What install.json keeps comes first.
+        let kept = Saved {
+            status_line: Some(json!({ "type": "command", "command": "echo kept" })),
+            ..Saved::default()
+        };
+        assert_eq!(
+            wrapped_in(kept, Some(&backup)).as_deref(),
+            Some("echo kept")
+        );
+        // A backup whose status line is yp's own wraps nothing.
+        fs::write(
+            &backup,
+            r#"{"statusLine": {"command": "/usr/local/bin/yp statusline"}}"#,
+        )
+        .unwrap();
+        assert_eq!(wrapped_in(Saved::default(), Some(&backup)), None);
+        assert_eq!(
+            wrapped_in(Saved::default(), Some(&dir.0.join("none"))),
+            None
+        );
+        assert_eq!(wrapped_in(Saved::default(), None), None);
+    }
+
+    #[test]
+    fn settings_changed_since_an_uninstall_get_a_fresh_backup() {
+        // install, uninstall, a permission added, install again: the backup
+        // was still {"model": "opus"}, so restoring it lost the permission.
+        let first = "{\n  \"model\": \"opus\"\n}\n";
+        let mut v: Value = serde_json::from_str(first).unwrap();
+        assert_eq!(plan_backup(first, &v, None), Backup::Write);
+
+        let mut saved = Saved::default();
+        install(&mut v, EXE, &mut saved);
+        let installed = serde_json::to_string_pretty(&v).unwrap();
+        // Installing again over yp's own settings keeps the backup of the
+        // user's.
+        assert_eq!(
+            plan_backup(&installed, &v, Some(first.as_bytes())),
+            Backup::Keep
+        );
+
+        remove(&mut v, &mut saved);
+        v["permissions"] = json!({ "allow": ["Bash(npm test:*)"] });
+        let edited = serde_json::to_string_pretty(&v).unwrap() + "\n";
+        assert_eq!(
+            plan_backup(&edited, &v, Some(first.as_bytes())),
+            Backup::Replace
+        );
+        // Unchanged since, the backup is already of these settings.
+        let unchanged: Value = serde_json::from_str(first).unwrap();
+        assert_eq!(
+            plan_backup(first, &unchanged, Some(first.as_bytes())),
+            Backup::Keep
+        );
+    }
+
+    #[test]
+    fn a_settings_file_is_written_back_the_way_it_was_laid_out() {
+        // BOM, CRLF and four-space indents, as a Windows editor saves them.
+        let windows = "\u{feff}{\r\n    \"model\": \"opus\",\r\n    \"env\": {\r\n        \"FOO\": \"été\"\r\n    }\r\n}\r\n";
+        let layout = Layout::of(windows);
+        assert_eq!(
+            layout,
+            Layout {
+                bom: true,
+                crlf: true,
+                indent: "    ".into(),
+                final_newline: true,
+            }
+        );
+        let settings: Value = serde_json::from_str(windows.trim_start_matches('\u{feff}')).unwrap();
+        assert_eq!(layout.render(&settings).unwrap(), windows);
+
+        let mut v = settings.clone();
+        let mut saved = Saved::default();
+        install(&mut v, EXE, &mut saved);
+        let installed = layout.render(&v).unwrap();
+        assert!(
+            installed.starts_with("\u{feff}{\r\n    \"model\""),
+            "{installed:?}"
+        );
+        assert!(
+            !installed.replace("\r\n", "").contains('\n'),
+            "{installed:?}"
+        );
+        remove(&mut v, &mut saved);
+        assert_eq!(layout.render(&v).unwrap(), windows);
+
+        // What Claude Code writes, and a file with no newline at its end, a
+        // tab-indented one.
+        for text in [
+            "{\n  \"model\": \"opus\"\n}\n",
+            "{\n\t\"model\": \"opus\"\n}",
+        ] {
+            let v: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(Layout::of(text).render(&v).unwrap(), text);
+        }
+        assert_eq!(Layout::of("{\"model\": \"opus\"}").indent, "  ");
     }
 }

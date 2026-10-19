@@ -113,6 +113,12 @@ pub struct Sidecar {
     /// True when `latest_prompt` was cut short by `PROMPT_LIMIT`.
     #[serde(default)]
     pub prompt_truncated: bool,
+    /// True when the prompt was longer than the scorer reads, so `latest`
+    /// describes only its start: see [`yp_core::prompt::MAX_INSTRUCTION_BYTES`].
+    /// False in a sidecar written before the scorer had a limit, which read
+    /// every prompt whole.
+    #[serde(default)]
+    pub prompt_capped: bool,
     /// Most recent first.
     #[serde(default)]
     pub history: Vec<Entry>,
@@ -243,6 +249,7 @@ pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Re
         latest: entry,
         latest_prompt: stored_prompt.to_string(),
         prompt_truncated: truncated,
+        prompt_capped: scored_in_part(prompt),
         history,
     };
 
@@ -256,6 +263,15 @@ pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Re
         let _ = prune_expired(&dir);
     }
     Ok(())
+}
+
+/// True when the scorer read only the start of `prompt`: what was typed, or
+/// what was pasted into it, ran past the 64 KB it reads of each.
+fn scored_in_part(prompt: &str) -> bool {
+    use yp_core::prompt::{split, MAX_ATTACHED_BYTES, MAX_INSTRUCTION_BYTES};
+    // Neither part is longer than the whole, so a prompt within both limits
+    // is never split to find out, which costs a pass over the text.
+    prompt.len() > MAX_INSTRUCTION_BYTES.min(MAX_ATTACHED_BYTES) && split(prompt).capped().is_some()
 }
 
 /// Cut a string to at most `limit` bytes without splitting a character.
@@ -488,6 +504,30 @@ mod tests {
         assert_eq!(loaded.session_id, "abc123");
         assert_eq!(loaded.cwd, "/tmp/project");
         assert!(loaded.history.is_empty());
+    }
+
+    #[test]
+    fn a_prompt_longer_than_the_scorer_reads_is_marked() {
+        // `yp explain` said a 204,828-character prompt's score "was computed
+        // on the whole prompt", but the scorer reads 64 KB of it.
+        let _s = Scratch::new("capped");
+        let head = "fix verify_token in src/auth/login.rs ";
+        let long = head.to_string() + &"x ".repeat(110_000);
+        record("long", "", &long, entry(221.6)).unwrap();
+        let loaded = load("long").unwrap();
+        assert!(loaded.prompt_truncated);
+        assert!(loaded.prompt_capped);
+
+        // Longer than 64 KB, but most of it pasted, which is cut out and
+        // read up to a limit of its own: all of it was scored.
+        let fence = format!("```\n{}\n```", "let x = 1;\n".repeat(2_000));
+        let pasted = format!("{head}{}\n{fence}", "y ".repeat(25_000));
+        assert!(pasted.len() > yp_core::prompt::MAX_INSTRUCTION_BYTES);
+        record("pasted", "", &pasted, entry(500.0)).unwrap();
+        assert!(!load("pasted").unwrap().prompt_capped);
+
+        record("short", "", head, entry(300.0)).unwrap();
+        assert!(!load("short").unwrap().prompt_capped);
     }
 
     #[test]
