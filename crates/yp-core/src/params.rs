@@ -59,6 +59,28 @@ pub mod prompt {
     /// Left in the instruction where an attachment was cut out, so the prompt
     /// still reads as prose and still counts as carrying code.
     pub const ATTACHMENT_MARKER: &str = "`<attached>`";
+
+    /// Distinct words that read as language which pasted material needs
+    /// before it counts: before a "this" can point at it, and before its
+    /// words add to what the prompt says. Fewer is one word held down, or a
+    /// mashed keyboard with a stray real word in it, and the block changes
+    /// nothing.
+    pub const PASTED_MIN_TERMS: usize = 3;
+
+    /// The most content units pasted material adds to a prompt's substance.
+    ///
+    /// Half of `clarity::MIN_CONTENT_UNITS`, the length at which a prompt
+    /// counts as long enough to judge: a pasted trace can carry a terse
+    /// instruction, but not stand in for one.
+    pub const PASTED_TERMS_MAX: usize = 4;
+
+    /// How much pasted material is read to judge it, across all blocks.
+    ///
+    /// The start of a paste is enough to tell a trace from mash, and the
+    /// credit is capped at a handful of words anyway. Reading all of it made
+    /// the hook ten times slower on a 140 KB markdown paste full of inline
+    /// code (9 ms to 99 ms), and the hook runs before every prompt is sent.
+    pub const PASTED_READ_BYTES: usize = 8192;
 }
 
 /// A -- grounding and referent resolution.

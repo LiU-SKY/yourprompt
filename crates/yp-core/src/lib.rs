@@ -25,7 +25,9 @@ pub mod grade;
 pub mod grounding;
 pub mod marks;
 pub mod params;
+pub mod pasted;
 pub mod prompt;
+pub mod questions;
 pub mod stats;
 
 use serde::Serialize;
@@ -113,13 +115,15 @@ pub fn score_with(text: &str, corpus: Option<&dyn Corpus>) -> Option<Score> {
 /// unattached references. A text that asks for nothing lacks those defects
 /// the way silence does, so the reward is cut to
 /// [`params::clarity::NO_REQUEST_FACTOR`] unless something request-shaped is
-/// present: an objective, a result shape, an acceptance criterion, or a
-/// scope boundary. Requirements smells presuppose a requirement.
+/// present: an objective (an action verb or a direct question), a result
+/// shape, an acceptance criterion, or a scope boundary. Requirements smells
+/// presuppose a requirement.
 pub(crate) fn request_factor(
     cues: &std::collections::BTreeMap<yp_lang::CueId, Vec<String>>,
 ) -> f64 {
     let requestish = [
         yp_lang::CueId::ActionVerb,
+        yp_lang::CueId::Question,
         yp_lang::CueId::IoSpec,
         yp_lang::CueId::Acceptance,
         yp_lang::CueId::ScopeConstraint,
@@ -144,11 +148,18 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
 
     // One tokenisation and one code-region scan, shared by every axis.
     let tokens = yp_lang::tokenize(text);
-    let stats = stats::analyze(text, &tokens);
+    let pasted = pasted::Pasted::of(parts);
+    let stats = stats::analyze(text, &tokens).with_pasted(pasted.substance());
     let code = yp_lang::token::code_regions(text);
 
     let cue_hits = resources.cue_matcher.find_masked(text, &code);
     let smell_hits = resources.smells.find_masked(text, &code);
+
+    // A "this" with a pasted block to point at is neither vague nor dangling,
+    // and a direct question asks as plainly as an action verb does.
+    let (smell_hits, anchored) = pasted.anchor(smell_hits);
+    let (questions, smell_hits) = questions::asked(text, &tokens, smell_hits, pasted.is_material());
+    let cue_hits = [cue_hits, questions].concat();
 
     let cues = axes::distinct_by_category(&cue_hits);
     let smells = axes::total_by_category(&smell_hits);
@@ -162,6 +173,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
             .iter()
             .map(|h| h.span)
             .chain(smell_hits.iter().map(|h| h.span))
+            .chain(anchored.iter().copied())
             .collect();
         grounding::grounding(
             &tokens,
@@ -205,8 +217,9 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
         tokens: &tokens,
         cue_hits: &cue_hits,
         smell_hits: &smell_hits,
+        anchored: &anchored,
         referents: referents.as_deref(),
-        objectives: cues.get(&yp_lang::CueId::ActionVerb).map_or(0, |v| v.len()),
+        objectives: axes::objectives(&cues),
     });
 
     Some(Score {
@@ -546,5 +559,148 @@ mod tests {
         let s = score("fix src/main.rs").unwrap();
         assert!(s.grounding.is_none());
         assert!(s.renormalized);
+    }
+
+    const TRACE: &str = "thread 'main' panicked at src/auth/login.rs:9:41:\n\
+                         called `Result::unwrap()` on an `Err` value: ()\n\
+                         note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace";
+
+    fn fenced(instruction: &str, block: &str) -> String {
+        format!("{instruction}\n```\n{block}\n```")
+    }
+
+    fn component(axis: &Axis, id: &str) -> f64 {
+        axis.components.iter().find(|c| c.id == id).unwrap().earned
+    }
+
+    #[test]
+    fn a_fenced_trace_scores_like_the_same_trace_pasted_bare() {
+        // "fix this" above a fenced trace scored 278; the same trace without
+        // the fence scored 559. The fence is what a careful user adds.
+        let bare = total(&format!("fix this\n{TRACE}"));
+        let fence = total(&fenced("fix this", TRACE));
+        assert!(
+            (fence - bare).abs() < 80.0,
+            "fenced {fence:.1} vs bare {bare:.1}"
+        );
+        assert!(fence > total("fix this") + 200.0, "fenced {fence:.1}");
+    }
+
+    #[test]
+    fn a_pronoun_before_the_block_points_at_it() {
+        let text = fenced("fix this", TRACE);
+        let s = score(&text).unwrap();
+        assert!(!s.clarity.components[0].detail.contains("pronoun"));
+        let this = s
+            .marks
+            .iter()
+            .find(|m| &text[m.start..m.end] == "this")
+            .expect("the pronoun is marked");
+        assert_eq!(this.kind, "pronoun:pasted");
+        assert_eq!(this.tone, Tone::Good);
+
+        // Grounded, it is not dangling deixis either.
+        let corpus = MapCorpus::new(10, &[("verify_token", 1, 3, 1)]);
+        let grounded = score_with(&text, Some(&corpus)).unwrap();
+        let deixis = grounded
+            .grounding
+            .unwrap()
+            .components
+            .into_iter()
+            .find(|c| c.id == "deixis")
+            .unwrap();
+        assert_eq!(deixis.detail, "no unattached references");
+    }
+
+    #[test]
+    fn a_fence_around_nothing_legible_changes_nothing() {
+        // Mash, one word held down, a phrase on repeat, and underscored mash
+        // that looks like identifiers: none of them gives "this" anything to
+        // point at, or the prompt anything to stand on.
+        let empty = total(&fenced("fix this", "x"));
+        for block in [
+            "asdfasefawefasf zxdf2wq4rq235wrsadg qwerqwer zxcvzxcv\nasdfasdf qwpeoriu zmxncbv",
+            &"error error error error\n".repeat(4),
+            &"the value of ".repeat(30),
+            "asdf_qwer zxcv_uiop hjkl_bnm qwe_rty",
+            "ㅁㄴㅇㄹ ㅋㅌㅊㅍ ㅂㅈㄷㄱ ㅁㄴㅇㄹㅎ",
+        ] {
+            let t = total(&fenced("fix this", block));
+            assert_eq!(t, empty, "{block:.30} moved the score to {t:.1}");
+        }
+    }
+
+    #[test]
+    fn a_paste_counts_the_same_whichever_way_it_arrives() {
+        // The hook cuts a long fence out as an attachment; the web page keeps
+        // it in the text.
+        let lines: String = (0..12)
+            .map(|i| format!("    at handler_{i} (src/server/route_{i}.ts:{i}:5)\n"))
+            .collect();
+        let text =
+            format!("fix this\n```\nTypeError: Cannot read properties of undefined\n{lines}```");
+        let cut = prompt::split(&text);
+        assert!(cut.has_attachments());
+        let hook = score_parts(&cut, None).unwrap();
+        let page = score_parts(&prompt::from_parts(&text, &[]), None).unwrap();
+        assert_eq!(hook.total, page.total);
+        assert!(hook.total > total("fix this") + 200.0, "got {}", hook.total);
+    }
+
+    #[test]
+    fn a_direct_question_is_a_request() {
+        // A specific, answerable question scored 155: no action verb, so no
+        // objective, and clarity cut as if it asked for nothing.
+        for question in [
+            "Why does verify_token panic on expired tokens?",
+            "verify_token이 왜 만료된 토큰에서 panic 나?",
+        ] {
+            let s = score(question).unwrap();
+            assert_eq!(
+                component(&s.actionability, "objective"),
+                params::actionability::OBJECTIVE_MAX,
+                "{question}"
+            );
+            assert!(s.total > 450.0, "{question} scored {}", s.total);
+            assert!(
+                s.marks.iter().any(|m| m.kind == "cue:question"),
+                "{question}: {:?}",
+                s.marks
+            );
+        }
+    }
+
+    #[test]
+    fn a_vague_question_stays_in_the_f_range() {
+        let specific = total("Why does verify_token panic on expired tokens?");
+        for vague in [
+            "why is it broken again?",
+            "왜 안 돼?",
+            "what is this?",
+            "why?",
+        ] {
+            let t = total(vague);
+            assert!(t < 350.0, "{vague} scored {t}");
+            assert!(t < specific - 150.0, "{vague} {t} vs specific {specific}");
+        }
+    }
+
+    #[test]
+    fn a_question_adds_no_objective_to_an_action() {
+        // "can you fix X?" asks for the fix; the question is only how it asks.
+        let s = score("can you fix verify_token in src/auth/login.rs?").unwrap();
+        assert_eq!(
+            component(&s.actionability, "singularity"),
+            params::actionability::SINGULARITY_MAX
+        );
+    }
+
+    #[test]
+    fn a_question_with_its_material_pasted_is_answerable() {
+        let bare = total("Why does it panic?");
+        let shown = total(&fenced("Why does it panic?", TRACE));
+        assert!(shown > bare + 300.0, "shown {shown:.1} vs bare {bare:.1}");
+        let ko = total(&fenced("이거 왜 안 돼?", TRACE));
+        assert!(ko > total("이거 왜 안 돼?") + 300.0, "got {ko:.1}");
     }
 }

@@ -6,13 +6,16 @@
 //! touching the scorer.
 
 pub mod cues;
+pub mod deixis;
 pub mod legible;
 pub mod lexicon;
 pub mod matcher;
+pub mod question;
 pub mod span;
 pub mod token;
 
 pub use cues::{CueId, Cues};
+pub use deixis::is_deictic;
 pub use legible::{is_filler, is_legible, legible_share};
 pub use lexicon::{Lexicon, SmellId};
 pub use matcher::{Hit, Matcher, SmellHit, TermTable};

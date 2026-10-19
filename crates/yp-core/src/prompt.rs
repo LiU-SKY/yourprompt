@@ -96,6 +96,33 @@ impl Parts<'_> {
             .filter(|s| !s.is_empty())
             .collect()
     }
+
+    /// Everything that was pasted rather than typed, without its fences:
+    /// the attachments, and any fenced block still inline in the instruction.
+    ///
+    /// The two ways into the scorer separate material differently. The hook
+    /// and the command line cut a long fence out as an attachment; the web
+    /// page keeps it in the text. A block must count the same either way, so
+    /// an inline region is taken here if it is fenced, or long enough that
+    /// [`split`] would have cut it out.
+    pub fn pasted(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.attachments.clone();
+        for region in yp_lang::token::code_regions(&self.instruction) {
+            let body = region.slice(&self.instruction);
+            if is_pasted_block(body) {
+                out.push(strip_fence(body));
+            }
+        }
+        out
+    }
+}
+
+/// A code region that was pasted rather than typed: opened by a fence of
+/// three or more backticks, or long enough that [`split`] takes it as an
+/// attachment. An inline span like `verify_token` is something the user
+/// wrote.
+pub(crate) fn is_pasted_block(body: &str) -> bool {
+    body.starts_with("```") || is_attachment(body)
 }
 
 /// The content of a fenced region, without the fence or its language tag.

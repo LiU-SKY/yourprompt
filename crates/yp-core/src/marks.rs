@@ -33,9 +33,9 @@ pub struct Mark {
     pub end: usize,
     pub tone: Tone,
     /// A stable machine id: `smell:ambiguous_adverb`, `cue:action_verb`,
-    /// `name:unique`, `name:ambiguous`, `name:missing`, `pronoun:dangling`,
-    /// `pronoun:anchored`, `attachment`. Pages translate these; the note is
-    /// the English fallback.
+    /// `cue:question`, `name:unique`, `name:ambiguous`, `name:missing`,
+    /// `pronoun:dangling`, `pronoun:anchored`, `pronoun:pasted`,
+    /// `attachment`. Pages translate these; the note is the English fallback.
     pub kind: String,
     /// For `name:ambiguous`, how many things the name could denote.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -49,10 +49,12 @@ pub(crate) struct Evidence<'a> {
     pub tokens: &'a [Token],
     pub cue_hits: &'a [Hit<CueId>],
     pub smell_hits: &'a [Hit<SmellId>],
+    /// Pronouns taken to point at pasted material, and so not charged.
+    pub anchored: &'a [Span],
     /// `None` when there was no repository to resolve names against.
     pub referents: Option<&'a [Referent]>,
-    /// How many distinct action verbs the prompt has; a conjunction only
-    /// costs when it joins a second one.
+    /// How many things the prompt asks for; a conjunction only costs when it
+    /// joins a second one.
     pub objectives: usize,
 }
 
@@ -64,6 +66,7 @@ fn cue_note(id: CueId) -> &'static str {
         CueId::ScopeConstraint => "bounds the work",
         CueId::ExampleMarker => "introduces an example",
         CueId::Conjunction => "joins a second objective; one request per prompt scores higher",
+        CueId::Question => "asks a direct question; the answer is the objective",
     }
 }
 
@@ -122,6 +125,16 @@ pub(crate) fn collect(ev: &Evidence<'_>) -> Vec<Mark> {
             Tone::Bad,
             format!("smell:{}", hit.id.as_str()),
             hit.id.label(),
+        );
+    }
+
+    for &span in ev.anchored {
+        push(
+            &mut out,
+            span,
+            Tone::Good,
+            "pronoun:pasted",
+            "points at the pasted material",
         );
     }
 
@@ -332,5 +345,36 @@ mod tests {
     #[test]
     fn nothing_marked_in_gibberish() {
         assert!(marks("asdf qwer zxcv").is_empty());
+    }
+
+    #[test]
+    fn a_question_word_is_marked_as_the_objective() {
+        let text = "Why does verify_token panic on expired tokens?";
+        let why = marks(text)
+            .into_iter()
+            .find(|m| &text[m.start..m.end] == "Why")
+            .expect("the question word is marked");
+        assert_eq!(why.kind, "cue:question");
+        assert_eq!(why.tone, Tone::Good);
+    }
+
+    #[test]
+    fn a_pronoun_with_a_paste_to_point_at_is_marked_good_on_either_path() {
+        let text = "fix this\n```\nTraceback (most recent call last):\n  \
+                    File \"app/main.py\", line 42, in <module>\n    run()\n  \
+                    File \"app/main.py\", line 30, in run\n    token = verify_token(raw)\n  \
+                    File \"app/auth.py\", line 12, in verify_token\n    \
+                    raise ExpiredError(\"token expired\")\nauth.ExpiredError: token expired\n```";
+        let kind_of_this = |m: &[Mark]| {
+            m.iter()
+                .find(|m| &text[m.start..m.end] == "this")
+                .map(|m| (m.kind.clone(), m.tone))
+        };
+        let pasted = Some(("pronoun:pasted".to_string(), Tone::Good));
+        // Cut out as an attachment, as the hook does.
+        assert_eq!(kind_of_this(&marks(text)), pasted);
+        // Kept in the text, as the web page does.
+        let page = crate::score_parts(&crate::prompt::from_parts(text, &[]), None).unwrap();
+        assert_eq!(kind_of_this(&page.marks), pasted);
     }
 }

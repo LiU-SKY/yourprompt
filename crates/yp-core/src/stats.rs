@@ -23,9 +23,28 @@ pub struct PromptStats {
     /// Tokens that could name something in the repository. The grounding axis
     /// resolves these; until it exists they are collected but unused.
     pub referents: Vec<String>,
+    /// Content units contributed by pasted material. They count toward
+    /// [`Self::substance`] and toward nothing measured over the typed words;
+    /// see [`crate::pasted`].
+    pub pasted: usize,
 }
 
 impl PromptStats {
+    /// The same facts, crediting `units` of pasted material toward substance.
+    pub fn with_pasted(self, units: usize) -> Self {
+        Self {
+            pasted: units,
+            ..self
+        }
+    }
+
+    /// How far there is enough here to judge at all: typed content tokens
+    /// and pasted material together, against the floor in
+    /// [`crate::params::substance`].
+    pub fn substance(&self) -> f64 {
+        crate::params::substance(self.content_tokens + self.pasted)
+    }
+
     /// How far this text should be credited for containing no defects.
     ///
     /// Text that is not language contains no ambiguity smells and no dangling
@@ -129,6 +148,7 @@ pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
         has_concrete,
         legible_share,
         referents,
+        pasted: 0,
     }
 }
 
