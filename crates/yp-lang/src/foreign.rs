@@ -281,6 +281,19 @@ const ABOUT_LANGUAGE: &[&str] = &[
     "translation",
 ];
 
+/// The verbs a request is made of, which are not on the [`ENGLISH`] list.
+/// One counts as an English word only when it opens the prompt. A language
+/// that borrows the verb puts it where its own grammar does -- "このbugを
+/// fixして", "haz un fix rápido", "帮我 fix 一下" -- while an English request
+/// opens with it, and a terse one may have no other English word: without
+/// its verb, "rename ログイン to サインイン" would be Japanese and "Fix
+/// Ελληνικά label" Greek. Sorted, for binary search.
+const REQUEST_VERBS: &[&str] = &[
+    "change", "create", "delete", "explain", "find", "fix", "get", "give", "help", "keep", "know",
+    "look", "make", "move", "need", "remove", "rename", "replace", "run", "say", "see", "set",
+    "show", "take", "try", "update", "use", "want", "write",
+];
+
 /// The function words of the Latin-script languages most likely to turn up,
 /// none of them an English word, and the imperatives a request in each one
 /// opens with.
@@ -2008,9 +2021,9 @@ struct Prose {
     /// request about a file, though "README" has more letters than the rest.
     named: usize,
     words: Vec<Word>,
-    /// Words on the [`ENGLISH`] list, each counted as often as it is used.
-    /// A name is not counted: "Show More" on a button in a French request is
-    /// the button's label.
+    /// Words on the [`ENGLISH`] list, each counted as often as it is used,
+    /// and a request verb that opens the prompt. A name is not counted:
+    /// "Show More" on a button in a French request is the button's label.
     english: usize,
     /// A quotation was set aside unread.
     quoted: bool,
@@ -2099,6 +2112,7 @@ impl Prose {
     /// Count one word of prose: false once the prompt is known to be
     /// readable.
     fn read_word(&mut self, word: &str, first: bool) -> bool {
+        let opens = self.letters.iter().all(|&n| n == 0);
         let letters = word.chars().filter(|c| c.is_alphabetic()).count();
         self.letters[Script::Latin as usize] += letters;
         let capital = word
@@ -2121,7 +2135,9 @@ impl Prose {
         if name_like {
             self.named += letters;
         }
-        let english = !name_like && ENGLISH.binary_search(&text.as_str()).is_ok();
+        let english = !name_like
+            && (ENGLISH.binary_search(&text.as_str()).is_ok()
+                || (opens && REQUEST_VERBS.binary_search(&text.as_str()).is_ok()));
         self.words.push(Word {
             text,
             capital,
@@ -2389,6 +2405,7 @@ mod tests {
         check("ENGLISH", ENGLISH);
         check("ABOUT_LANGUAGE", ABOUT_LANGUAGE);
         check("LANGUAGE_CODES", LANGUAGE_CODES);
+        check("REQUEST_VERBS", REQUEST_VERBS);
         for (language, list) in FUNCTION_WORDS {
             check(language, list);
         }
@@ -2402,7 +2419,8 @@ mod tests {
             for word in *list {
                 assert!(
                     ENGLISH.binary_search(word).is_err()
-                        && ABOUT_LANGUAGE.binary_search(word).is_err(),
+                        && ABOUT_LANGUAGE.binary_search(word).is_err()
+                        && REQUEST_VERBS.binary_search(word).is_err(),
                     "{language} {word:?} is on the English list"
                 );
                 assert!(
@@ -2890,8 +2908,11 @@ mod tests {
              reproduce it?",
             "The Spanish string in es.json reads: La sesión ha expirado, por favor \
              inicia sesión de nuevo. Fix the typo.",
-            // The request verb alone is not English, but nothing else here is
-            // another language's.
+            // A terse request whose only English is the verb that opens it.
+            "rename ログイン to サインイン",
+            "Fix Ελληνικά label",
+            "update zh.json: 设置 → 偏好设置",
+            // Nothing here is another language's either.
             "fix login",
             "use DI container",
             "help me find the leak",
