@@ -145,9 +145,11 @@ pub fn source_files(root: &Path) -> Vec<PathBuf> {
 
 /// Most threads [`read_sources`] reads on.
 ///
-/// Measured on 1,313 files apiece that had not been read before: 2 threads
-/// read them 2.0 times as fast as one, 4 threads 3.0 times, 8 threads 6.3,
-/// 16 threads 10.1, and 28 threads 10.3.
+/// Measured on files nobody had read before, whose first read cost 3.9 to
+/// 4.9 ms apiece on one thread. Of 3,076 such files, 2 threads read their
+/// share 1.9 times as fast as one, 4 threads 3.1 times, 8 threads 4.8, 16
+/// threads 9.6 and 28 threads 12. Of small XML files, 16 threads read 8.1 to
+/// 9.2 times as fast as one, and 28 threads hardly faster than 16.
 const MAX_READERS: usize = 16;
 
 /// The contents of every file in `paths` that is UTF-8, each named by its
@@ -155,14 +157,14 @@ const MAX_READERS: usize = 16;
 ///
 /// Read on several threads, because the first read of a file can cost far
 /// more than its size. Where an antivirus scans each file as it is opened, as
-/// Windows Defender does by default, that scan is most of the cost: one
-/// thread read 1,314 small XML files no one had opened before in 5.4 s,
-/// 4.1 ms apiece, and sixteen threads read 1,313 others from the same
-/// folders in 0.54 s. Read one at a time, the first index of a 5,934-file
-/// repository took 40 to 71 s, and 4 to 8 s once its files had been read;
-/// read like this, a first index of 5,691 files took 9.8 s, where one of
-/// 5,916 files read one at a time took 45.3 s. The order, and so the index,
-/// is the same however the reads are shared out.
+/// Windows Defender does by default, that scan is most of the cost: indexing
+/// a folder of 990 to 1,231 small files nobody had opened took 4.5 to 4.9 s
+/// with one thread reading and 0.48 to 0.54 s like this, and 61 to 102 ms
+/// either way once they had been read. Read one at a time, the first index
+/// of a 5,934-file repository took 40 to 71 s, and 3.2 to 8.5 s once its
+/// files had been read, 3.0 s of it extracting and sorting 647,056 terms.
+/// The order, and so the index, is the same however the reads are shared
+/// out.
 pub fn read_sources(root: &Path, paths: &[PathBuf]) -> Vec<(String, String)> {
     let readers = std::thread::available_parallelism()
         .map_or(1, |n| n.get())

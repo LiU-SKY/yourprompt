@@ -87,6 +87,8 @@ struct Hook {
     /// The arguments yp runs with, the subcommand first.
     args: &'static [&'static str],
     timeout: u64,
+    /// What the timeout bounds, said to someone whose handler gains it.
+    bounds: &'static str,
     /// Whether Claude Code runs it in the background, `"async": true`,
     /// rather than waiting for it.
     background: bool,
@@ -103,22 +105,27 @@ const PROMPT_HOOK: Hook = Hook {
     event: "UserPromptSubmit",
     args: &["hook"],
     timeout: HOOK_TIMEOUT,
+    bounds: "a prompt never waits longer than that for its score",
     background: false,
 };
 
 /// Building the repository index, once per session, in the background.
 ///
-/// Claude Code waits for a `SessionStart` hook before the session goes on,
-/// and the first index of a 5,934-file repository took 40 to 71 s: past
-/// [`INDEX_TIMEOUT`], which cancelled it, so nothing was saved and the next
-/// session started over. Nothing waits for the index -- the prompt hook
-/// scores without one until it exists -- so the hook need not be waited for
-/// either. Claude Code does not enforce the timeout of a hook it runs in the
-/// background; it is kept for one that does not know `async`.
+/// Claude Code holds a session's first prompt until its `SessionStart` hooks
+/// have finished, and the first index of a 5,934-file repository took 40 to
+/// 71 s: past [`INDEX_TIMEOUT`], which cancelled it, so nothing was saved and
+/// the next session started over. Nothing waits for the index -- the prompt
+/// hook scores without one until it exists -- so the hook need not be waited
+/// for either. Claude Code does not enforce the timeout of a hook it runs in
+/// the background, so the build goes on until it is done or the session
+/// ends. Its changelog fixes async hooks as early as 2.1.23, long before the
+/// 2.1.139 the exec form needs; the timeout is kept for a Claude Code that
+/// does not know `async` and waits.
 const INDEX_HOOK: Hook = Hook {
     event: "SessionStart",
     args: &INDEX_ARGS,
     timeout: INDEX_TIMEOUT,
+    bounds: "a session that waits for it waits no longer than that",
     background: true,
 };
 
@@ -661,9 +668,8 @@ fn complete(handler: &mut Value, hook: &Hook, what: &str) -> Option<String> {
              while a large repository is indexed"
         )),
         (true, false) => Some(format!(
-            "gave the {what} the {} s timeout a fresh install sets, so a prompt never \
-             waits longer than that for its score",
-            hook.timeout
+            "gave the {what} the {} s timeout a fresh install sets, so {}",
+            hook.timeout, hook.bounds
         )),
         (false, false) => None,
     }
@@ -1040,8 +1046,8 @@ fn settings_path() -> Option<PathBuf> {
 /// back from an install and an uninstall equal in content but 130 bytes
 /// instead of 136. What still changes is beyond a JSON value: an object
 /// written on one line comes back spread over several, and a character
-/// written as an escape comes back as itself. The backup has the exact
-/// bytes.
+/// written as an escape comes back as itself. An uninstall that leaves
+/// nothing else changed gives back [the backup's bytes](verbatim_backup).
 #[derive(Debug, Clone, PartialEq)]
 struct Layout {
     bom: bool,
@@ -1103,6 +1109,19 @@ impl Layout {
         }
         Ok(text)
     }
+}
+
+/// The text of the backup at `backup`, when it holds exactly `settings`.
+///
+/// The backup is the settings file as it was before yp changed it, byte for
+/// byte, so an uninstall that leaves the settings as they were then gives it
+/// back as it was, every one-line object and escape included. Rendered
+/// instead, the file a Windows editor saved came back 165 bytes long in place
+/// of its 136.
+fn verbatim_backup(backup: &Path, settings: &Value) -> Option<String> {
+    let text = fs::read_to_string(backup).ok()?;
+    let held: Value = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text)).ok()?;
+    (held == *settings).then_some(text)
 }
 
 fn current_exe() -> String {
@@ -1255,6 +1274,11 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
     }
 
     let changed = settings != original;
+    let rendered = if uninstall {
+        verbatim_backup(&backup, &settings).unwrap_or(rendered)
+    } else {
+        rendered
+    };
 
     if !uninstall {
         let worth_keeping = raw.as_deref().filter(|r| !matches!(r.trim(), "" | "{}"));
@@ -1483,6 +1507,54 @@ mod tests {
             notes.contains(&"SessionStart hook already registered; left as is".to_string()),
             "{notes:?}"
         );
+
+        // Already in the background, it gains only the timeout, and is told
+        // what that timeout is for.
+        let mut v = json!({ "hooks": { "SessionStart": [ { "hooks": [ {
+            "type": "command",
+            "command": "/usr/local/bin/yp",
+            "args": ["index", "--quiet", "--max-age", "900"],
+            "async": true
+        } ] } ] } });
+        let notes = install(&mut v, EXE, &mut Saved::default());
+        assert_eq!(handler_of(&v, "SessionStart")["timeout"], INDEX_TIMEOUT);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("60 s timeout") && n.contains("a session that waits for it")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn the_marketplace_offers_the_plugin_under_the_id_install_looks_for() {
+        // `/plugin marketplace add LiU-SKY/yourprompt`, then
+        // `/plugin install yourprompt@yourprompt`. Claude Code names the
+        // plugin in enabledPlugins by the entry's name, an @, and the
+        // marketplace's name, and an entry named apart from its plugin.json
+        // cannot be installed by the manifest's name.
+        let marketplace: Value =
+            serde_json::from_str(include_str!("../../../.claude-plugin/marketplace.json")).unwrap();
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../plugin/.claude-plugin/plugin.json"))
+                .unwrap();
+        assert!(marketplace["owner"]["name"].is_string(), "{marketplace}");
+        let [entry] = marketplace["plugins"].as_array().unwrap().as_slice() else {
+            panic!("one plugin: {marketplace}");
+        };
+        // Resolved from the repository root, the directory that holds
+        // .claude-plugin/.
+        assert_eq!(entry["source"], "./plugin");
+        assert_eq!(entry["name"], manifest["name"]);
+        let id = format!(
+            "{}@{}",
+            entry["name"].as_str().unwrap(),
+            marketplace["name"].as_str().unwrap()
+        );
+        assert_eq!(id, "yourprompt@yourprompt");
+        let mut enabled = Map::new();
+        enabled.insert(id, json!(true));
+        assert!(plugin_enabled(&json!({ "enabledPlugins": enabled })));
     }
 
     #[test]
@@ -2287,6 +2359,28 @@ mod tests {
             plan_backup(first, &unchanged, Some(first.as_bytes())),
             Backup::Keep
         );
+    }
+
+    #[test]
+    fn an_uninstall_that_leaves_nothing_else_changed_gives_the_file_back() {
+        // What a Windows editor saves, as the install reviewer wrote it: a
+        // byte order mark, CRLF, four-space indents, objects on one line and
+        // an escaped character.
+        let dir = Dir::new("verbatim");
+        let backup = dir.0.join("settings.json.yp-backup");
+        let original = "\u{feff}{\r\n    \"model\": \"opus\",\r\n    \"statusLine\": { \"type\": \"command\", \"command\": \"echo mine\" },\r\n    \"env\": { \"FOO\": \"\\u00e9t\\u00e9\" }\r\n}\r\n";
+        fs::write(&backup, original).unwrap();
+        let mut v: Value = serde_json::from_str(original.trim_start_matches('\u{feff}')).unwrap();
+        let mut saved = Saved::default();
+        install(&mut v, EXE, &mut saved);
+        assert_eq!(verbatim_backup(&backup, &v), None, "still installed");
+        remove(&mut v, &mut saved);
+        assert_eq!(verbatim_backup(&backup, &v).as_deref(), Some(original));
+
+        // Settings changed since are not what the backup holds.
+        v["model"] = json!("sonnet");
+        assert_eq!(verbatim_backup(&backup, &v), None);
+        assert_eq!(verbatim_backup(&dir.0.join("none"), &v), None);
     }
 
     #[test]

@@ -350,6 +350,7 @@ mod tests {
             latest_prompt: "fix it".into(),
             prompt_truncated: false,
             prompt_capped: false,
+            paste_capped: false,
             history: history.into_iter().map(|t| entry(t, true)).collect(),
         }
     }

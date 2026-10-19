@@ -207,10 +207,11 @@ pub fn load_for(cwd: &Path) -> Option<IndexCorpus> {
 /// for 21 s, past the 5 s Claude Code gives it, so the prompt waited and the
 /// status line went stale.
 ///
-/// On a local disk the lookup took at most 174 ms in 214 runs of the
-/// integration tests with every core kept busy. Half a second was still
-/// passed now and then on a machine more loaded than that, and the prompt
-/// was scored without an index it had, so the deadline leaves more room.
+/// On a local disk the lookup took at most 5 ms in 280 hooks run 28 at a
+/// time, and at most 118 ms in 560 more with every core and the disk kept
+/// busy besides. A lookup cut short scores the prompt without the index it
+/// has, lower for no reason anyone can see, so the deadline is set well clear
+/// of that, and still well inside the 5 s.
 pub const LOOKUP_DEADLINE: Duration = Duration::from_secs(1);
 
 /// [`load_for`], unless finding the index takes longer than `deadline`.
@@ -219,7 +220,7 @@ pub const LOOKUP_DEADLINE: Duration = Duration::from_secs(1);
 /// did not. The lookup runs on a thread of its own, which is left behind
 /// when it is too slow: a thread blocked on an unreachable share does not
 /// hold up the end of the process, and with its cwd on a host that does not
-/// answer the hook now ends 1,026 to 1,092 ms after it starts, the prompt
+/// answer the hook now ends 1,024 to 1,030 ms after it starts, the prompt
 /// scored without an index. The index itself is read on the calling thread
 /// once found: it is in the state directory on this machine, and a large
 /// one takes the longest to read.

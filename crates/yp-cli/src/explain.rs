@@ -115,19 +115,12 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
     };
 
     if sidecar.prompt_truncated {
-        let scored = if sidecar.prompt_capped {
-            format!(
-                "the first {} KB of the prompt, which is as much as yp reads",
-                yp_core::prompt::MAX_INSTRUCTION_BYTES / 1024
-            )
-        } else {
-            "the whole prompt".to_string()
-        };
         println!(
             "note: the prompt was longer than the sidecar keeps, so this \
              breakdown is of the first part only.\n      the status line \
-             score of {:.1} was computed on {scored}.",
-            sidecar.latest.total
+             score of {:.1} was computed on {}.",
+            sidecar.latest.total,
+            scored_on(&sidecar)
         );
     }
     if gave_up {
@@ -172,6 +165,31 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// How much of the prompt the status line's score was computed on.
+///
+/// This said "the whole prompt" for every prompt, but the scorer reads the
+/// first 64 KB of what was typed and the first 64 KB of what was pasted: a
+/// 204,828-character prompt and its first 64 KB both scored 319.5.
+fn scored_on(sidecar: &Sidecar) -> String {
+    use yp_core::prompt::{MAX_ATTACHED_BYTES, MAX_INSTRUCTION_BYTES};
+    let typed = MAX_INSTRUCTION_BYTES / 1024;
+    let pasted = MAX_ATTACHED_BYTES / 1024;
+    match (sidecar.prompt_capped, sidecar.paste_capped) {
+        (false, false) => "the whole prompt".to_string(),
+        (true, false) => {
+            format!("the first {typed} KB of the prompt, which is as much as yp reads")
+        }
+        (false, true) => format!(
+            "the whole prompt but the first {pasted} KB of what was pasted into it, \
+             which is as much of a paste as yp reads"
+        ),
+        (true, true) => format!(
+            "the first {typed} KB of the prompt and the first {pasted} KB of what was \
+             pasted into it, which is as much as yp reads"
+        ),
+    }
 }
 
 /// A note for when the prompt, scored again, does not come to what the
@@ -234,6 +252,7 @@ mod tests {
             latest_prompt: "fix verify_token in src/auth/login.rs".into(),
             prompt_truncated: false,
             prompt_capped: false,
+            paste_capped: false,
             history: Vec::new(),
         }
     }
@@ -247,6 +266,35 @@ mod tests {
 
     fn at(unix: u64) -> Option<SystemTime> {
         Some(UNIX_EPOCH + Duration::from_secs(unix))
+    }
+
+    #[test]
+    fn a_score_of_part_of_the_prompt_says_which_part() {
+        let mut sidecar = shown(319.5, "F", true);
+        assert_eq!(scored_on(&sidecar), "the whole prompt");
+        sidecar.prompt_capped = true;
+        assert!(
+            scored_on(&sidecar).starts_with("the first 64 KB of the prompt,"),
+            "{}",
+            scored_on(&sidecar)
+        );
+        // A long paste: what was typed around it was read whole.
+        sidecar.prompt_capped = false;
+        sidecar.paste_capped = true;
+        assert!(
+            scored_on(&sidecar)
+                .starts_with("the whole prompt but the first 64 KB of what was pasted"),
+            "{}",
+            scored_on(&sidecar)
+        );
+        sidecar.prompt_capped = true;
+        assert!(
+            scored_on(&sidecar).starts_with(
+                "the first 64 KB of the prompt and the first 64 KB of what was pasted"
+            ),
+            "{}",
+            scored_on(&sidecar)
+        );
     }
 
     #[test]
