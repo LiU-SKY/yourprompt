@@ -214,6 +214,29 @@ mod tests {
     }
 
     #[test]
+    fn hype_states_no_criterion_in_either_language() {
+        for text in [
+            "Write 10 viral hooks",
+            "a world-class landing page",
+            "make it sleek and stunning",
+            "state-of-the-art accuracy",
+            "바이럴 되는 카피",
+            "월드클래스 수준으로",
+            "고급스럽게 만들어줘",
+        ] {
+            let got = ids(text);
+            assert!(
+                got.contains(&SmellId::SubjectiveLanguage) || got.contains(&SmellId::Superlative),
+                "{text}: {got:?}"
+            );
+        }
+        // Names that merely contain a hype word are not hype.
+        for text in ["the OOM killer fired", "add a Font Awesome icon"] {
+            assert!(terms(text).is_empty(), "{text}: {:?}", terms(text));
+        }
+    }
+
+    #[test]
     fn respects_english_word_boundaries() {
         // "it" inside "commit" and "omit" must not fire.
         assert!(terms("commit the omitted change").is_empty());

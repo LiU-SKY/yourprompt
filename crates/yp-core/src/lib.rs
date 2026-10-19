@@ -29,6 +29,7 @@ pub mod grade;
 pub mod grounding;
 pub mod kind;
 pub mod marks;
+mod negation;
 pub mod params;
 pub mod prompt;
 pub mod stats;
@@ -162,8 +163,12 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
 
     let cue_hits = resources.cue_matcher.find_masked(text, &code);
     let smell_hits = resources.smells.find_masked(text, &code);
+    // "change" in "don't change the schema" is a constraint, not the
+    // objective. The axes and the marks read the settled hits; grounding
+    // still takes every hit as an instruction word rather than a name.
+    let settled = negation::settle(text, &cue_hits);
 
-    let cues = axes::distinct_by_category(&cue_hits);
+    let cues = axes::distinct_by_category(&settled);
     let smells = axes::total_by_category(&smell_hits);
     let request = request_factor(&cues);
 
@@ -216,7 +221,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     let marks = marks::collect(&marks::Evidence {
         parts,
         tokens: &tokens,
-        cue_hits: &cue_hits,
+        cue_hits: &settled,
         smell_hits: &smell_hits,
         referents: referents.as_deref(),
         objectives: cues.get(&yp_lang::CueId::ActionVerb).map_or(0, |v| v.len()),
@@ -293,6 +298,105 @@ mod tests {
     fn a_courtesy_adds_nothing() {
         assert_eq!(total("fix the bug"), total("fix the bug pls"));
         assert_eq!(total("fix the bug"), total("please fix the bug"));
+    }
+
+    #[test]
+    fn a_forbidden_verb_asks_for_nothing_in_either_language() {
+        // "Don't change anything. Tests must still pass." scored 673 with
+        // "change" as its objective, and "dont" was not read at all.
+        let earned = |text: &str, id: &str| {
+            let s = score(text).unwrap();
+            [&s.actionability, &s.context]
+                .iter()
+                .flat_map(|axis| &axis.components)
+                .find(|c| c.id == id)
+                .unwrap()
+                .earned
+        };
+        for text in [
+            "Don't change anything. Tests must still pass.",
+            "asdf asdf src/a.rs must pass tests dont change",
+            "아무것도 변경하지 말 것. 테스트는 계속 통과해야 해.",
+        ] {
+            assert_eq!(earned(text, "objective"), 0.0, "{text}");
+            assert!(earned(text, "scope") > 0.0, "{text}");
+        }
+        // Beside a real request, the prohibition bounds it rather than
+        // counting as a second one.
+        let text = "Fix the parser. Don't change the tests.";
+        assert_eq!(
+            earned(text, "singularity"),
+            params::actionability::SINGULARITY_MAX
+        );
+        assert!(
+            total("Don't change anything. Tests must still pass.")
+                < total("Fix the parser. Tests must still pass.")
+        );
+    }
+
+    #[test]
+    fn saying_what_done_means_is_an_acceptance_criterion() {
+        // "Done means: the test suite passes" earned none of the 70
+        // acceptance points; "The existing tests must still pass" earned 41.5.
+        let acceptance = |text: &str| {
+            let s = score(text).unwrap();
+            s.actionability
+                .components
+                .iter()
+                .find(|c| c.id == "acceptance")
+                .unwrap()
+                .earned
+        };
+        let done = acceptance(
+            "Fix the flaky retry in src/net/client.rs. Done means: the test suite passes.",
+        );
+        let still = acceptance(
+            "Fix the flaky retry in src/net/client.rs. The existing tests must still pass.",
+        );
+        assert!(
+            done >= still,
+            "done means {done} vs must still pass {still}"
+        );
+        // In Korean the criterion carries its own label, 완료 조건.
+        assert!(
+            acceptance("재시도를 고쳐줘. 완료 조건: 테스트가 전부 통과할 것")
+                > acceptance("재시도를 고쳐줘. 테스트가 전부 통과할 것")
+        );
+    }
+
+    #[test]
+    fn running_something_is_a_request_in_both_languages() {
+        // "run the tests" scored 65 with no objective at all.
+        for text in [
+            "run the tests",
+            "execute the migration",
+            "테스트 돌려줘",
+            "테스트 실행해줘",
+        ] {
+            let s = score(text).unwrap();
+            let objective = &s.actionability.components[0];
+            assert_eq!(objective.id, "objective");
+            assert!(objective.earned > 0.0, "{text}: {}", objective.detail);
+        }
+    }
+
+    #[test]
+    fn hype_costs_clarity_in_both_languages() {
+        // "Write 10 viral hooks" from a "world-class copywriter" scored 570
+        // with clarity at full marks.
+        let clarity = |text: &str| score(text).unwrap().clarity.earned;
+        for (hyped, plain) in [
+            (
+                "Act as a world-class copywriter. Write 10 viral hooks for my SaaS.",
+                "Act as a senior copywriter. Write 10 short hooks for my SaaS.",
+            ),
+            (
+                "월드클래스 카피라이터처럼 내 SaaS용 바이럴 훅 10개 작성해줘.",
+                "시니어 카피라이터처럼 내 SaaS용 짧은 훅 10개 작성해줘.",
+            ),
+        ] {
+            assert!(clarity(hyped) < clarity(plain), "{hyped}");
+        }
     }
 
     #[test]

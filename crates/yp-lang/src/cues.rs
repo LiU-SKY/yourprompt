@@ -197,6 +197,55 @@ mod tests {
     }
 
     #[test]
+    fn a_stated_completion_criterion_is_acceptance() {
+        for text in [
+            "Done means: something",
+            "done looks like this",
+            "it is finished when lint passes",
+            "the test suite passes",
+            "make it compile without warnings",
+            "완료 조건:",
+            "경고 없이 빌드되게",
+        ] {
+            assert!(found(text).contains(&CueId::Acceptance), "{text}");
+        }
+        // The "test" in "the test suite passes" is the criterion, not a
+        // second thing to do.
+        assert!(!found("the test suite passes").contains(&CueId::ActionVerb));
+    }
+
+    #[test]
+    fn running_something_is_an_action_in_both_languages() {
+        for text in [
+            "run the tests",
+            "rerun the job",
+            "re-run it",
+            "execute the migration",
+            "테스트 돌려줘",
+            "테스트 실행해줘",
+            "재실행해줘",
+        ] {
+            assert!(found(text).contains(&CueId::ActionVerb), "{text}");
+        }
+        // The return-value forms of 돌려주다 still describe a result.
+        assert!(found("빈 리스트를 돌려주도록 바꿔줘").contains(&CueId::IoSpec));
+        assert!(found("빈 리스트를 돌려줘야 해").contains(&CueId::IoSpec));
+    }
+
+    #[test]
+    fn prohibitions_typed_in_a_hurry_are_still_scope_cues() {
+        for text in [
+            "dont touch the migrations",
+            "don’t touch the migrations",
+            "you mustn't touch the migrations",
+            "마이그레이션은 건드리지마",
+            "login은 바꾸지 말 것",
+        ] {
+            assert!(found(text).contains(&CueId::ScopeConstraint), "{text}");
+        }
+    }
+
+    #[test]
     fn no_duplicate_terms_within_a_category() {
         let cues = load_bundled().unwrap();
         for id in CueId::ALL {

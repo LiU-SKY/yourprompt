@@ -333,4 +333,25 @@ mod tests {
     fn nothing_marked_in_gibberish() {
         assert!(marks("asdf qwer zxcv").is_empty());
     }
+
+    #[test]
+    fn a_forbidden_verb_is_not_marked_as_the_action() {
+        let on = |text: &str, word: &str| -> Vec<String> {
+            marks(text)
+                .into_iter()
+                .filter(|m| &text[m.start..m.end] == word)
+                .map(|m| m.kind)
+                .collect()
+        };
+        let text = "Fix the parser. Don't change the tests.";
+        assert_eq!(on(text, "Fix"), ["cue:action_verb"]);
+        assert_eq!(on(text, "Don't"), ["cue:scope_constraint"]);
+        assert!(on(text, "change").is_empty());
+        // Where no other word carries the boundary, the verb does.
+        assert_eq!(
+            on("no need to rename the docs", "rename"),
+            ["cue:scope_constraint"]
+        );
+        assert_eq!(on("변경하지 말 것", "변경하"), ["cue:scope_constraint"]);
+    }
 }
