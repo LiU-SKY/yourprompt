@@ -21,12 +21,12 @@
 </p>
 
 ```
-[Opus] ~/proj main 42% ctx  ⟦ 740.5 ▓▓▓▓▓▓▓░░░ B+ ▲ ⟧
+[Opus] ~/proj main 42% ctx  ⟦ 860.3 ▓▓▓▓▓▓▓▓▓░ A+ ▲ ⟧
 ```
 
 <p align="center">
   <img src="docs/og.png" width="720"
-       alt="&quot;fix the bug&quot; scores 305.4, an F. A prompt that names the file, the function and when it is done scores 740.5, a B+.">
+       alt="&quot;fix the bug&quot; scores 305.4, an F. A prompt that names the file, the function and when it is done scores 799.8, an A-.">
 </p>
 
 Every prompt you send gets a 0 to 1000 score in the status line, before the
@@ -41,16 +41,18 @@ one place or forty, and whether you said what done looks like.
   one where it matches 37 places.
 - **No model call.** Dictionaries, corpus statistics and a tokenizer. Same
   input, same score, every time. Nothing leaves your machine.
-- **Explains itself.** `/score` prints every component with the reason it got
-  that number.
+- **Explains itself.** `yp explain` prints every component with the reason it
+  got that number. `/score`, which `yp install` adds, hands that breakdown to
+  Claude for the component that cost the most and one rewrite.
 - **Shows it in place.** In the web UI the prompt is coloured as you type:
   green where it earned points, yellow where it is unclear, red where it lost
   them, with a chip per word saying why.
 - **Grades tasks, not chatter.** Slash commands and short follow-ups like
   "yes", "continue" or "계속해" are not graded, so the status line keeps your
   last task's score instead of flashing an F.
-- **English and Korean.** A prompt in another language says "not graded"
-  rather than failing.
+- **English and Korean.** A prompt in Spanish, Japanese, Russian or 25 other
+  languages says "not graded" rather than failing. One of two or three words
+  can still slip through and be graded.
 
 ## Try it
 
@@ -59,22 +61,25 @@ to WebAssembly. Drop your own source files on the page and they are indexed
 locally, so the grounding axis is about your code. Nothing is uploaded.
 
 With no files loaded, names cannot be checked, and the page says so next to
-the grade: a prompt about a made-up `src/banana.rs` scores the same 740.5 as
-the real one. Load the six-file sample repo and the real prompt rises to 851.8
+the grade: a prompt about a made-up `src/banana.rs` scores the same 799.8 as
+the real one. Load the six-file sample repo and the real prompt rises to 860.3
 while the made-up one falls to 563.8.
 
-Or from the command line, here in a directory with no index:
+Or from the command line, here in a directory with no index, which the `~`
+marks:
 
 ```console
-$ yp score "fix the login handler"
-  294.3 / 1000  F  ▓▓▓░░░░░░░
+$ yp score --oneline "fix the login handler"
+294.3 ▓▓▓░░░░░░░ F ~
 
-$ yp score "In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Keep the public signature of login(). tests/auth.rs::expired_token_is_rejected must pass."
-  735.0 / 1000  B+  ▓▓▓▓▓▓▓░░░
+$ yp score --oneline "In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Keep the public signature of login(). tests/auth.rs::expired_token_is_rejected must pass."
+798.3 ▓▓▓▓▓▓▓▓░░ A- ~
 
-$ yp score "continue"
-  not graded: a follow-up like this leans on the conversation
+$ yp score --oneline "continue"
+not graded: a follow-up like this leans on the conversation
 ```
+
+Without `--oneline` it prints every component and why it got that number.
 
 ## Install
 
@@ -114,17 +119,20 @@ Then:
 yp install
 ```
 
-`yp install` registers the `UserPromptSubmit` hook and the status line in your
-Claude Code settings. It backs the file up first. If you already have a status
-line it wraps yours and appends the score segment.
+`yp install` registers the hooks and the status line in your Claude Code
+settings and adds the `/score` command. The first time it changes your
+settings it backs them up. If you already have a status line it keeps it, runs
+it, and appends the score segment. The hooks need Claude Code 2.1.139 or newer.
 
 ```bash
 yp install --print-only   # show the change, write nothing
-yp install --uninstall    # restore the backup
+yp install --uninstall    # remove what it added, restoring a status line it wrapped
 ```
 
-There is also a Claude Code plugin under [`plugin/`](plugin/). Plugins cannot
-register a status line, so you still run `yp install` for that part.
+There is also a Claude Code plugin under [`plugin/`](plugin/): the same hooks
+and `/score`, but no status line, which a plugin cannot ship. Use the plugin or
+`yp install`, not both: each registers the hook, and Claude Code would run it
+twice.
 
 ## How it stays at zero tokens
 
@@ -174,23 +182,32 @@ fix compute_paycheck in payroll.rs
   grounding  197.0 / 350   resolution  26.5/150  0 of 2 names resolve; "payroll.rs" is not in this repository
 ```
 
+`compute_paycheck` does appear here, in three files of tests and docs that use
+it as an example, which is where the 26.5 comes from. "score" is in most files,
+so it counts as vocabulary rather than as a name.
+
 ### Things that used to score well and no longer do
 
 Two components reward the absence of a defect, and text that is not language
-has no defects. So a mashed keyboard, one word typed ten times, a screen of
-digits, and 아 held down for eight lines all used to score 300 to 460. Each is
-now under 150. The rule: credit for the absence of a defect is scaled by
+has no defects. So 테스트 typed ten times, a screen of digits, and 아 held down
+for eight lines used to score 357 to 477, more than a vague request. Each is
+now under 100. The rule: credit for the absence of a defect is scaled by
 legibility, lexical variety, and whether the text asks for anything at all.
-A greeting has no vague words about the work because it contains no work.
+A greeting has no vague words about the work because it contains no work. An
+English verb typed ten times still reads as one request: "test" ten times
+scores 262.9, an F.
 
-Attached files are treated as evidence rather than as claims. Pasting the file
-a task is about raises the score. It used to cost 70 points, because the file's
-434 identifiers were averaged into the dozen you typed.
+Attached files are treated as evidence rather than as claims. Pasting a file
+used to cost 70 points, because its 434 identifiers were averaged into the
+dozen you typed. A pasted file now counts as context, but the score cannot
+tell the file a task is about from any other. With the demo's sample repo
+loaded, pasting `login.rs` into the prompt about `src/auth/login.rs` takes it
+from 860.3 to 859.3, while the unrelated `tests/auth.rs` lifts it to 882.7.
 
 The same goes for a pasted error. "fix this" over a stack trace in a code
 fence scored 278.3, because "this" was read as pointing at nothing. The trace
-is what it points at: the same prompt now scores 536.2, and a fence of
-keyboard mash still earns nothing.
+is what it points at: the same prompt now scores 536.2. A fence of keyboard
+mash gets only the flat credit any code block earns, and stays at 278.3.
 
 A direct question is a request. "Why does verify_token panic on expired
 tokens?" scored 155.3 for having no action verb; it now scores 511.1, while
@@ -203,7 +220,11 @@ now 519.6, and "Done means: the test suite passes." counts as a finish line.
 ## Benchmarks
 
 The score is checked against published datasets, and the first results were
-bad. They are in the commit history. Reproduce any of these with `yp bench`.
+bad. They are in the commit history. `yp bench` reproduces the HumanEvalComm
+numbers, and `yp bench --dataset swe` the SWE-bench Lite ones, after
+downloading six repositories. The Korean fixture is `bench/korean.txt`, and
+`cargo test -p yp-core the_korean_fixture_holds_its_ordering` checks that it
+stays above 90%.
 
 ### Ordering: HumanEvalComm
 
@@ -213,23 +234,23 @@ is the baseline to beat: call whichever prompt is longer the original.
 
 | | Pairs | Original scores higher | Longer prompt wins |
 |---|---:|---:|---:|
-| Defects visible in the text | 399 | 65.9% | 72.7% |
-| All pairs | 771 | 53.3% | 59.0% |
+| Defects visible in the text | 399 | 66.2% | 72.7% |
+| All pairs | 771 | 53.6% | 59.0% |
 
 | Defect | Pairs | Correct | Longer prompt wins |
 |---|---:|---:|---:|
 | incompleteness | 164 | 83.5% | 100.0% |
 | ambiguity + incompleteness | 71 | 77.5% | 100.0% |
-| ambiguity | 164 | **43.3%** | 33.5% |
+| ambiguity | 164 | 43.9% | 33.5% |
 | inconsistency | 163 | 24.5%, 98 ties | 35.6% |
 
 Length beats the score overall, and that is worth saying first. HumanEvalComm
 makes a prompt incomplete by cutting text out, so the shorter side is the
 damaged one in all 164 incomplete pairs: no scorer can do better than length
-there, and this one does not. The score wins where length cannot help, on
-vague wording, which is what its lexicons are for. The grounding benchmark
-below is immune to length altogether, because both sides of every comparison
-are the same text.
+there, and this one does not. On vague wording, where length cannot help, the
+score is right 43.9% of the time: below a coin flip, but ahead of length's
+33.5%. The grounding benchmark below is immune to length altogether, because
+both sides of every comparison are the same text.
 
 Inconsistency is out of reach for a lexical scorer. HumanEvalComm makes a
 docstring inconsistent by contradicting its worked example, for instance
@@ -244,21 +265,22 @@ counted as an example.
 
 ### Grounding: SWE-bench Lite
 
-270 real GitHub issues, each scored against the repository it was filed on and
-then against five unrelated ones. A scorer that ignores the corpus returns the
-same number both times.
+270 of SWE-bench Lite's 300 issues, the ones from its six largest
+repositories. Each is scored against the repository it was filed on and then
+against the five others. A scorer that ignores the corpus returns the same
+number both times.
 
 | Comparison | Issues | Own repo scores higher | Mean margin |
 |---|---:|---:|---:|
-| vs the mean foreign repo | 270 | **87.4%** | +42.7 |
-| vs the best foreign repo | 270 | 69.6% | +25.4 |
+| vs the mean foreign repo | 270 | **88.5%** | +47.3 |
+| vs the best foreign repo | 270 | 71.5% | +28.5 |
 
 | Repository | Issues | Own repo higher |
 |---|---:|---:|
 | scikit-learn | 23 | 100.0% |
-| matplotlib | 23 | 95.7% |
-| django | 114 | 89.5% |
-| sympy | 77 | 87.0% |
+| matplotlib | 23 | 91.3% |
+| sympy | 77 | 90.9% |
+| django | 114 | 90.4% |
 | pytest | 17 | 76.5% |
 | sphinx | 16 | 56.2% |
 
@@ -266,8 +288,8 @@ The first run was 47.0%, below chance. The specificity measure was inverted:
 it smoothed unseen terms as maximally distinctive, so the further a prompt was
 from a codebase the better it scored. Pasted code was looked up as one token.
 Resolution was a flat average over 100+ names, so the one name that mattered
-counted for nothing. Details and the fixes are in
-[bench/grounding.md](bench/grounding.md).
+counted for nothing. The full report, with its caveats and a test that came
+back empty, is in [bench/grounding.md](bench/grounding.md).
 
 sphinx is barely above chance, and part of that is real: every project here
 builds its docs with sphinx, so sphinx's vocabulary lives in all of them.
@@ -275,8 +297,10 @@ builds its docs with sphinx, so sphinx's vocabulary lives in all of them.
 ### Korean
 
 A 32-prompt fixture in five tiers, from a held-down key to a full request.
-Cross-tier ordering went from 74.4% to **97.5%** (385 of 395 pairs) with no
-change to the English numbers. The fixture runs in CI. See [bench/korean.md](bench/korean.md).
+Scored without an index, as CI scores it, cross-tier ordering went from 74.7%
+to **97.5%** (385 of 395 pairs), and the English benchmarks did not drop.
+Against this repository's own index it is 98.7%. See
+[bench/korean.md](bench/korean.md).
 
 ### Caveats
 
@@ -305,15 +329,17 @@ out below chance, are in the history as well.
 yp serve --repo .          # http://127.0.0.1:8787
 ```
 
-Same page as the hosted demo, with the repository indexed at startup. The
-server is `std::net` only: one embedded page, two JSON routes, loopback unless
-you pass `--bind`, nothing stored.
+The same scorer in a simpler sibling of the hosted page, with the repository
+indexed at startup. The server is `std::net` only: one embedded page, two JSON
+routes, loopback unless you pass `--bind`. Prompts are never stored; the index
+is written where `yp index` writes it.
 
 ## Prior art
 
 - Femmer et al., *Rapid quality assurance with Requirements Smells*, JSS 2017.
 - Hauff et al., *A survey of pre-retrieval query performance predictors*, CIKM 2008.
-- Wu et al., *HumanEvalComm*, arXiv:2504.16331.
+- Wu and Fard, *HumanEvalComm: Benchmarking the Communication Competence of
+  Code Generation for LLMs and LLM Agent*, arXiv:2406.00215.
 - *PartialOrderEval*, arXiv:2508.03678.
 - *MutaGReP*, arXiv:2502.15872.
 - SWE-bench Lite, princeton-nlp.

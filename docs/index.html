@@ -646,7 +646,7 @@ const sampleButton = () =>
 
 // Without an index the grounding axis is skipped and the other three are
 // scaled up to 1000, so an invented file name scores exactly what a real one
-// does: both of the long examples score 740.5. A dim "ungrounded, rescaled"
+// does: both of the long examples score 799.8. A dim "ungrounded, rescaled"
 // at the far end of the row did not get that across, so the badge sits
 // against the grade and says what to do about it. The offer of the sample
 // repository moves here from the empty file list, so it is made once.
@@ -998,8 +998,8 @@ function dropFromHash(key) {
 // --- the sample repository --------------------------------------------------
 // Grounding is 350 of the 1000 points, and a visitor with no code at hand
 // never sees it: with nothing indexed, the prompt about src/banana.rs scores
-// 740.5, the same as the one about src/auth/login.rs, because neither name
-// was checked. Against these six files the login prompt rises to 851.8 and
+// 799.8, the same as the one about src/auth/login.rs, because neither name
+// was checked. Against these six files the login prompt rises to 860.3 and
 // the invented one falls to 563.8. They are indexed exactly like dropped
 // files.
 //
@@ -1149,7 +1149,7 @@ function looksBinary(text) {
 // drops or picks, and the sample repository. A file already present with the
 // same name and contents is not added again, because a second copy makes
 // every name defined in it look defined twice: loading the sample twice took
-// the showcase prompt from 851.8 to 784.3. For the same reason a folder that
+// the showcase prompt from 860.3 to 787.2. For the same reason a folder that
 // arrives again replaces what it brought before, or an edited file would be
 // indexed twice under one path.
 function addTexts(entries, folder) {

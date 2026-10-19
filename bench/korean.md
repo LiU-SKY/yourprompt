@@ -3,27 +3,31 @@
 `bench/korean.txt` is 32 Korean prompts in five tiers, from a held-down key to
 a fully specified request. The claim under test is ordering -- a higher tier
 outranks a lower one -- plus two hard ceilings: tier 0 (not language) stays
-under 150, tier 1 (language, but no request) under 350. The fixture is scored
-grounded against this repository by `bench/ko.py`-style runs, and ungrounded
-by the regression test `the_korean_fixture_holds_its_ordering`, which runs in
-CI.
+under 150, tier 1 (language, but no request) under 350. The regression test
+`the_korean_fixture_holds_its_ordering` scores it without an index, so the
+result does not drift as this repository grows, and runs in CI. The numbers
+below are scored the same way unless they say otherwise.
 
 ## The honest starting point
 
 The report that started this was a user typing 아 over eight lines and
-watching it score 346. Measured before any fix:
+watching it score 346. Measured on the commit before the fix (ab75e0d) and on
+v0.1.1:
 
-| | before | after |
+| | before | v0.1.1 |
 |---|---:|---:|
-| cross-tier ordering (395 pairs) | 74.4% | **98.5%** |
+| cross-tier ordering (395 pairs) | 74.7% | **97.5%** |
 | tier-0 ceiling breaches | 5 | **0** |
-| tier 1 vs 2 boundary | 27.1% | 91.7% |
-| worst tier-0 score | 389.7 ("테스트" ×10) | 61.3 |
+| tier 1 vs 2 boundary | 39.6% | 91.7% |
+| worst tier-0 score | 476.5 ("테스트" ×10) | 61.5 |
 
-The 27.1% is the number worth staring at: a complaint with no object (346.0)
-outscored a real request, "그거 좀 고쳐줘" (242.4). Making a request exposed
-you to penalties; making none exposed you to nothing. The scorer was punishing
-people for asking.
+Against this repository's own index, v0.1.1 orders 98.7% of the pairs (390 of
+395).
+
+The 39.6% is the number worth staring at: a complaint with no object (409.2)
+outscored every tier-2 request, "그거 좀 고쳐줘" (239.8) included. Making a
+request exposed you to penalties; making none exposed you to nothing. The
+scorer was punishing people for asking.
 
 ## What was wrong, in order of embarrassment
 
@@ -62,7 +66,8 @@ the uncertainty smells, which is what separates thinking-aloud from asking.
 
 ## What did not move
 
-The fix was required not to buy Korean at English's expense:
+The fix was required not to buy Korean at English's expense. Measured when it
+landed:
 
 | benchmark | before | after |
 |---|---:|---:|
@@ -72,11 +77,16 @@ The fix was required not to buy Korean at English's expense:
 
 ## What is still allowed to be imperfect
 
-Six inversions remain, all at the floor. Four are "저거 빨리 좀 어떻게 해줘
-급해" (77.2) scoring under some tier-1 small talk: it is nominally a request,
-but one that tells an agent nothing at all, and the scorer is not wrong to say
-so. Two are the greeting (56.8) sitting a few points under borderline tier-0
-noise. And "src/auth/login.rs 의 토큰 만료 처리 로직을 수정해줘" (tier 3)
-scores 293.7 grounded *against this repository*, which has no such file --
-naming things that do not exist where you are standing earns nothing, and that
-is the grounding axis doing its job, not failing at it.
+Ten inversions remain, all at the floor. Four are "저거 빨리 좀 어떻게 해줘
+급해" (57.8) scoring under tier-1 small talk: it is nominally a request, but
+one that tells an agent nothing at all, and the scorer is not wrong to say so.
+The other six are the two loudest kinds of tier-0 noise, "테스트" typed ten
+times (60.4) and filler syllables (61.5), a few points above the greeting
+(41.0), thinking aloud (56.9) and that same urgent non-request. Against this
+repository's index five remain: the same four, and the filler syllables (61.3)
+over the greeting (56.8).
+
+And "src/auth/login.rs 의 토큰 만료 처리 로직을 수정해줘" (tier 3) scores
+328.8 without an index but 293.7 *against this repository*, which has no such
+file -- naming things that do not exist where you are standing earns nothing,
+and that is the grounding axis doing its job, not failing at it.
