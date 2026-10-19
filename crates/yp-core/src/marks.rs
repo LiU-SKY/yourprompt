@@ -9,6 +9,9 @@
 //! Marks are drawn from the same hits and referents the axes were scored on.
 //! They never contain a judgement the axes did not make; they only say where.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use serde::Serialize;
 use yp_lang::{CueId, Hit, SmellId, Span, Token};
 
@@ -93,6 +96,33 @@ fn push(
     });
 }
 
+/// The most of a name a note repeats, in characters.
+///
+/// A name can run as long as the prompt does. Quoted whole under every part
+/// of a 64 KB `a::a::…`, the marks came to 718 MB. Of the 2,946 names the
+/// notes on SWE-bench Lite quote, scored against each issue's own
+/// repository, the longest is 78 characters, a temporary file's path, so
+/// none of those is cut.
+const NOTE_NAME_CHARS: usize = 80;
+
+/// `name` as a note quotes it: whole, or its first [`NOTE_NAME_CHARS`]
+/// characters and an ellipsis.
+fn clipped(name: &str) -> Cow<'_, str> {
+    match name.char_indices().nth(NOTE_NAME_CHARS) {
+        Some((cut, _)) => Cow::Owned(format!("{}…", &name[..cut])),
+        None => Cow::Borrowed(name),
+    }
+}
+
+/// The token that starts at `offset`, if one does.
+///
+/// Tokens come in text order, each starting after the one before it, so this
+/// is a binary search.
+fn token_at(tokens: &[Token], offset: usize) -> Option<&Token> {
+    let at = tokens.partition_point(|t| t.span.start < offset);
+    tokens.get(at).filter(|t| t.span.start == offset)
+}
+
 pub(crate) fn collect(ev: &Evidence<'_>) -> Vec<Mark> {
     let mut out = Vec::new();
 
@@ -168,21 +198,34 @@ pub(crate) fn collect(ev: &Evidence<'_>) -> Vec<Mark> {
         // Several referents can share one span: the names inside a pasted
         // snippet all carry the snippet's offset. The span shows the worst of
         // them, which is the one the agent would trip on.
+        //
+        // Both the token under a referent and the span's entry used to be
+        // found by scanning, once per referent: 64 KB of `,\`, 32,768 paths
+        // the repository lacks, took the hook 671 ms against the demo's
+        // sample that way, and takes 51 ms like this.
+        debug_assert!(ev.tokens.is_sorted_by(|a, b| a.span.start < b.span.start));
         let mut worst: Vec<(Span, &Referent)> = Vec::new();
+        // Where in `worst` each span is, by the offset it starts at: no two
+        // tokens start at one offset.
+        let mut held_at: HashMap<usize, usize> = HashMap::new();
         for r in referents {
-            let Some(token) = ev.tokens.iter().find(|t| t.span.start == r.offset) else {
+            if let Some(&k) = held_at.get(&r.offset) {
+                let held = &mut worst[k].1;
+                if held.resolution() > r.resolution() {
+                    *held = r;
+                }
+                continue;
+            }
+            let Some(token) = token_at(ev.tokens, r.offset) else {
                 continue;
             };
-            match worst.iter_mut().find(|(s, _)| *s == token.span) {
-                Some((_, held)) if held.resolution() <= r.resolution() => {}
-                Some((_, held)) => *held = r,
-                None => worst.push((token.span, r)),
-            }
+            held_at.insert(r.offset, worst.len());
+            worst.push((token.span, r));
         }
         for (span, r) in worst {
             let inside = span.slice(ev.parts.instruction()) != r.text;
             let name = if inside {
-                format!("\"{}\" ", r.text)
+                format!("\"{}\" ", clipped(&r.text))
             } else {
                 String::new()
             };
