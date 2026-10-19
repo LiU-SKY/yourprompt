@@ -57,7 +57,13 @@ pub fn download(url: &str, path: &PathBuf, refresh: bool) -> Result<(), String> 
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
-/// Totals for one axis-ablation setting.
+/// Wins, ties and margin for one predictor over a set of pairs, each pair
+/// given with the side that should win first.
+///
+/// A tie counts as a miss rather than half a win: a predictor that cannot
+/// tell two prompts apart has not ranked them. The score, each ablation and
+/// the length baseline all go through this one rule, so setting them side by
+/// side compares like with like.
 #[derive(Default)]
 pub struct Tally {
     pub correct: usize,

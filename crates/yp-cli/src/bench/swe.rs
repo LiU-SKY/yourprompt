@@ -305,7 +305,10 @@ fn render(trials: &[Trial], repos: &[String]) -> String {
          | Comparison | Issues | Own repository scores higher | Mean margin |\n\
          |---|---:|---:|---:|\n\
          | versus the mean foreign repository | {} | **{:.1}%** | {:.1} |\n\
-         | versus the *best* foreign repository | {} | **{:.1}%** | {:.1} |\n\n",
+         | versus the *best* foreign repository | {} | **{:.1}%** | {:.1} |\n\n\
+         No length baseline is shown, because none can beat chance here: both \
+         sides of every comparison are the same text, scored against \
+         different repositories, so \"longer wins\" ties every one.\n\n",
         vs_mean.total,
         vs_mean.accuracy() * 100.0,
         vs_mean.mean_delta(),
