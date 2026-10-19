@@ -179,6 +179,10 @@
   .comp .cd { color: var(--dim); overflow-wrap: anywhere; }
   .muted { color: var(--dim); font-style: italic; }
   footer { margin-top: 34px; color: var(--dim); font-size: 12.5px; line-height: 1.7; }
+  /* A command is read, and typed, as one piece: at 375 px "yp serve --repo ."
+     broke inside its flag, "yp serve --" on one line and "repo ." on the
+     next, in both languages. */
+  footer code { white-space: nowrap; }
   a { color: var(--accent); }
   .err { color: var(--bad); }
   @media (max-width: 640px) {
@@ -281,11 +285,14 @@ const STR = {
         'name:ambiguous': n => `could be any of ${n}`,
         'name:missing': 'not in your code',
         // pronoun:dangling comes only from a prompt checked against an index,
-        // when no name before the pronoun is in it. smell:vague_pronoun is a
-        // pronoun the scorer could not settle either way, so its label claims
-        // no more than that. It used to say "with nothing to point at", of
-        // the "it" right after verify_token in the showcase prompt.
-        'pronoun:dangling': 'points at nothing named before it',
+        // when no name before the pronoun is in it. It said "points at
+        // nothing named before it" of the "it" right after gravity() in the
+        // made-up-names example, where a name does come first; what is
+        // missing is that name in the code. smell:vague_pronoun is a pronoun
+        // the scorer could not settle either way, so its label claims no
+        // more than that. It used to say "with nothing to point at", of the
+        // "it" right after verify_token in the showcase prompt.
+        'pronoun:dangling': 'points at nothing in your code',
         'pronoun:anchored': 'pronoun; probably the name before it',
         'pronoun:pasted': 'points at the pasted material',
         'attachment': 'attachment, judged as evidence',
@@ -316,6 +323,8 @@ const STR = {
     share: 'Copy link',
     copied: 'link copied; the prompt is inside it',
     copied_sample: 'link copied; the prompt and the sample repo are inside it',
+    copied_own: 'link copied; the prompt is inside it, but your files are not, so it opens ungrounded',
+    copied_sample_own: 'link copied; the prompt and the sample repo are inside it, but your own files are not',
     copy_failed: 'could not copy; the link is in the address bar',
     placeholder: 'What do you want the agent to do?\ne.g. In src/auth/login.rs, make verify_token return Err(AuthError::Expired) instead of panicking. tests/auth.rs must still pass.',
     label_prompt: 'Prompt',
@@ -356,6 +365,8 @@ const STR = {
     capped_bytes: mb => `stopped at ${mb} MB, the most this page indexes`,
     reading: n => `reading ${n}…`,
     sample_added: n => `loaded the sample repo, ${n} files`,
+    sample_removed: 'removed the sample repo',
+    removed: n => `removed ${n}`,
     saved: n => `saved ${n}`,
     axes: { grounding: 'grounding', actionability: 'actionability',
             clarity: 'clarity', context: 'context' },
@@ -384,7 +395,7 @@ const STR = {
         'name:unique': '코드에 한 번 정의됨',
         'name:ambiguous': n => `${n}개 중 무엇인지 불분명`,
         'name:missing': '코드에 없음',
-        'pronoun:dangling': '앞에 가리킬 대상이 없음',
+        'pronoun:dangling': '가리킬 대상이 코드에 없음',
         'pronoun:anchored': '지시어, 앞의 이름을 가리키는 듯',
         'pronoun:pasted': '붙여 넣은 내용을 가리킴',
         'attachment': '첨부, 근거로 판단함',
@@ -415,6 +426,8 @@ const STR = {
     share: '링크 복사',
     copied: '링크를 복사했습니다. 프롬프트가 링크 안에 담겨 있습니다',
     copied_sample: '링크를 복사했습니다. 프롬프트와 샘플 저장소가 링크 안에 담겨 있습니다',
+    copied_own: '링크를 복사했습니다. 프롬프트는 담겼지만 추가한 파일은 담기지 않아, 링크를 열면 그라운딩 없이 채점됩니다',
+    copied_sample_own: '링크를 복사했습니다. 프롬프트와 샘플 저장소는 담겼지만 추가한 파일은 담기지 않습니다',
     copy_failed: '복사하지 못했습니다. 주소창의 링크를 쓰세요',
     placeholder: '에이전트가 무엇을 하길 원하나요?\n예: src/auth/login.rs 의 verify_token 이 panic 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. tests/auth.rs 는 계속 통과해야 함.',
     label_prompt: '프롬프트',
@@ -467,6 +480,8 @@ const STR = {
     capped_bytes: mb => `이 페이지의 인덱싱 한도인 ${mb} MB 에서 멈췄습니다`,
     reading: n => `${n} 읽는 중…`,
     sample_added: n => `샘플 저장소를 불러왔습니다 (파일 ${n}개)`,
+    sample_removed: '샘플 저장소를 제거했습니다',
+    removed: n => `${n} 제거됨`,
     saved: n => `${n} 저장됨`,
     axes: { grounding: '그라운딩', actionability: '실행가능성',
             clarity: '명료성', context: '맥락' },
@@ -506,7 +521,7 @@ function applyLang() {
   $('share').textContent = T().share;
   renderTry();
   $('p').placeholder = T().placeholder;
-  fitPlaceholder();
+  fitBox();
   $('label-prompt').textContent = T().label_prompt;
   $('label-code').innerHTML = T().label_code;
   $('open').textContent = T().open;
@@ -756,6 +771,12 @@ function syncMarks() {
   hl.style.paddingRight = (12 + bar) + 'px';
 }
 $('p').addEventListener('scroll', syncMarks);
+// The box also changes size without a keystroke: a window resize, its own
+// resize handle, a refit. Narrowing a desktop window from 1280 to 430 px gave
+// it a 15 px scrollbar the marks did not allow for, and until the next
+// keystroke they sat a word off, the "login" mark on the blank after "of"; a
+// sweep found the same at 440, 490, 500 and 540 px.
+if (typeof ResizeObserver === 'function') new ResizeObserver(syncMarks).observe($('p'));
 
 // A prompt the page puts in the box, rather than one typed into it, is shown
 // from its first line. Setting the value leaves the caret, and so the scroll,
@@ -768,22 +789,39 @@ function showFromTop() {
   syncMarks();
 }
 
-// The box is kept tall enough for its placeholder. On a desktop it fits the
-// 128 px minimum, but on a phone, 320 to 430 px wide, it needed 136 to 226 px
-// where the box has 126 inside, and the example was cut off mid-sentence.
-// Measured on a hidden copy, so a prompt already in the box is left alone.
-function fitPlaceholder() {
+// The box is kept tall enough for its placeholder, and for the prompt in it
+// up to FIT_LINES lines. On a desktop the placeholder fits the 128 px
+// minimum, but on a phone, 320 to 430 px wide, it needed 136 to 226 px where
+// the box has 126 inside, and the example was cut off mid-sentence. A prompt
+// the page put in the box was cut the same way: at 375 px the first long
+// example runs to seven lines, 181 px, and the last, "still pass.", was cut
+// through the middle. Measured on a hidden copy each time the page lays the
+// box out, but never on a keystroke, so the box does not grow under the caret.
+const FIT_LINES = 10;
+function fitBox() {
   const ta = $('p'), probe = document.createElement('textarea');
   ta.style.minHeight = '';
-  probe.value = ta.placeholder;
-  probe.style.cssText = 'position:absolute;visibility:hidden;height:0;min-height:0;width:' +
-    ta.offsetWidth + 'px';
+  // The copy keeps a scrollbar, so its lines wrap the way the box's do when it
+  // has one. A desktop box that had one kept it, and fitted to lines wrapped
+  // without it, the long examples still ran a line past the fit at widths
+  // from 320 to 450 px.
+  probe.style.cssText = 'position:absolute;visibility:hidden;height:0;min-height:0;' +
+    'overflow-y:scroll;width:' + ta.offsetWidth + 'px';
   ta.parentNode.appendChild(probe);
-  const need = probe.scrollHeight + ta.offsetHeight - ta.clientHeight;
+  probe.value = ta.placeholder;
+  let need = probe.scrollHeight;
+  if (ta.value) {
+    const cs = getComputedStyle(ta);
+    const most = FIT_LINES * parseFloat(cs.lineHeight) +
+      parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    probe.value = ta.value;
+    need = Math.max(need, Math.min(probe.scrollHeight, most));
+  }
   probe.remove();
+  need += ta.offsetHeight - ta.clientHeight;
   if (need > parseFloat(getComputedStyle(ta).minHeight)) ta.style.minHeight = need + 'px';
 }
-window.addEventListener('resize', fitPlaceholder);
+window.addEventListener('resize', fitBox);
 
 function clearScore() {
   lastScore = null;
@@ -832,12 +870,17 @@ function renderFiles() {
       <span class="sz">${size(list)}</span>
       <button type="button" data-row="${i}">${T().remove}</button>
     </div>`).join('');
+  // The note says what went, or it went on saying "loaded the sample repo, 6
+  // files" over an empty list.
   $('atts').querySelectorAll('button[data-row]').forEach(b =>
     b.addEventListener('click', () => {
-      const gone = new Set(rows[Number(b.dataset.row)].list);
+      const { group, list } = rows[Number(b.dataset.row)];
+      const gone = new Set(list);
       files = files.filter(f => !gone.has(f));
       if (!files.some(f => f.sample)) dropFromHash('repo');
       filesChanged();
+      note(group === 'sample' ? T().sample_removed
+        : T().removed(group ? group.label : list[0].name));
     }));
 }
 
@@ -892,6 +935,7 @@ function renderTry() {
     b.addEventListener('click', () => {
       const ex = T().examples[Number(b.dataset.i)];
       $('p').value = ex[1] || ex[0];
+      fitBox();
       dropFromHash('p');
       renderTry();
       score();
@@ -916,17 +960,21 @@ function decodePrompt(code) {
 
 // Whether the sample repository was loaded travels too, so a shared link
 // reproduces the grounded score it was shared with. The visitor's own files
-// cannot travel; a link made with them scores as if they were absent.
+// cannot travel; a link made with them scores as if they were absent, and
+// the note says so. It used to say only that the prompt was inside, and a
+// link made at 860.3 A+ over a dropped acme-auth/ opened at 799.8 A-, names
+// not checked.
 $('share').addEventListener('click', async () => {
   const text = $('p').value;
   if (!text.trim()) return;
-  const sample = files.some(f => f.sample);
+  const sample = files.some(f => f.sample), own = files.some(f => !f.sample);
   const url = location.origin + location.pathname + '#p=' + encodePrompt(text) +
     (sample ? '&repo=sample' : '');
   history.replaceState(null, '', url);
   try {
     await navigator.clipboard.writeText(url);
-    note(sample ? T().copied_sample : T().copied);
+    note(own ? (sample ? T().copied_sample_own : T().copied_own)
+             : (sample ? T().copied_sample : T().copied));
   } catch (e) {
     note(T().copy_failed, true);
   }
@@ -950,7 +998,7 @@ function fromHash() {
 // changes on an open page, which used to be ignored.
 function openShared() {
   const shared = fromHash();
-  if (shared.prompt) { $('p').value = shared.prompt; renderTry(); showFromTop(); }
+  if (shared.prompt) { $('p').value = shared.prompt; renderTry(); fitBox(); showFromTop(); }
   if (shared.sample) loadSample();
   rebuildIndex();
   score();
@@ -1254,18 +1302,25 @@ function skipFile(name) {
 
 // Files from a folder keep their paths, so a prompt that names
 // src/auth/login.rs finds it; under bare names it was "not in your code".
-// One folder with any of these at its top is the repository itself, and its
-// own name is left out, the way `yp index` names files: acme-auth/ gives
-// src/auth/login.rs. Any other folder keeps its name, because that is part of
-// the path a prompt uses: src/ gives src/auth/login.rs too.
-const REPO_TOP = /^(\.git|\.hg|\.svn|\.github|\.gitignore|readme(\..*)?|licen[cs]e([-.].*)?|copying|cargo\.toml|package\.json|pyproject\.toml|setup\.py|requirements\.txt|go\.mod|pom\.xml|build\.gradle(\.kts)?|gemfile|composer\.json|makefile|cmakelists\.txt)$/i;
+// A single folder is taken for the repository, and its own name is left out
+// the way `yp index` names files: acme-auth/ gives src/auth/login.rs. That
+// used to need a Cargo.toml, a README or the like at its top, and the same
+// files without one kept the folder's name, so the showcase prompt's two
+// paths were "not in your code" (805.1 against 860.3). A folder named like
+// one inside a repository keeps its name, because that is part of the path a
+// prompt uses: src/ gives src/auth/login.rs too, as do src/ and tests/
+// dropped together. Unless it holds a repository's own files at its top,
+// src/ among them: then it is the repository, whatever it is called.
+const REPO_TOP = /^(\.git|\.hg|\.svn|\.github|\.gitignore|readme(\..*)?|licen[cs]e([-.].*)?|copying|cargo\.toml|package\.json|pyproject\.toml|setup\.py|requirements\.txt|go\.mod|pom\.xml|build\.gradle(\.kts)?|gemfile|composer\.json|makefile|cmakelists\.txt|src)$/i;
+const SOURCE_DIR = /^(src|sources?|lib|libs|app|apps|pkg|packages|cmd|internal|include|crates|bin|scripts|examples|benches|tests?|__tests__|specs?|docs?)$/i;
 
 // `found` holds { path, file } with every path starting at what was dropped
 // or chosen; `roots` names those, and `top` lists what is directly inside
 // when that is a single folder. Shallow files first, so a folder larger than
 // the page takes loses its deepest files rather than a whole directory.
 function addFolder(found, roots, top) {
-  const strip = roots.length === 1 && top.some(name => REPO_TOP.test(name));
+  const strip = roots.length === 1 &&
+    (top.some(name => REPO_TOP.test(name)) || !SOURCE_DIR.test(roots[0].replace(/\/$/, '')));
   const group = { label: roots.join(' · ') };
   const depth = path => path.split('/').length;
   found.sort((a, b) => depth(a.path) - depth(b.path) || (a.path < b.path ? -1 : 1));
@@ -1342,12 +1397,26 @@ async function addDropped(entries) {
   addFolder(withFiles, roots, top);
 }
 
+// The prompt box takes a drag only when it carries files. Text dragged onto
+// it is the textarea's, which puts it where it is dropped; taken along with
+// the files, it was thrown away without a word. The file list takes every
+// drag, as before: only files belong there, and a browser left to handle a
+// dropped link may open it in place of the page.
+const carriesFiles = e =>
+  !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+
 for (const target of [$('p'), $('atts')]) {
+  const takes = e => target !== $('p') || carriesFiles(e);
   ['dragenter', 'dragover'].forEach(k =>
-    target.addEventListener(k, e => { e.preventDefault(); target.classList.add('dropping'); }));
+    target.addEventListener(k, e => {
+      if (!takes(e)) return;
+      e.preventDefault();
+      target.classList.toggle('dropping', carriesFiles(e));
+    }));
   ['dragleave', 'drop'].forEach(k =>
     target.addEventListener(k, () => target.classList.remove('dropping')));
   target.addEventListener('drop', e => {
+    if (!takes(e)) return;
     e.preventDefault();
     // Both have to be taken while the event lasts; reading them can wait. A
     // dropped folder is in the files too, as one that cannot be read.
@@ -1363,7 +1432,7 @@ for (const target of [$('p'), $('atts')]) {
 $('clear').addEventListener('click', () => {
   $('p').value = ''; files = []; note('');
   if (location.hash) history.replaceState(null, '', location.pathname);
-  renderFiles(); rebuildIndex(); clearScore(); renderTry(); $('p').focus();
+  renderFiles(); rebuildIndex(); clearScore(); renderTry(); fitBox(); $('p').focus();
 });
 
 // --- the report ------------------------------------------------------------
@@ -1393,12 +1462,16 @@ function buildReport(s, prompt) {
     axisSection(s.clarity, 'clarity'),
     axisSection(s.context, 'context'),
   ];
+  // A prompt that is not graded has no score, so it has no Grounded row
+  // either; "no (score rescaled from three axes)" was said of "continue".
+  const grounded = ungraded ? [] :
+    [`| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`];
   return [
     `# yourprompt`, ``,
     ungraded ? `**—** ${ungraded}` : `**${s.total.toFixed(1)} / 1000 (${s.grade})**`, ``,
     `| | |`, `|---|---|`,
     `| ${T().rpt.generated} | ${new Date().toISOString()} |`,
-    `| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`,
+    ...grounded,
     ``, `## ${T().rpt.prompt}`, ``, fence, prompt, fence,
     ``, `## ${T().rpt.codebase}`, ``, listed, ``,
     ...breakdown,
