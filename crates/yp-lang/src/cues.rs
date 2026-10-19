@@ -233,6 +233,19 @@ mod tests {
     }
 
     #[test]
+    fn prohibitions_typed_in_a_hurry_are_still_scope_cues() {
+        for text in [
+            "dont touch the migrations",
+            "don’t touch the migrations",
+            "you mustn't touch the migrations",
+            "마이그레이션은 건드리지마",
+            "login은 바꾸지 말 것",
+        ] {
+            assert!(found(text).contains(&CueId::ScopeConstraint), "{text}");
+        }
+    }
+
+    #[test]
     fn no_duplicate_terms_within_a_category() {
         let cues = load_bundled().unwrap();
         for id in CueId::ALL {

@@ -65,6 +65,13 @@ terms = [
   "추가하지 마", "지우지 마", "빼고", "없이", "제외", "제외하고",
   "유지해", "유지하", "그대로", "그대로 둬", "안에서만", "에서만",
   "하위 호환", "범위는", "이외에는", "말고", "다른 건", "나머지는",
+  # Every prohibition above in its 말 form too, the way 건드리지 말 sits
+  # beside 건드리지 마, and the unspaced forms people type, the way "dont"
+  # sits beside "don't". An action verb outside this list that is negated
+  # the same way is read as a constraint by yp-core instead.
+  "손대지 말", "수정하지 말", "바꾸지 말", "추가하지 말", "지우지 말",
+  "건드리지마", "건드리지말", "손대지마", "손대지말", "바꾸지마", "바꾸지말",
+  "지우지마", "지우지말",
 ]
 
 [[cue]]

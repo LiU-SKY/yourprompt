@@ -15,7 +15,9 @@
 #     document a negative requirement is hard to verify; in a prompt to a
 #     coding agent, "don't touch the migrations" is one of the most useful
 #     things a user can say. Negation is therefore scored as a scope
-#     constraint here, and never penalised.
+#     constraint here, and never penalised. The verb under it is part of the
+#     constraint, not the objective: "change" in "don't change the schema"
+#     names the one thing not to do, and yp-core reads it that way.
 
 lang = "en"
 
@@ -90,6 +92,9 @@ terms = [
   "keep", "leave", "unchanged", "untouched", "as-is", "in place",
   "backwards compatible", "backward compatible", "no new dependencies",
   "no new deps", "out of scope", "in scope", "scoped to", "nothing else",
+  # The same prohibitions as typed in a hurry or on a phone, which turns the
+  # apostrophe into U+2019.
+  "dont", "don’t", "mustn't", "mustn’t", "shouldn't", "shouldn’t",
 ]
 
 [[cue]]
