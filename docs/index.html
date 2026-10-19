@@ -3,8 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>yourprompt</title>
+<title>yourprompt · score your prompt before the agent reads it</title>
 <meta name="description" content="Scores how well an AI coding agent can understand your prompt, against your actual repository. Runs entirely in your browser.">
+<!-- Link previews. A shared link with no card reads as spam on Reddit and
+     Discord; absolute URLs, because crawlers do not resolve relative ones. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="yourprompt">
+<meta property="og:title" content="yourprompt: your prompt, scored 0–1000 before the agent reads it">
+<meta property="og:description" content="&quot;fix the bug&quot; scores 305. Every point explained, grounded in your own code, runs in your browser.">
+<meta property="og:url" content="https://liu-sky.github.io/yourprompt/">
+<meta property="og:image" content="https://liu-sky.github.io/yourprompt/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://liu-sky.github.io/yourprompt/og.png">
 <style>
   :root {
     --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --dim: #6b6b66;
@@ -30,13 +42,25 @@
   }
   .wrap { max-width: 960px; margin: 0 auto; padding: 34px 20px 72px; }
   header { margin-bottom: 22px; }
-  .top { display: flex; align-items: baseline; gap: 12px; }
+  .top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.015em; }
   .langs { margin-left: auto; display: flex; gap: 0; border: 1px solid var(--line);
            border-radius: 7px; overflow: hidden; }
   .langs button { border: 0; border-radius: 0; padding: 4px 10px; font-size: 12.5px;
                   color: var(--dim); }
   .langs button.on { background: var(--track); color: var(--ink); font-weight: 600; }
+  .star { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+          padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px;
+          color: var(--ink); text-decoration: none; white-space: nowrap; }
+  .star:hover { border-color: var(--accent); color: var(--accent); }
+  .star .count { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .star .count:empty { display: none; }
+  .install { margin: 8px 0 0; font-size: 13.5px; }
+  .try { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px;
+         font-size: 12.5px; color: var(--dim); }
+  .try:empty { display: none; }
+  .try button { font-size: 12.5px; padding: 2px 9px; max-width: 100%;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
   .sub code { font-size: 12.5px; }
   .lede { margin: 10px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
@@ -143,12 +167,17 @@
   <header>
     <div class="top">
       <h1>yourprompt</h1>
-      <div class="langs" role="group" aria-label="Language">
+      <a class="star" id="star" href="https://github.com/LiU-SKY/yourprompt"
+         target="_blank" rel="noopener" style="margin-left:auto">
+        <span aria-hidden="true">★</span><span id="star-label">Star</span><span class="count" id="star-count"></span>
+      </a>
+      <div class="langs" role="group" aria-label="Language" style="margin-left:0">
         <button type="button" id="lang-en">EN</button>
         <button type="button" id="lang-ko">한국어</button>
       </div>
     </div>
     <p class="lede" id="lede"></p>
+    <p class="install" id="install"></p>
     <p class="sub" id="sub" style="margin-top:6px">Loading the scorer…</p>
   </header>
 
@@ -158,6 +187,7 @@
       <pre class="hl" id="hl" aria-hidden="true"></pre>
       <textarea id="p" spellcheck="false" autofocus></textarea>
     </div>
+    <div class="try" id="try"></div>
     <div class="legend" id="legend"></div>
     <div class="chips" id="chips"></div>
 
@@ -167,6 +197,7 @@
     <div class="tools">
       <button type="button" id="open"></button>
       <button type="button" id="download" disabled></button>
+      <button type="button" id="share" disabled></button>
       <button type="button" id="clear"></button>
       <input type="file" id="file" hidden multiple accept=".txt,.md,.markdown,.rst,.text,text/*">
       <span class="note" id="note"></span>
@@ -230,6 +261,16 @@ const STR = {
       },
     },
     lede: 'Scores how well an AI coding agent can understand your prompt, with a reason for every point.',
+    install: 'Want it on every prompt? <a href="https://github.com/LiU-SKY/yourprompt#install" target="_blank" rel="noopener">Put the score in your Claude Code status line</a>. Two commands, zero context tokens.',
+    star: 'Star',
+    try_label: 'Try:',
+    examples: [
+      ['it\'s broken again'], ['make it better'], ['fix the login bug'],
+      ['a prompt that scores well', 'In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.'],
+    ],
+    share: 'Copy link',
+    copied: 'link copied; the prompt is inside it',
+    copy_failed: 'could not copy; the link is in the address bar',
     placeholder: 'What do you want the agent to do?\n\ne.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.',
     label_prompt: 'Prompt',
     label_code: 'Your codebase <span class="hint">· drop source files to ground the score in them</span>',
@@ -294,6 +335,16 @@ const STR = {
       },
     },
     lede: 'AI 코딩 에이전트가 프롬프트를 얼마나 이해할 수 있는지, 모든 점수의 사유와 함께 채점합니다.',
+    install: '프롬프트마다 보고 싶다면 <a href="https://github.com/LiU-SKY/yourprompt#install" target="_blank" rel="noopener">Claude Code 상태줄에 점수를 띄우세요</a>. 명령 두 줄, 컨텍스트 토큰 0.',
+    star: 'Star',
+    try_label: '예시:',
+    examples: [
+      ['그거 다시 해줘'], ['좀 더 좋게 만들어줘'], ['버그 고쳐줘'],
+      ['잘 쓴 프롬프트', 'src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.'],
+    ],
+    share: '링크 복사',
+    copied: '링크를 복사했습니다. 프롬프트가 링크 안에 담겨 있습니다',
+    copy_failed: '복사하지 못했습니다. 주소창의 링크를 쓰세요',
     placeholder: '에이전트가 무엇을 하길 원하나요?\n\n예: src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.',
     label_prompt: '프롬프트',
     label_code: '코드베이스 <span class="hint">· 소스 파일을 끌어다 놓으면 그 파일들을 근거로 채점합니다</span>',
@@ -346,6 +397,10 @@ function applyLang() {
   $('lang-en').className = lang === 'en' ? 'on' : '';
   $('lang-ko').className = lang === 'ko' ? 'on' : '';
   $('lede').innerHTML = T().lede;
+  $('install').innerHTML = T().install;
+  $('star-label').textContent = T().star;
+  $('share').textContent = T().share;
+  renderTry();
   $('p').placeholder = T().placeholder;
   $('label-prompt').textContent = T().label_prompt;
   $('label-code').innerHTML = T().label_code;
@@ -542,6 +597,7 @@ $('p').addEventListener('scroll', syncMarks);
 function clearScore() {
   lastScore = null;
   $('download').disabled = true;
+  $('share').disabled = true;
   $('total').textContent = '--'; $('grade').textContent = '';
   $('fill').style.width = '0'; $('flag').textContent = '';
   $('axes').innerHTML = '';
@@ -580,6 +636,7 @@ function score() {
     if (!s) throw new Error(T().unreadable);
     lastScore = s;
     $('download').disabled = false;
+    $('share').disabled = false;
     render(s);
   } catch (e) {
     clearScore();
@@ -590,7 +647,68 @@ function score() {
 $('p').addEventListener('input', () => {
   clearTimeout(timer);
   timer = setTimeout(score, 120);
+  renderTry();
 });
+
+// --- examples and sharing ---------------------------------------------------
+// An empty box and a "--" is not a demo. The examples run from a held-down
+// shrug to a request an agent can act on, so one click shows the spread.
+
+function renderTry() {
+  if ($('p').value.trim()) { $('try').innerHTML = ''; return; }
+  $('try').innerHTML = '<span>' + escapeHtml(T().try_label) + '</span>' +
+    T().examples.map((ex, i) =>
+      `<button type="button" data-i="${i}">${escapeHtml(ex[0])}</button>`).join('');
+  $('try').querySelectorAll('button').forEach(b =>
+    b.addEventListener('click', () => {
+      const ex = T().examples[Number(b.dataset.i)];
+      $('p').value = ex[1] || ex[0];
+      renderTry();
+      score();
+      $('p').focus();
+    }));
+}
+
+// The prompt travels in the fragment, which browsers never send to a server.
+function encodePrompt(text) {
+  let bin = '';
+  for (const byte of enc.encode(text)) bin += String.fromCharCode(byte);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function decodePrompt(code) {
+  const bin = atob(code.replace(/-/g, '+').replace(/_/g, '/'));
+  return dec.decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+}
+
+$('share').addEventListener('click', async () => {
+  const text = $('p').value;
+  if (!text.trim()) return;
+  const url = location.origin + location.pathname + '#p=' + encodePrompt(text);
+  history.replaceState(null, '', url);
+  try {
+    await navigator.clipboard.writeText(url);
+    note(T().copied);
+  } catch (e) {
+    note(T().copy_failed, true);
+  }
+});
+
+function promptFromHash() {
+  const m = /^#p=([A-Za-z0-9_-]+)$/.exec(location.hash);
+  if (!m) return null;
+  try { return decodePrompt(m[1]); } catch (e) { return null; }
+}
+
+// The star count, when GitHub answers. Unauthenticated, so a visitor past
+// the hourly limit just sees the button without a number.
+fetch('https://api.github.com/repos/LiU-SKY/yourprompt')
+  .then(r => r.ok ? r.json() : null)
+  .then(repo => {
+    const n = repo && repo.stargazers_count;
+    if (typeof n !== 'number' || n < 10) return;
+    $('star-count').textContent = n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+  })
+  .catch(() => {});
 
 // --- attaching files -------------------------------------------------------
 
@@ -641,7 +759,8 @@ for (const target of [$('p'), $('atts')]) {
 
 $('clear').addEventListener('click', () => {
   $('p').value = ''; files = []; note('');
-  renderFiles(); rebuildIndex(); clearScore(); $('p').focus();
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  renderFiles(); rebuildIndex(); clearScore(); renderTry(); $('p').focus();
 });
 
 // --- the report ------------------------------------------------------------
@@ -717,6 +836,8 @@ applyLang();
   }
   wasmVersion = readAndFree(wasm.yp_version());
   $('sub').textContent = T().ready(wasmVersion);
+  const shared = promptFromHash();
+  if (shared) { $('p').value = shared; renderTry(); }
   score();
 })();
 </script>
