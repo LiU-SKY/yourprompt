@@ -66,8 +66,39 @@ $ yp score "In src/auth/login.rs, change verify_token so it returns Err(AuthErro
 
 ## Install
 
+macOS and Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LiU-SKY/yourprompt/main/install.sh | sh
+```
+
+Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/LiU-SKY/yourprompt/main/install.ps1 | iex
+```
+
+Each script downloads the build for your machine from the latest release,
+checks it against its published SHA-256, and puts `yp` in `~/.local/bin`. On
+Windows it goes in `%LOCALAPPDATA%\Programs\yourprompt`, which is added to your
+user PATH. No sudo, no administrator. `curl ... | YP_VERSION=v0.1.1 sh` (or
+`$env:YP_VERSION` in PowerShell) pins a release, and `YP_INSTALL_DIR` picks the
+directory.
+
+The same builds are on the
+[Releases page](https://github.com/LiU-SKY/yourprompt/releases): Linux (static,
+x86_64 and arm64), macOS (Intel and Apple silicon) and Windows (x64 and arm64),
+each with a `.sha256` file that `sha256sum -c` checks.
+
+Or build from source, with Rust 1.85 or newer:
+
 ```bash
 cargo install --git https://github.com/LiU-SKY/yourprompt yp-cli
+```
+
+Then:
+
+```bash
 yp install
 ```
 
