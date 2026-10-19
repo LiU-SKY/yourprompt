@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use yp_lang::{SmellHit, SmellId, Span, Token, TokenKind};
 
 use crate::params::prompt as p;
-use crate::prompt::Parts;
+use crate::prompt::{heads, Parts};
 
 /// How much a prompt's pasted material has to offer.
 #[derive(Debug, Clone, Copy, Default)]
@@ -108,29 +108,6 @@ fn legible_terms(blocks: &[&str]) -> usize {
     (terms.len() as f64 * stats.legibility() * stats.diversity()).floor() as usize
 }
 
-/// The blocks in order until together they hold `budget` bytes, the last one
-/// cut on a character boundary.
-fn heads<'a>(blocks: &[&'a str], budget: usize) -> Vec<&'a str> {
-    let mut left = budget;
-    let mut out = Vec::new();
-    for &block in blocks {
-        if block.len() <= left {
-            out.push(block);
-            left -= block.len();
-            continue;
-        }
-        let mut end = left;
-        while !block.is_char_boundary(end) {
-            end -= 1;
-        }
-        if end > 0 {
-            out.push(&block[..end]);
-        }
-        break;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,18 +170,29 @@ mod tests {
     }
 
     #[test]
-    fn a_block_counts_the_same_inline_or_cut_out() {
-        // The hook cuts a long fence out as an attachment; the web page keeps
-        // it in the text. Both must find the same material.
-        let lines: String = (0..12)
-            .map(|i| format!("    at handler_{i} (src/server/route_{i}.ts:{i}:5)\n"))
-            .collect();
-        let text = format!("fix this\n```\n{lines}```");
-        let cut = split(&text);
-        let inline = from_parts(&text, &[]);
-        assert_eq!(cut.attachments.len(), 1);
-        assert_eq!(cut.pasted(), inline.pasted());
-        assert_eq!(Pasted::of(&cut).terms, Pasted::of(&inline).terms);
+    fn a_block_counts_the_same_typed_short_typed_long_or_opened() {
+        // A fence too short to cut out stays in the instruction and is pasted
+        // material all the same, a long one is cut out as an attachment, and
+        // either can arrive as a file opened beside what was typed. All of
+        // them must find the same material.
+        for repeats in [1, 6] {
+            let block: String = (0..repeats)
+                .map(|i| format!("{TRACE} (worker {i})\n"))
+                .collect();
+            let text = format!("fix this\n```\n{block}```");
+            let typed = split(&text);
+            let opened = from_parts("fix this", &[&block]);
+            assert_eq!(typed.has_attachments(), repeats > 1, "{repeats}");
+            if repeats == 1 {
+                assert!(typed.instruction().contains(TRACE));
+            }
+            assert!(Pasted::of(&typed).is_material(), "{repeats}");
+            assert_eq!(
+                Pasted::of(&typed).terms,
+                Pasted::of(&opened).terms,
+                "{repeats}"
+            );
+        }
     }
 
     #[test]

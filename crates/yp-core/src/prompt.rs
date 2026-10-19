@@ -209,23 +209,24 @@ pub(crate) fn strip_fence(body: &str) -> &str {
     inner
 }
 
-/// The attachments in order until together they hold `budget` bytes, the
-/// last one cut on a character boundary.
-fn heads<'a>(attachments: &[&'a str], budget: usize) -> Vec<&'a str> {
+/// The blocks in order until together they hold `budget` bytes, the last one
+/// cut on a character boundary: the attachments a capped prompt keeps, and
+/// the pasted material that is read to judge it.
+pub(crate) fn heads<'a>(blocks: &[&'a str], budget: usize) -> Vec<&'a str> {
     let mut left = budget;
     let mut out = Vec::new();
-    for &attachment in attachments {
-        if attachment.len() <= left {
-            out.push(attachment);
-            left -= attachment.len();
+    for &block in blocks {
+        if block.len() <= left {
+            out.push(block);
+            left -= block.len();
             continue;
         }
         let mut end = left;
-        while !attachment.is_char_boundary(end) {
+        while !block.is_char_boundary(end) {
             end -= 1;
         }
         if end > 0 {
-            out.push(&attachment[..end]);
+            out.push(&block[..end]);
         }
         break;
     }
