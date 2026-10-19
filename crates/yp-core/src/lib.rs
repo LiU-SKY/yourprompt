@@ -40,9 +40,24 @@ use serde::Serialize;
 
 pub use axes::{Axis, Component};
 pub use corpus::{Corpus, MapCorpus, TermFacts};
-pub use kind::{kind_of, Kind};
+pub use kind::Kind;
 pub use marks::{Mark, Tone};
 pub use stats::PromptStats;
+
+/// What a prompt is, read the way [`score_with`] reads it: the instruction
+/// once pasted material is cut out, to its first
+/// [`prompt::MAX_INSTRUCTION_BYTES`].
+///
+/// The hook asks this before deciding whether to score at all, so it is
+/// bounded by the same cap as the score, and the two always agree. Classified
+/// from the raw prompt, a megabyte of short fenced blocks took the hook 9.2 s
+/// against django's index after scoring itself had been capped; read like
+/// this, 103 ms.
+pub fn kind_of(text: &str) -> (Kind, Option<&'static str>) {
+    let parts = prompt::split(text);
+    let capped = parts.capped();
+    kind::kind_of(capped.as_ref().unwrap_or(&parts).instruction())
+}
 
 /// A scored prompt.
 #[derive(Debug, Clone, Serialize)]
@@ -94,8 +109,10 @@ pub fn tokenize_snippet(text: &str) -> Vec<yp_lang::Token> {
 /// only the number it produced.
 pub fn referents_of(text: &str, corpus: &dyn Corpus) -> Vec<grounding::Referent> {
     let parts = prompt::split(text);
-    let tokens = yp_lang::tokenize(parts.instruction());
-    grounding::referents(&tokens, &[], corpus)
+    let capped = parts.capped();
+    let instruction = capped.as_ref().unwrap_or(&parts).instruction();
+    let tokens = yp_lang::tokenize(instruction);
+    grounding::referents(instruction, &tokens, &[], corpus)
 }
 
 /// Score a prompt.
@@ -155,7 +172,13 @@ pub(crate) fn request_factor(
 /// The instruction is judged as an instruction; attachments are judged as
 /// material. A prompt that carries the file it is about is a better prompt
 /// than one that does not, and this is where that stops being penalised.
+///
+/// Only the start of a very long prompt is read; see
+/// [`prompt::MAX_INSTRUCTION_BYTES`]. Every way in passes through here, so the
+/// hook, the command line and the web page share the bound.
 pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Option<Score> {
+    let capped = parts.capped();
+    let parts = capped.as_ref().unwrap_or(parts);
     let resources = yp_lang::resources()?;
     let text = parts.instruction();
 
@@ -195,6 +218,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
             .chain(anchored.iter().copied())
             .collect();
         grounding::grounding(
+            text,
             &tokens,
             &offsets,
             &instruction_words,
@@ -704,16 +728,29 @@ mod tests {
 
     #[test]
     fn classifying_a_prompt_agrees_with_scoring_it() {
-        // The hook classifies the raw text before deciding whether to score
-        // it at all; scoring classifies the instruction left once
-        // attachments are cut out. Both see code where the paste was.
+        // The hook classifies a prompt before deciding whether to score it
+        // at all, and reads what scoring reads: the instruction left once
+        // attachments are cut out, to the same limit.
         let file = "fn helper() { let value = 1; }\n".repeat(30);
+        let long = |line: &str| line.repeat(2 * prompt::MAX_INSTRUCTION_BYTES / line.len());
+        // Spanish to the limit and an English request past it: read whole,
+        // the English made it a task the score had not seen.
+        let spanish_then_english = format!(
+            "{}fix the parser",
+            long("arregla el analizador para que acepte esta entrada. ")
+        );
+        assert_eq!(kind_of(&spanish_then_english).0, Kind::Unsupported);
         for text in [
             "continue".to_string(),
             format!("continue\n```rust\n{file}```"),
             format!("/score\n```\n{file}```"),
             format!("arregla el bug para que el parser no falle con esto:\n```rust\n{file}```"),
             "fix the parser".to_string(),
+            long("fix the parser so it accepts this input. "),
+            long("arregla el analizador para que acepte esta entrada. "),
+            spanish_then_english,
+            long("yes "),
+            long("fix it\n```\ncode\n```\n"),
         ] {
             let s = score(&text).unwrap();
             assert_eq!(kind_of(&text), (s.kind, s.language), "{text:.40}");
@@ -798,19 +835,106 @@ mod tests {
 
     #[test]
     fn a_paste_counts_the_same_whichever_way_it_arrives() {
-        // The hook cuts a long fence out as an attachment; the web page keeps
-        // it in the text.
+        // The hook splits the raw prompt; the web page hands over what was
+        // typed. When the page kept a pasted fence inline, its names were
+        // read as names the user had typed: the demo's showcase with its
+        // sample's login.rs pasted under it scored 832.0 on the page and
+        // 845.7 in the status line.
         let lines: String = (0..12)
             .map(|i| format!("    at handler_{i} (src/server/route_{i}.ts:{i}:5)\n"))
             .collect();
-        let text =
-            format!("fix this\n```\nTypeError: Cannot read properties of undefined\n{lines}```");
-        let cut = prompt::split(&text);
-        assert!(cut.has_attachments());
-        let hook = score_parts(&cut, None).unwrap();
-        let page = score_parts(&prompt::from_parts(&text, &[]), None).unwrap();
-        assert_eq!(hook.total, page.total);
-        assert!(hook.total > total("fix this") + 200.0, "got {}", hook.total);
+        let text = format!(
+            "fix this\n```rust\nTypeError: Cannot read properties of undefined\n{lines}```"
+        );
+        assert!(prompt::split(&text).has_attachments());
+        let corpus = MapCorpus::new(20, &[("handler_3", 1, 2, 1), ("route_3", 1, 1, 0)]);
+        for corpus in [None, Some(&corpus as &dyn Corpus)] {
+            let hook = score_with(&text, corpus).unwrap();
+            let page = score_parts(&prompt::from_parts(&text, &[]), corpus).unwrap();
+            assert_eq!(
+                serde_json::to_string(&hook).unwrap(),
+                serde_json::to_string(&page).unwrap()
+            );
+        }
+        assert!(
+            total(&text) > total("fix this") + 200.0,
+            "got {}",
+            total(&text)
+        );
+    }
+
+    /// A prompt the scorer reads to its end, followed by `len` bytes of more
+    /// of the same.
+    fn padded(head: &str, filler: &str, len: usize) -> String {
+        let mut text = head.to_string();
+        while text.len() < len {
+            text.push_str(filler);
+        }
+        text
+    }
+
+    #[test]
+    fn only_the_start_of_a_very_long_prompt_is_read() {
+        let head = "Fix verify_token in src/auth/login.rs so an expired token returns \
+                    Err(AuthError::Expired). Tests must pass. ";
+        let corpus = MapCorpus::new(10, &[("verify_token", 1, 3, 1)]);
+        // Hangul is three bytes a character, so the cut lands inside one.
+        for filler in [
+            "the handler should log it and carry on. ",
+            "로그를 남기고 계속해 ",
+        ] {
+            let long = padded(head, filler, 3 * prompt::MAX_INSTRUCTION_BYTES);
+            let mut end = prompt::MAX_INSTRUCTION_BYTES;
+            while !long.is_char_boundary(end) {
+                end -= 1;
+            }
+            for corpus in [None, Some(&corpus as &dyn Corpus)] {
+                let read = score_with(&long, corpus).unwrap();
+                let head_only = score_with(&long[..end], corpus).unwrap();
+                assert_eq!(read.total, head_only.total, "{filler}");
+                for mark in &read.marks {
+                    assert!(mark.end <= end, "{mark:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_start_of_a_very_long_paste_is_read() {
+        let block = |len: usize| padded("", "    at handler (src/server/route.ts:1:5)\n", len);
+        let fenced = |len: usize| format!("fix this\n```\n{}```", block(len));
+        let corpus = MapCorpus::new(10, &[("handler", 1, 3, 1), ("route", 1, 1, 0)]);
+        let just_over = fenced(prompt::MAX_ATTACHED_BYTES + 100);
+        let far_over = fenced(16 * prompt::MAX_ATTACHED_BYTES);
+        for corpus in [None, Some(&corpus as &dyn Corpus)] {
+            let near = score_with(&just_over, corpus).unwrap();
+            let far = score_with(&far_over, corpus).unwrap();
+            assert_eq!(near.total, far.total);
+            // The marker still says that something was attached.
+            let attachment = far.marks.iter().find(|m| m.kind == "attachment").unwrap();
+            assert_eq!(attachment.end, far_over.len());
+        }
+    }
+
+    #[test]
+    fn a_cut_never_splits_an_attachment_marker() {
+        // The instruction runs to just short of the limit, so the marker for
+        // the paste after it would straddle it.
+        let head = padded("fix the parser. ", "the parser should accept it. ", 0);
+        let prose = padded(&head, "x", prompt::MAX_INSTRUCTION_BYTES - 5);
+        let paste = "line of the paste\n".repeat(40);
+        let text = format!("{prose}\n```\n{paste}```\nroughly");
+        let parts = prompt::split(&text);
+        let capped = parts.capped().unwrap();
+        assert!(capped.instruction().len() <= prompt::MAX_INSTRUCTION_BYTES);
+        assert!(
+            !capped.instruction().contains('`'),
+            "a partial marker survived"
+        );
+        let s = score_with(&text, None).unwrap();
+        for mark in &s.marks {
+            assert!(mark.start < mark.end && mark.end <= text.len(), "{mark:?}");
+        }
     }
 
     #[test]

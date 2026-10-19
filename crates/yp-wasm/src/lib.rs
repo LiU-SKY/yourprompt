@@ -113,6 +113,11 @@ impl Corpus for WasmCorpus {
     fn total_terms(&self) -> u64 {
         self.0.total_terms()
     }
+
+    // Files picked or dropped on the page arrive under bare names.
+    fn flat(&self) -> bool {
+        self.0.is_flat()
+    }
 }
 
 /// Score a prompt, optionally against an index.
@@ -154,6 +159,9 @@ pub unsafe extern "C" fn yp_score(
 
 /// Score an instruction with its attachments already separated, as the page
 /// does when someone opens a file rather than pasting into the box.
+///
+/// What was pasted into the box is cut out of the instruction the way the
+/// hook cuts it, so the page and the status line give one prompt one score.
 ///
 /// Attachments are joined by a NUL byte, which cannot appear in the text the
 /// page accepts.
@@ -241,4 +249,143 @@ pub unsafe extern "C" fn yp_index_build(ptr: *const u8, len: usize) -> *mut u8 {
 #[no_mangle]
 pub unsafe extern "C" fn yp_version() -> *mut u8 {
     into_buffer(env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LOGIN: &str = "pub enum AuthError {\n    Expired,\n    Invalid,\n}\n\n\
+        pub fn verify_token(t: &Token) -> Result<Claims, AuthError> {\n    \
+        let claims = t.decode().map_err(|_| AuthError::Invalid)?;\n    \
+        if claims.exp < now() {\n        panic!(\"token expired\");\n    }\n    \
+        Ok(claims)\n}\n\npub fn login(user: &str) -> Result<Token, AuthError> {\n    \
+        let token = Token::issue(user);\n    verify_token(&token)?;\n    Ok(token)\n}\n";
+    const TESTS: &str = "#[test]\nfn expired_token_is_rejected() {\n    \
+        assert!(verify_token(&expired()).is_err());\n}\n";
+    const PROMPT: &str = "In src/auth/login.rs, change verify_token so it returns \
+        Err(AuthError::Expired) instead of panicking on an expired token. Don't change \
+        the public signature of login(). tests/auth.rs must still pass.";
+
+    /// Copy `bytes` into the module, as the page does.
+    fn buffer(bytes: &[u8]) -> (*mut u8, usize) {
+        unsafe {
+            let ptr = yp_alloc(bytes.len());
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+            (ptr, bytes.len())
+        }
+    }
+
+    /// Read a length-prefixed result and release it.
+    fn take(ptr: *mut u8) -> String {
+        assert!(!ptr.is_null());
+        unsafe {
+            let mut len = [0u8; 4];
+            std::ptr::copy_nonoverlapping(ptr, len.as_mut_ptr(), 4);
+            let len = u32::from_le_bytes(len) as usize;
+            let text = std::slice::from_raw_parts(ptr.add(4), len).to_vec();
+            yp_free(ptr, 4 + len);
+            String::from_utf8(text).unwrap()
+        }
+    }
+
+    /// The index the page builds from the files a visitor gave it.
+    fn index_of(files: &[(&str, &str)]) -> String {
+        let payload = files
+            .iter()
+            .map(|(name, text)| format!("{name}\u{1f}{text}"))
+            .collect::<Vec<_>>()
+            .join("\u{1e}");
+        let (ptr, len) = buffer(payload.as_bytes());
+        let blob = take(unsafe { yp_index_build(ptr, len) });
+        unsafe { yp_free(ptr, len) };
+        blob
+    }
+
+    /// What the page shows for what was typed into its box.
+    fn page(text: &str, index: &str) -> String {
+        let (tp, tl) = buffer(text.as_bytes());
+        let (ip, il) = buffer(index.as_bytes());
+        let json = take(unsafe { yp_score_parts(tp, tl, std::ptr::null(), 0, ip, il) });
+        unsafe {
+            yp_free(tp, tl);
+            yp_free(ip, il);
+        }
+        json
+    }
+
+    /// What the hook records for the same prompt against the same index.
+    fn status_line(text: &str, index: &str) -> String {
+        let corpus = WasmCorpus(yp_index::RepoIndex::parse_str(index).unwrap());
+        serde_json::to_string(&yp_core::score_with(text, Some(&corpus)).unwrap()).unwrap()
+    }
+
+    fn mark_on<'a>(score: &'a serde_json::Value, text: &str, word: &str) -> &'a str {
+        score["marks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| {
+                let (start, end) = (m["start"].as_u64().unwrap(), m["end"].as_u64().unwrap());
+                &text[start as usize..end as usize] == word
+            })
+            .and_then(|m| m["kind"].as_str())
+            .unwrap_or_else(|| panic!("no mark on {word}: {score}"))
+    }
+
+    #[test]
+    fn the_page_and_the_status_line_agree() {
+        let index = index_of(&[("src/auth/login.rs", LOGIN), ("tests/auth.rs", TESTS)]);
+        for text in [
+            PROMPT.to_string(),
+            format!("{PROMPT}\n\n```rust\n{LOGIN}```"),
+            format!(
+                "fix this\n```\n{}```",
+                "thread 'main' panicked at src/auth/login.rs:9:41\n".repeat(12)
+            ),
+            "fix the bug".to_string(),
+        ] {
+            assert_eq!(
+                page(&text, &index),
+                status_line(&text, &index),
+                "{text:.60}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_called_or_qualified_name_is_checked_like_any_other() {
+        // The made-up showcase marked its paths and MoonError but let
+        // gravity() and orbit() through unmarked, and the real one never
+        // counted login().
+        let index = index_of(&[("src/auth/login.rs", LOGIN), ("tests/auth.rs", TESTS)]);
+        let made_up = "In src/banana.rs, change gravity() so it returns Err(MoonError::Full) \
+            instead of panicking on a full moon. Don't change the public signature of orbit(). \
+            tests/moon.rs must still pass.";
+        let score: serde_json::Value = serde_json::from_str(&page(made_up, &index)).unwrap();
+        for word in ["gravity", "orbit", "MoonError", "Full"] {
+            assert_eq!(mark_on(&score, made_up, word), "name:missing", "{word}");
+        }
+
+        let score: serde_json::Value = serde_json::from_str(&page(PROMPT, &index)).unwrap();
+        assert_eq!(mark_on(&score, PROMPT, "login"), "name:unique");
+        // The Expired in the only AuthError, not any word "expired".
+        assert_eq!(mark_on(&score, PROMPT, "Expired"), "name:unique");
+    }
+
+    #[test]
+    fn a_path_names_a_file_the_page_was_given_without_one() {
+        // A browser hands over a picked file as `login.rs`.
+        let index = index_of(&[("login.rs", LOGIN), ("auth.rs", TESTS)]);
+        let score: serde_json::Value = serde_json::from_str(&page(PROMPT, &index)).unwrap();
+        assert_eq!(mark_on(&score, PROMPT, "src/auth/login.rs"), "name:unique");
+        assert_eq!(mark_on(&score, PROMPT, "tests/auth.rs"), "name:unique");
+        assert_eq!(mark_on(&score, PROMPT, "login"), "name:unique");
+
+        // Given with their paths, a path the repository lacks is missing.
+        let index = index_of(&[("src/auth/login.rs", LOGIN), ("tests/auth.rs", TESTS)]);
+        let text = PROMPT.replace("src/auth/login.rs", "src/auth/banana.rs");
+        let score: serde_json::Value = serde_json::from_str(&page(&text, &index)).unwrap();
+        assert_eq!(mark_on(&score, &text, "src/auth/banana.rs"), "name:missing");
+    }
 }

@@ -38,6 +38,11 @@ const FORMAT_VERSION: u32 = 2;
 /// referent worth resolving.
 const MAX_PATH_TERM: usize = 256;
 
+/// Written after the header's counts when every file was indexed under a bare
+/// name. An index without it, including every index written before it
+/// existed, has paths.
+const FLAT_MARK: &str = "flat";
+
 /// A queryable repository index.
 pub struct RepoIndex {
     /// The whole file, header included.
@@ -47,11 +52,19 @@ pub struct RepoIndex {
     files: usize,
     total_terms: u64,
     distinct_terms: usize,
+    flat: bool,
 }
 
 impl RepoIndex {
     pub fn files(&self) -> usize {
         self.files
+    }
+
+    /// True when the files were handed over under bare names, so no indexed
+    /// path has a directory in it. A walked repository never is, even when
+    /// every file sits at its root: those are the real paths.
+    pub fn is_flat(&self) -> bool {
+        self.flat
     }
 
     /// Total term occurrences across the repository -- the denominator of the
@@ -135,7 +148,9 @@ impl RepoIndex {
             files.push((name, text));
         }
 
-        Self::from_files(&files)
+        // A walk yields real paths. A file at the root of the repository is
+        // named by its bare name because that is its path.
+        Self::index_files(&files, false)
     }
 
     /// Build an index from files already in memory, as `(path, contents)`.
@@ -143,7 +158,15 @@ impl RepoIndex {
     /// The same index the filesystem walk produces, minus the walking. That
     /// is what makes the browser build possible, where there is no filesystem
     /// and the repository is whatever the visitor dropped on the page.
+    ///
+    /// A browser names a picked or dropped file without its directory, so
+    /// when no name has one the index is marked [flat](Self::is_flat).
     pub fn from_files(files: &[(String, String)]) -> RepoIndex {
+        let flat = !files.is_empty() && files.iter().all(|(path, _)| !path.contains(['/', '\\']));
+        Self::index_files(files, flat)
+    }
+
+    fn index_files(files: &[(String, String)], flat: bool) -> RepoIndex {
         let mut terms: HashMap<String, TermStat> = HashMap::new();
         let indexed = files.len();
 
@@ -210,18 +233,27 @@ impl RepoIndex {
             entry.def = entry.def.saturating_add(1);
         }
 
-        Self::from_terms(indexed, terms)
+        Self::from_terms(indexed, terms, flat)
     }
 
-    fn from_terms(files: usize, terms: HashMap<String, TermStat>) -> RepoIndex {
+    fn from_terms(files: usize, terms: HashMap<String, TermStat>, flat: bool) -> RepoIndex {
         let mut records: Vec<(String, TermStat)> = terms.into_iter().collect();
         records.sort_by(|a, b| a.0.cmp(&b.0));
 
         let total_terms: u64 = records.iter().map(|(_, s)| s.cf as u64).sum();
         let distinct_terms = records.len();
 
+        // The page builds an index, hands it to JavaScript as text and gets
+        // it back with every score, so whether it is flat has to travel in
+        // the text. An extra header field is ignored by a reader that does not
+        // know it, and an index with paths is written exactly as before.
         let mut blob =
-            format!("{MAGIC}\t{FORMAT_VERSION}\t{files}\t{total_terms}\t{distinct_terms}\n");
+            format!("{MAGIC}\t{FORMAT_VERSION}\t{files}\t{total_terms}\t{distinct_terms}");
+        if flat {
+            blob.push('\t');
+            blob.push_str(FLAT_MARK);
+        }
+        blob.push('\n');
         let body = blob.len();
         for (term, stat) in &records {
             // A term carrying a tab or newline would corrupt the record format
@@ -243,6 +275,7 @@ impl RepoIndex {
             files,
             total_terms,
             distinct_terms,
+            flat,
         }
     }
 
@@ -292,6 +325,7 @@ impl RepoIndex {
         let files = fields.next()?.parse().ok()?;
         let total_terms = fields.next()?.parse().ok()?;
         let distinct_terms = fields.next()?.parse().ok()?;
+        let flat = fields.next() == Some(FLAT_MARK);
 
         Some(RepoIndex {
             body: header_end + 1,
@@ -299,6 +333,7 @@ impl RepoIndex {
             files,
             total_terms,
             distinct_terms,
+            flat,
         })
     }
 }
@@ -346,7 +381,7 @@ mod tests {
                 )
             })
             .collect();
-        RepoIndex::from_terms(3, terms)
+        RepoIndex::from_terms(3, terms, false)
     }
 
     #[test]
@@ -478,6 +513,51 @@ mod tests {
         // The path itself resolves to exactly one file.
         assert_eq!(index.lookup("src/auth/login.rs").expect("the path").def, 1);
         assert!(index.lookup("nothing_here").is_none());
+    }
+
+    #[test]
+    fn files_handed_over_under_bare_names_make_a_flat_index() {
+        let file = |name: &str| (name.to_string(), "fn verify_token() {}".to_string());
+
+        let picked = RepoIndex::from_files(&[file("login.rs"), file("auth.rs")]);
+        assert!(picked.is_flat());
+        // The page keeps the index as text between scores.
+        let reread = RepoIndex::parse_str(picked.as_str()).expect("parses");
+        assert!(reread.is_flat());
+        assert_eq!(reread.files(), 2);
+        assert_eq!(reread.lookup("login.rs").expect("the file").def, 1);
+
+        // One directory anywhere means the names are paths.
+        for files in [
+            vec![file("login.rs"), file("tests/auth.rs")],
+            vec![file("src\\auth\\login.rs")],
+        ] {
+            let index = RepoIndex::from_files(&files);
+            assert!(!index.is_flat());
+            assert!(!RepoIndex::parse_str(index.as_str()).unwrap().is_flat());
+        }
+        assert!(!RepoIndex::from_files(&[]).is_flat());
+    }
+
+    #[test]
+    fn a_walked_repository_is_never_flat() {
+        // Every file here sits at the root, so no indexed name has a
+        // directory, and those names are still the real paths.
+        let root = std::env::temp_dir().join(format!("yp-index-flat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("lib.rs"), "pub fn verify_token() {}").unwrap();
+
+        let index = RepoIndex::build(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(index.files(), 2);
+        assert!(!index.is_flat());
+        // Written exactly as an index was before the flag existed.
+        assert_eq!(
+            index.as_str().lines().next().unwrap().split('\t').count(),
+            5
+        );
     }
 
     #[test]

@@ -40,6 +40,22 @@ pub trait Corpus {
     fn documents(&self) -> usize;
     /// Total term occurrences, the denominator of the collection model.
     fn total_terms(&self) -> u64;
+    /// True when the files were indexed under bare names, with no directory
+    /// in any of them.
+    ///
+    /// A browser hands the demo page a picked or dropped file as `login.rs`,
+    /// never as `src/auth/login.rs`, so a prompt naming the file by its path
+    /// was told the file was not in the code it had just been given: the
+    /// showcase prompt scored 772.2 against the sample's six files under bare
+    /// names and 851.8 against the same files under their paths. A path in
+    /// the prompt is then looked up by its last segment instead.
+    ///
+    /// An index built by walking a repository has the real paths, so a path
+    /// it does not contain is genuinely missing. Only an index that says so
+    /// is flat.
+    fn flat(&self) -> bool {
+        false
+    }
 }
 
 /// A corpus built from a literal list, for tests and examples.
@@ -48,6 +64,7 @@ pub struct MapCorpus {
     terms: std::collections::HashMap<String, TermFacts>,
     documents: usize,
     total_terms: u64,
+    flat: bool,
 }
 
 impl MapCorpus {
@@ -71,7 +88,14 @@ impl MapCorpus {
             terms,
             documents,
             total_terms,
+            flat: false,
         }
+    }
+
+    /// The same corpus, as if its files had been indexed under bare names.
+    pub fn with_bare_names(mut self) -> Self {
+        self.flat = true;
+        self
     }
 }
 
@@ -86,6 +110,10 @@ impl Corpus for MapCorpus {
 
     fn total_terms(&self) -> u64 {
         self.total_terms
+    }
+
+    fn flat(&self) -> bool {
+        self.flat
     }
 }
 
@@ -120,5 +148,12 @@ mod tests {
         assert!(corpus.lookup("absent").is_none());
         assert_eq!(corpus.documents(), 10);
         assert_eq!(corpus.total_terms(), 9);
+    }
+
+    #[test]
+    fn a_corpus_has_paths_unless_it_says_otherwise() {
+        let corpus = MapCorpus::new(1, &[("login.rs", 1, 1, 1)]);
+        assert!(!corpus.flat());
+        assert!(corpus.with_bare_names().flat());
     }
 }
