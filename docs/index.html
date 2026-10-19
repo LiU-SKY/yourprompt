@@ -552,14 +552,17 @@ function note(message, bad) {
 // Strings cross as (pointer, length) and come back length-prefixed. Every
 // buffer we take ownership of is handed straight back.
 
+// Pointers cross as signed i32s: one past 2 GiB arrives negative, and is an
+// offset into memory only once read as unsigned.
 function write(bytes) {
   if (!bytes.length) return [0, 0];
-  const ptr = wasm.yp_alloc(bytes.length);
+  const ptr = wasm.yp_alloc(bytes.length) >>> 0;
   new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
   return [ptr, bytes.length];
 }
 
 function readAndFree(ptr) {
+  ptr >>>= 0;
   if (!ptr) return null;
   const view = new DataView(wasm.memory.buffer);
   const len = view.getUint32(ptr, true);
@@ -592,7 +595,7 @@ function rebuildIndex() {
   const bytes = enc.encode(payload);
   const [p, l] = write(bytes);
   try {
-    const out = wasm.yp_index_build(p, l);
+    const out = wasm.yp_index_build(p, l) >>> 0;
     if (!out) { indexBytes = null; return; }
     const view = new DataView(wasm.memory.buffer);
     const len = view.getUint32(out, true);
