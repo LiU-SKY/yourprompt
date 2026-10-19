@@ -27,6 +27,34 @@ use yp_lang::Span;
 
 use crate::params::prompt as p;
 
+/// How much of an instruction is scored: its first 64 KB.
+///
+/// The hook runs before every prompt is sent, and Claude Code cancels a hook
+/// that takes too long; the plugin gives it five seconds. Some passes still
+/// grow faster than the text they read. With django's index loaded, a
+/// megabyte of "why does it fail?" took the hook 114.7 s and a megabyte of
+/// short fenced blocks 26.4 s. With the question, negation and tokenizer
+/// passes made linear, they still took 26.0 s and 5.2 s. Read to here, they
+/// take 80 ms and 42 ms, and 502 ms and 103 ms without those fixes.
+///
+/// No benchmark prompt comes near it. The longest HumanEvalComm prompt is
+/// 1,360 bytes. Once pasted material is cut out, the longest instruction
+/// among the 270 SWE-bench issues scored is 6,768 bytes, and the longest
+/// issue, pytest-dev__pytest-7490 at 22,778 bytes, is mostly pasted console
+/// output.
+pub const MAX_INSTRUCTION_BYTES: usize = 64 * 1024;
+
+/// How much attached material is read, across all attachments: its first
+/// 64 KB.
+///
+/// Material is judged on the share of its names the repository recognises,
+/// a proportion its first 64 KB estimate. Reading all of it is not ruinous --
+/// a 16 MB pasted log took the hook 70 ms against django's index, and takes
+/// 60 ms read to here -- but what a hook costs should not grow with whatever
+/// was pasted into it. The most any SWE-bench issue attaches is 22,136
+/// bytes.
+pub const MAX_ATTACHED_BYTES: usize = 64 * 1024;
+
 /// A prompt, separated into what was written and what was attached.
 #[derive(Debug, Clone)]
 pub struct Parts<'a> {
@@ -52,7 +80,7 @@ struct Cut {
     original: Span,
 }
 
-impl Parts<'_> {
+impl<'a> Parts<'a> {
     /// Everything the user typed, judged as an instruction.
     pub fn instruction(&self) -> &str {
         &self.instruction
@@ -88,6 +116,39 @@ impl Parts<'_> {
         Some(Span::new(start as usize, end as usize))
     }
 
+    /// These parts as the scorer reads them: the first
+    /// [`MAX_INSTRUCTION_BYTES`] of the instruction and the first
+    /// [`MAX_ATTACHED_BYTES`] of attached material, each cut on a character
+    /// boundary. `None` when everything already fits.
+    ///
+    /// Spans found in the shortened instruction map back onto the original
+    /// text as before; an attachment marker is kept whole or dropped.
+    pub fn capped(&self) -> Option<Parts<'a>> {
+        let attached: usize = self.attachments.iter().map(|a| a.len()).sum();
+        if self.instruction.len() <= MAX_INSTRUCTION_BYTES && attached <= MAX_ATTACHED_BYTES {
+            return None;
+        }
+        let marker = p::ATTACHMENT_MARKER.len();
+        let mut end = self.instruction.len().min(MAX_INSTRUCTION_BYTES);
+        while !self.instruction.is_char_boundary(end) {
+            end -= 1;
+        }
+        if let Some(cut) = self.cuts.iter().find(|c| c.at < end && end < c.at + marker) {
+            end = cut.at;
+        }
+        Some(Parts {
+            instruction: self.instruction[..end].to_string(),
+            attachments: heads(&self.attachments, MAX_ATTACHED_BYTES),
+            cuts: self
+                .cuts
+                .iter()
+                .copied()
+                .filter(|c| c.at + marker <= end)
+                .collect(),
+            original_len: self.original_len,
+        })
+    }
+
     /// The byte ranges of the original text that were taken as attachments.
     pub fn attachment_spans(&self) -> Vec<Span> {
         self.cuts
@@ -100,11 +161,8 @@ impl Parts<'_> {
     /// Everything that was pasted rather than typed, without its fences:
     /// the attachments, and any fenced block still inline in the instruction.
     ///
-    /// The two ways into the scorer separate material differently. The hook
-    /// and the command line cut a long fence out as an attachment; the web
-    /// page keeps it in the text. A block must count the same either way, so
-    /// an inline region is taken here if it is fenced, or long enough that
-    /// [`split`] would have cut it out.
+    /// A fence too short for [`split`] to cut out is pasted material all the
+    /// same.
     pub fn pasted(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self.attachments.clone();
         for region in yp_lang::token::code_regions(&self.instruction) {
@@ -125,28 +183,53 @@ pub(crate) fn is_pasted_block(body: &str) -> bool {
     body.starts_with("```") || is_attachment(body)
 }
 
-/// The content of a fenced region, without the fence or its language tag.
+/// The content of a code region, without the backticks or a fence's info
+/// string.
 ///
 /// An attachment is the material, not the markup around it. Leaving the
 /// backticks on meant the whole file was later read back as a single code
 /// span and looked up as if it were one enormous identifier, so no attachment
 /// ever contributed an anchor.
-fn strip_fence(body: &str) -> &str {
+///
+/// Whatever follows the opening backticks of a fence on its first line is
+/// the info string -- `rust`, `python title="app.py"`, `c++` -- and markup
+/// too. Read as code, it was looked up as a name: pasting the demo's own
+/// `login.rs` in a `rust` fence reported "rust" as not in the repository.
+/// Only a fence has one. A span opened by fewer than three backticks, or one
+/// that never leaves its line, is all content.
+pub(crate) fn strip_fence(body: &str) -> &str {
     let inner = body.trim_matches('`');
-    // The opening line of a fence is often a bare language tag, which is
-    // markup too.
-    match inner.split_once('\n') {
-        Some((first, rest))
-            if !first.trim().is_empty()
-                && first
-                    .trim()
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-') =>
-        {
-            rest
+    if body.starts_with("```") {
+        if let Some((info, rest)) = inner.split_once('\n') {
+            if !info.trim().is_empty() {
+                return rest;
+            }
         }
-        _ => inner,
     }
+    inner
+}
+
+/// The attachments in order until together they hold `budget` bytes, the
+/// last one cut on a character boundary.
+fn heads<'a>(attachments: &[&'a str], budget: usize) -> Vec<&'a str> {
+    let mut left = budget;
+    let mut out = Vec::new();
+    for &attachment in attachments {
+        if attachment.len() <= left {
+            out.push(attachment);
+            left -= attachment.len();
+            continue;
+        }
+        let mut end = left;
+        while !attachment.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end > 0 {
+            out.push(&attachment[..end]);
+        }
+        break;
+    }
+    out
 }
 
 /// A fenced region long enough to have been pasted rather than typed.
@@ -193,28 +276,30 @@ pub fn split(text: &str) -> Parts<'_> {
     }
 }
 
-/// Build parts from an instruction and attachments the caller already has
-/// separated, as the web page does.
-pub fn from_parts<'a>(instruction: &str, attachments: &[&'a str]) -> Parts<'a> {
-    let mut text = instruction.to_string();
-    let mut cuts = Vec::new();
+/// Build parts from what the user typed and the files the caller attached
+/// separately, as the web page does.
+///
+/// The typed text is split exactly as [`split`] splits a raw prompt, so a
+/// fence pasted into the page's box is cut out the way the hook cuts it out
+/// of the same prompt. Kept inline, a pasted file's names were read as names
+/// the user had typed: with the demo's sample repository, the showcase prompt
+/// with the sample's `login.rs` pasted under it scored 832.0 on the page and
+/// 845.7 in the status line.
+pub fn from_parts<'a>(instruction: &'a str, attachments: &[&'a str]) -> Parts<'a> {
+    let mut parts = split(instruction);
     if !attachments.is_empty() {
         // The instruction still counts as carrying evidence. The marker
         // stands for nothing in the caller's text, so it maps to an empty
         // region at its end.
-        text.push(' ');
-        cuts.push(Cut {
-            at: text.len(),
+        parts.instruction.push(' ');
+        parts.cuts.push(Cut {
+            at: parts.instruction.len(),
             original: Span::new(instruction.len(), instruction.len()),
         });
-        text.push_str(p::ATTACHMENT_MARKER);
+        parts.instruction.push_str(p::ATTACHMENT_MARKER);
+        parts.attachments.extend_from_slice(attachments);
     }
-    Parts {
-        instruction: text,
-        attachments: attachments.to_vec(),
-        cuts,
-        original_len: instruction.len(),
-    }
+    parts
 }
 
 #[cfg(test)]
@@ -311,5 +396,64 @@ mod tests {
         let parts = split(&text);
         assert!(parts.instruction.contains("fix the parser"));
         assert_eq!(parts.attachments.len(), 1);
+    }
+
+    #[test]
+    fn what_was_typed_beside_an_opened_file_is_split_like_a_raw_prompt() {
+        let paste = "let value = verify_token();\n".repeat(20);
+        let typed = format!("fix the parser\n```rust\n{paste}```\nroughly");
+        let file = "whatever the user uploaded";
+        let parts = from_parts(&typed, &[file]);
+        assert_eq!(parts.attachments, vec![paste.as_str(), file]);
+        assert_eq!(parts.instruction.matches(p::ATTACHMENT_MARKER).count(), 2);
+
+        // Spans still land on what was typed: the paste, then the word after it.
+        let marked = parts.attachment_spans();
+        assert_eq!(marked.len(), 1);
+        assert!(typed[marked[0].start..marked[0].end].starts_with("```rust"));
+        let at = parts.instruction.find("roughly").unwrap();
+        let back = parts.to_original(Span::new(at, at + 7)).unwrap();
+        assert_eq!(&typed[back.start..back.end], "roughly");
+    }
+
+    #[test]
+    fn capped_parts_still_map_onto_the_original() {
+        let paste = "line of the paste\n".repeat(40);
+        let prose = "the parser should accept it. ".repeat(4000);
+        let text = format!("fix the parser\n```\n{paste}```\n{prose}");
+        let parts = split(&text);
+        assert!(parts.instruction.len() > MAX_INSTRUCTION_BYTES);
+
+        let capped = parts.capped().expect("over the limit");
+        assert_eq!(capped.instruction.len(), MAX_INSTRUCTION_BYTES);
+        assert_eq!(capped.attachments, parts.attachments);
+        assert_eq!(capped.attachment_spans(), parts.attachment_spans());
+        let at = capped.instruction.rfind("accept").unwrap();
+        let back = capped.to_original(Span::new(at, at + 6)).unwrap();
+        assert_eq!(&text[back.start..back.end], "accept");
+
+        // Attached material is read to its own limit, on a character boundary.
+        let big = "가".repeat(MAX_ATTACHED_BYTES);
+        let parts = from_parts("fix it", &[big.as_str(), "never read"]);
+        let capped = parts.capped().expect("over the limit");
+        assert_eq!(capped.attachments.len(), 1);
+        assert!(capped.attachments[0].len() <= MAX_ATTACHED_BYTES);
+        assert!(big.starts_with(capped.attachments[0]));
+        assert_eq!(capped.instruction, parts.instruction);
+    }
+
+    #[test]
+    fn only_a_fence_has_an_info_string() {
+        assert_eq!(strip_fence("```rust\nfn x()\n```"), "fn x()\n");
+        assert_eq!(
+            strip_fence("``` python title=\"a.py\"\nx = 1\n```"),
+            "x = 1\n"
+        );
+        assert_eq!(strip_fence("```c++\r\nint x;\r\n```"), "int x;\r\n");
+        // No info string: the opening line is empty.
+        assert_eq!(strip_fence("```\nverify_token\n```"), "\nverify_token\n");
+        // An inline span, however it is opened, is all content.
+        assert_eq!(strip_fence("```verify_token```"), "verify_token");
+        assert_eq!(strip_fence("`login\nhandler`"), "login\nhandler");
     }
 }
