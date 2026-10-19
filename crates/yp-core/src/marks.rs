@@ -51,12 +51,18 @@ pub(crate) struct Evidence<'a> {
     pub smell_hits: &'a [Hit<SmellId>],
     /// Pronouns taken to point at pasted material, and so not charged.
     pub anchored: &'a [Span],
+    /// Pronouns taken, with no repository to check against, to mean a
+    /// code-shaped name before them in their sentence, and so not charged.
+    pub named: &'a [Span],
     /// `None` when there was no repository to resolve names against.
     pub referents: Option<&'a [Referent]>,
     /// How many things the prompt asks for; a conjunction only costs when it
     /// joins a second one.
     pub objectives: usize,
 }
+
+/// The note on a pronoun with a name before it, grounded or not.
+const ANCHORED: &str = "a pronoun; something named earlier may be what it means";
 
 fn cue_note(id: CueId) -> &'static str {
     match id {
@@ -108,13 +114,7 @@ pub(crate) fn collect(ev: &Evidence<'_>) -> Vec<Mark> {
                         "points at nothing named before it",
                     );
                 } else {
-                    push(
-                        &mut out,
-                        hit.span,
-                        Tone::Warn,
-                        "pronoun:anchored",
-                        "a pronoun; something named earlier may be what it means",
-                    );
+                    push(&mut out, hit.span, Tone::Warn, "pronoun:anchored", ANCHORED);
                 }
                 continue;
             }
@@ -136,6 +136,10 @@ pub(crate) fn collect(ev: &Evidence<'_>) -> Vec<Mark> {
             "pronoun:pasted",
             "points at the pasted material",
         );
+    }
+
+    for &span in ev.named {
+        push(&mut out, span, Tone::Warn, "pronoun:anchored", ANCHORED);
     }
 
     for hit in ev.cue_hits {
@@ -321,6 +325,26 @@ mod tests {
             .map(|m| m.kind.as_str())
             .collect();
         assert_eq!(pronouns, ["pronoun:dangling", "pronoun:anchored"]);
+    }
+
+    #[test]
+    fn without_an_index_a_code_shaped_name_anchors_the_pronoun_after_it() {
+        // The same verdicts as the grounded case above, read from the shape
+        // of the name instead of from the repository.
+        let text = "fix it in verify_token, then rename it";
+        let m = marks(text);
+        let pronouns: Vec<(&str, Tone)> = m
+            .iter()
+            .filter(|m| &text[m.start..m.end] == "it")
+            .map(|m| (m.kind.as_str(), m.tone))
+            .collect();
+        assert_eq!(
+            pronouns,
+            [
+                ("smell:vague_pronoun", Tone::Bad),
+                ("pronoun:anchored", Tone::Warn)
+            ]
+        );
     }
 
     #[test]

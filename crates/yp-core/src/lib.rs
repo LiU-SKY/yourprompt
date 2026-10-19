@@ -23,6 +23,7 @@
 //! prompt in a language the lexicons cannot read are scored all the same,
 //! but [`Score::kind`] says the number does not describe them.
 
+mod antecedents;
 pub mod axes;
 pub mod corpus;
 pub mod grade;
@@ -182,6 +183,12 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     let cue_hits = [cue_hits, questions].concat();
     // "test" in "add a test" names the work rather than adding to it.
     let settled = nouns::strip(text, &cue_hits, settled);
+    // With no index, a pronoun after a code-shaped name in its sentence is
+    // taken to mean that name, as grounding takes it to mean one that resolves.
+    let (smell_hits, named) = match corpus {
+        Some(_) => (smell_hits, Vec::new()),
+        None => antecedents::anchor(text, &tokens, smell_hits),
+    };
 
     let cues = axes::distinct_by_category(&settled);
     let smells = axes::total_by_category(&smell_hits);
@@ -240,6 +247,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
         cue_hits: &settled,
         smell_hits: &smell_hits,
         anchored: &anchored,
+        named: &named,
         referents: referents.as_deref(),
         objectives: axes::objectives(&cues),
     });
@@ -895,6 +903,46 @@ mod tests {
         assert!(
             component(&s.actionability, "singularity") < params::actionability::SINGULARITY_MAX
         );
+    }
+
+    #[test]
+    fn a_pronoun_after_a_name_is_not_charged_without_an_index() {
+        // The showcase's "it", right after verify_token, cost 38.5 of the 250
+        // clarity points, and the page marked it as pointing at nothing.
+        let real = "In src/auth/login.rs, change verify_token so it returns \
+                    Err(AuthError::Expired) instead of panicking on an expired token. \
+                    Don't change the public signature of login(). tests/auth.rs must still pass.";
+        let made_up = "In src/banana.rs, change gravity() so it returns Err(MoonError::Full) \
+                       instead of panicking on a full moon. Don't change the public signature \
+                       of orbit(). tests/moon.rs must still pass.";
+        let s = score(real).unwrap();
+        assert_eq!(s.clarity.components[0].detail, "no ambiguity smells");
+        let it = s
+            .marks
+            .iter()
+            .find(|m| &real[m.start..m.end] == "it")
+            .expect("the pronoun is marked");
+        assert_eq!(
+            (it.kind.as_str(), it.tone),
+            ("pronoun:anchored", Tone::Warn)
+        );
+        // Unchecked, a made-up name anchors it as well as a real one.
+        assert_eq!(total(made_up), s.total);
+
+        // Nothing named before it in its sentence.
+        for text in [
+            "it's broken again",
+            "fix it",
+            "make it better",
+            "Fix verify_token. It panics on expired tokens.",
+        ] {
+            let s = score(text).unwrap();
+            assert!(
+                s.clarity.components[0].detail.contains("vague pronoun"),
+                "{text}: {}",
+                s.clarity.components[0].detail
+            );
+        }
     }
 
     #[test]
