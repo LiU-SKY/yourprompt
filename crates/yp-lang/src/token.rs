@@ -265,12 +265,20 @@ fn classify(chunk: &str) -> TokenKind {
 /// never reaches the smell matcher.
 pub fn tokenize(text: &str) -> Vec<Token> {
     let code = code_regions(text);
+    // The first code region that does not start before the current
+    // character. The regions are sorted and the text is read once, front to
+    // back, so this cursor only ever moves forward; searching the whole list
+    // at every character made 75,000 inline spans take 4.4 s in the hook.
+    let mut next = 0usize;
     let mut tokens = Vec::new();
     let mut it = text.char_indices().peekable();
 
     while let Some(&(idx, c)) = it.peek() {
+        while code.get(next).is_some_and(|r| r.start < idx) {
+            next += 1;
+        }
         // Emit any code region whole.
-        if let Some(region) = code.iter().find(|r| r.start == idx) {
+        if let Some(region) = code.get(next).filter(|r| r.start == idx) {
             let inner = region.slice(text).trim_matches('`').trim().to_string();
             tokens.push(Token {
                 kind: TokenKind::CodeSpan,
@@ -312,7 +320,7 @@ pub fn tokenize(text: &str) -> Vec<Token> {
             let mut end = idx;
             while let Some(&(i, ch)) = it.peek() {
                 // Stop before a code region so we never swallow its opening tick.
-                if code.iter().any(|r| r.start == i) {
+                if code.get(next).is_some_and(|r| r.start == i) {
                     break;
                 }
                 if is_chunk_char(ch) {
@@ -362,6 +370,7 @@ pub fn tokenize(text: &str) -> Vec<Token> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn kinds(text: &str) -> Vec<(TokenKind, String)> {
         tokenize(text)
@@ -434,5 +443,30 @@ mod tests {
             assert!(text.is_char_boundary(t.span.start));
             assert!(text.is_char_boundary(t.span.end));
         }
+    }
+
+    #[test]
+    fn many_inline_spans_cost_about_what_as_many_quotes_do() {
+        // The same text with backticks for quotes: 40,000 code regions
+        // instead of none. While every character was looked up in the whole
+        // list of regions, the spans took 4.9 s in a debug build and the
+        // quotes 25 ms. Timed against each other, the two measure how the
+        // work grows, not how fast the machine is.
+        let time = |text: &str| {
+            (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    std::hint::black_box(tokenize(text));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let quotes = time(&"'a' ".repeat(40_000));
+        let spans = time(&"`a` ".repeat(40_000));
+        assert!(
+            spans < quotes * 20 + Duration::from_millis(100),
+            "spans took {spans:?}, quotes {quotes:?}"
+        );
     }
 }

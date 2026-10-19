@@ -106,7 +106,8 @@ impl<C: Copy> Matcher<C> {
     }
 
     /// Same as [`Matcher::find`], but with the code regions supplied by the
-    /// caller so several matchers can share one scan of the prompt.
+    /// caller so several matchers can share one scan of the prompt. They must
+    /// be sorted and non-overlapping, as [`code_regions`] returns them.
     pub fn find_masked(&self, text: &str, code: &[Span]) -> Vec<Hit<C>> {
         // Collect every candidate, including overlapping ones, and only then
         // pick leftmost-longest among those that survive the boundary rules.
@@ -119,7 +120,7 @@ impl<C: Copy> Matcher<C> {
         let mut candidates: Vec<(usize, usize, usize)> = Vec::new();
         for m in self.ac.find_overlapping_iter(text) {
             let span = Span::new(m.start(), m.end());
-            if code.iter().any(|r| r.overlaps(&span)) {
+            if in_code(code, &span) {
                 continue;
             }
             let pattern = m.pattern().as_usize();
@@ -153,6 +154,18 @@ impl<C: Copy> Matcher<C> {
 
         hits
     }
+}
+
+/// Whether `span` overlaps any of the sorted, non-overlapping `code` regions.
+///
+/// Their ends are sorted too, so if any region overlaps `span`, the first one
+/// ending after `span` starts does. Checking every region for every match was
+/// quadratic: with an inline span beside each of 40,000 matches, matching took
+/// 513 ms in a release build, against 3.6 ms with quotes in place of the
+/// backticks.
+fn in_code(code: &[Span], span: &Span) -> bool {
+    let first = code.partition_point(|r| r.end <= span.start);
+    code.get(first).is_some_and(|r| r.overlaps(span))
 }
 
 fn prev_char(text: &str, at: usize) -> Option<char> {
@@ -189,6 +202,7 @@ fn ko_boundary_ok(text: &str, span: &Span) -> bool {
 mod tests {
     use super::*;
     use crate::lexicon::load_bundled;
+    use std::time::{Duration, Instant};
 
     fn matcher() -> Matcher<SmellId> {
         Matcher::new(&load_bundled().unwrap().table).unwrap()
@@ -326,5 +340,31 @@ mod tests {
         for hit in matcher().find(text) {
             assert_eq!(hit.span.slice(text), hit.term);
         }
+    }
+
+    #[test]
+    fn many_code_regions_cost_about_what_none_do() {
+        // The same matches next to 40,000 code regions or next to none. While
+        // every match was checked against every region, the first took 4.1 s
+        // in a debug build and the second 20 ms. Timed against each other,
+        // the two measure how the work grows, not how fast the machine is.
+        let m = matcher();
+        let time = |text: &str| {
+            let code = code_regions(text);
+            (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    std::hint::black_box(m.find_masked(text, &code));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let quoted = time(&"it 'x' ".repeat(40_000));
+        let fenced = time(&"it `x` ".repeat(40_000));
+        assert!(
+            fenced < quoted * 20 + Duration::from_millis(100),
+            "with code regions {fenced:?}, without {quoted:?}"
+        );
     }
 }

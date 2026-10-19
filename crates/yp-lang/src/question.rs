@@ -209,11 +209,13 @@ pub fn find(text: &str, tokens: &[Token]) -> Vec<Question> {
         if !sentence.asks {
             continue;
         }
-        let words = || {
-            tokens
-                .iter()
-                .filter(|t| sentence.span.contains(t.span.start))
-        };
+        // Tokens are in text order, so the words of a sentence are the one
+        // run of them that starts inside it, found by binary search. Filtering
+        // every token for every sentence was quadratic: 50,000 "? " took 2.3 s
+        // in the hook and 6.3 s on the demo page.
+        let lo = tokens.partition_point(|t| t.span.start < sentence.span.start);
+        let hi = tokens.partition_point(|t| t.span.start < sentence.span.end);
+        let words = || tokens[lo..hi].iter();
         let opener = english_opener(words())
             .or_else(|| korean_interrogative(words()).map(|span| (span, true)));
         if let Some((span, interrogative)) = opener {
@@ -235,6 +237,7 @@ pub fn find(text: &str, tokens: &[Token]) -> Vec<Question> {
 mod tests {
     use super::*;
     use crate::tokenize;
+    use std::time::{Duration, Instant};
 
     fn asked(text: &str) -> Vec<String> {
         find(text, &tokenize(text))
@@ -348,5 +351,31 @@ mod tests {
     #[test]
     fn a_query_string_is_not_a_sentence_end() {
         assert!(asked("how do I fetch https://example.com/a?b=1 here").is_empty());
+    }
+
+    #[test]
+    fn many_questions_cost_about_what_as_many_statements_do() {
+        // Both texts are 20,000 sentences of one mark each, but only a
+        // question has its words searched for an opener. While that search
+        // filtered every token, the questions took 4.9 s in a debug build and
+        // the exclamations 1.6 ms. Timed against each other, the two measure
+        // how the work grows, not how fast the machine is.
+        let time = |text: &str| {
+            let tokens = tokenize(text);
+            (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    std::hint::black_box(find(text, &tokens));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let exclamations = time(&"! ".repeat(20_000));
+        let questions = time(&"? ".repeat(20_000));
+        assert!(
+            questions < exclamations * 20 + Duration::from_millis(100),
+            "questions took {questions:?}, exclamations {exclamations:?}"
+        );
     }
 }
