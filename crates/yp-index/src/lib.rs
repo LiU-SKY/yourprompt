@@ -78,20 +78,29 @@ impl RepoIndex {
     pub fn lookup(&self, term: &str) -> Option<TermStat> {
         let needle = term.to_lowercase();
         let body = &self.blob[self.body..];
-        if body.is_empty() {
+        // The search halves a byte range, so `mid` can fall inside a
+        // multi-byte character of a non-ASCII path, and slicing the str there
+        // panicked. Newlines are looked for in the bytes instead: '\n' never
+        // occurs inside a UTF-8 sequence, so every line found still starts
+        // and ends on a character boundary.
+        let bytes = body.as_bytes();
+        if bytes.is_empty() {
             return None;
         }
 
         let mut lo = 0usize;
-        let mut hi = body.len();
+        let mut hi = bytes.len();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             // Snap to the start of whichever line `mid` landed inside.
-            let line_start = body[..mid].rfind('\n').map(|i| i + 1).unwrap_or(0);
-            let line_end = body[line_start..]
-                .find('\n')
-                .map(|i| line_start + i)
-                .unwrap_or(body.len());
+            let line_start = bytes[..mid]
+                .iter()
+                .rposition(|&b| b == b'\n')
+                .map_or(0, |i| i + 1);
+            let line_end = bytes[line_start..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(bytes.len(), |i| line_start + i);
             let line = &body[line_start..line_end];
             let key = line.split('\t').next().unwrap_or("");
 
@@ -390,6 +399,73 @@ mod tests {
             "\u{1F600}",
         ] {
             assert!(index.lookup(missing).is_none(), "invented {missing:?}");
+        }
+    }
+
+    #[test]
+    fn non_ascii_paths_never_split_a_character() {
+        // Identifiers are ASCII, but paths and file names are indexed whole,
+        // so a step of the binary search can land inside a multi-byte
+        // character. Slicing the index there panicked: a file named 보고서.md
+        // was enough to crash the hook and the demo page.
+        let files: Vec<(String, String)> = [
+            ("docs/보고서.md", "# 메모\n"),
+            ("실행해", ""),
+            ("docs/설계/회의록 2024.md", "fn verify_token() {}"),
+            ("設計/メモ.md", "struct AuthError;"),
+            ("ドキュメント/仕様書.txt", "parse_args"),
+            ("src/café/résumé.rs", "fn crème_brûlée() {}"),
+            ("Ünïcödé/ÄÖÜ straße.py", "def naive_path(): pass"),
+            ("assets/🎉 party/🎊.txt", "launch_party"),
+            ("emoji/👨‍👩‍👧‍👦.md", ""),
+            ("src/auth/login.rs", "pub fn login() {}"),
+        ]
+        .iter()
+        .map(|(path, text)| (path.to_string(), text.to_string()))
+        .collect();
+        let index = RepoIndex::from_files(&files);
+
+        // Sorted, so the needles below are the same on every run.
+        let stored: std::collections::BTreeMap<&str, TermStat> = index
+            .as_str()
+            .lines()
+            .skip(1)
+            .map(|line| {
+                (
+                    line.split('\t').next().unwrap(),
+                    parse_record(line).unwrap(),
+                )
+            })
+            .collect();
+        assert!(stored.contains_key("docs/보고서.md"), "{stored:?}");
+        for (term, stat) in &stored {
+            assert_eq!(index.lookup(term), Some(*stat), "{term}");
+        }
+
+        // Needles built from the same characters, most of them not stored:
+        // each probes a different sequence of midpoints.
+        let alphabet: Vec<char> = "ae_/. 보고서실행設計メモé🎉ÄÖÜß".chars().collect();
+        let terms: Vec<&str> = stored.keys().copied().collect();
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |below: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % below as u64) as usize
+        };
+        for round in 0..600 {
+            let mut needle: String = (0..next(12))
+                .map(|_| alphabet[next(alphabet.len())])
+                .collect();
+            if round % 2 == 0 {
+                // A stored term with something added: the nearest misses.
+                needle.insert_str(0, terms[next(terms.len())]);
+            }
+            assert_eq!(
+                index.lookup(&needle),
+                stored.get(needle.to_lowercase().as_str()).copied(),
+                "{needle:?}"
+            );
         }
     }
 
