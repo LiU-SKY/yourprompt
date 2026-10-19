@@ -29,10 +29,10 @@
        alt="&quot;fix the bug&quot; scores 305.4, an F. A prompt that names the file, the function and when it is done scores 799.8, an A-.">
 </p>
 
-Every prompt you send gets a 0 to 1000 score in the status line, before the
-model answers. The score says how well a coding agent can act on the prompt
-*in this repository*: whether the things you name exist, whether they point at
-one place or forty, and whether you said what done looks like.
+Every prompt you send gets a 0 to 1000 score, shown in the status line as
+Claude starts to answer. The score says how well a coding agent can act on the
+prompt *in this repository*: whether the things you name exist, whether they
+point at one place or forty, and whether you said what done looks like.
 
 - **Zero tokens.** The hook prints nothing. The status line never enters the
   model's context. Your `/context` count is the same with or without it.
@@ -340,9 +340,12 @@ is written where `yp index` writes it.
 - Hauff et al., *A survey of pre-retrieval query performance predictors*, CIKM 2008.
 - Wu and Fard, *HumanEvalComm: Benchmarking the Communication Competence of
   Code Generation for LLMs and LLM Agent*, arXiv:2406.00215.
-- *PartialOrderEval*, arXiv:2508.03678.
-- *MutaGReP*, arXiv:2502.15872.
-- SWE-bench Lite, princeton-nlp.
+- Zi, Menon and Guha, *More Than a Score: Probing the Impact of Prompt
+  Specificity on LLM Code Generation* (PartialOrderEval), arXiv:2508.03678.
+- Khan et al., *MutaGReP: Execution-Free Repository-Grounded Plan Search for
+  Code-Use*, arXiv:2502.15872.
+- Jimenez et al., *SWE-bench: Can Language Models Resolve Real-World GitHub
+  Issues?*, ICLR 2024. The Lite split is from the same authors.
 
 ## License
 

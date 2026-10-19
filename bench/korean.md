@@ -11,8 +11,9 @@ below are scored the same way unless they say otherwise.
 ## The honest starting point
 
 The report that started this was a user typing 아 over eight lines and
-watching it score 346. Measured on the commit before the fix (ab75e0d) and on
-v0.1.1:
+watching it score 346, in a status line whose index had taken in their whole
+home directory; without an index it was 409.2. Measured without an index on
+the commit before the fix (ab75e0d) and on v0.1.1:
 
 | | before | v0.1.1 |
 |---|---:|---:|
@@ -50,7 +51,7 @@ never probed:
    more times is now mash; standalone interjections (아, 음, 어...) are
    neutral, like punctuation -- neither language nor mash, and never content.
 4. **Digits counted as language.** A screen of numbers was 87% "legible" and
-   scored 312. Numbers are now neutral in the legibility share; a number
+   scored 357.2. Numbers are now neutral in the legibility share; a number
    inside a sentence still costs nothing.
 
 One cue-list bug rode along: bare "테스트" was an *acceptance* cue, so the
