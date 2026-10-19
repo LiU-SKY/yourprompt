@@ -194,9 +194,20 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     let cue_hits = resources.cue_matcher.find_masked(text, &code);
     let smell_hits = resources.smells.find_masked(text, &code);
 
-    // A "this" with a pasted block to point at is neither vague nor dangling,
-    // and a direct question asks as plainly as an action verb does.
+    // A word a name or a cue phrase holds is part of it ("handler" in
+    // src/handler.rs, "that" in "so that"), and neither a noun ("the type
+    // check") nor a "that" that does not point is a smell.
+    let smell_hits = nouns::strip_smells(text, &tokens, &cue_hits, smell_hits);
+    // A "this" with a pasted block to point at is neither vague nor dangling.
+    // With no index, a pronoun after a code-shaped name is taken to mean that
+    // name, as grounding takes it to mean one that resolves, and a question
+    // about it asks about the name. A direct question asks as plainly as an
+    // action verb does.
     let (smell_hits, anchored) = pasted.anchor(smell_hits);
+    let (smell_hits, named) = match corpus {
+        Some(_) => (smell_hits, Vec::new()),
+        None => antecedents::anchor(text, &tokens, smell_hits),
+    };
     let (questions, smell_hits) = questions::asked(text, &tokens, smell_hits, pasted.is_material());
 
     // "change" in "don't change the schema" is a constraint, not the
@@ -204,14 +215,9 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     // still takes every hit as an instruction word rather than a name.
     let settled = [negation::settle(text, &cue_hits), questions.clone()].concat();
     let cue_hits = [cue_hits, questions].concat();
-    // "test" in "add a test" names the work rather than adding to it.
-    let settled = nouns::strip(text, &cue_hits, settled);
-    // With no index, a pronoun after a code-shaped name in its sentence is
-    // taken to mean that name, as grounding takes it to mean one that resolves.
-    let (smell_hits, named) = match corpus {
-        Some(_) => (smell_hits, Vec::new()),
-        None => antecedents::anchor(text, &tokens, smell_hits),
-    };
+    // "test" in "add a test" names the work rather than adding to it, and an
+    // opening "Return" asks for something when nothing else does.
+    let (settled, cue_hits) = nouns::strip(text, &tokens, cue_hits, settled);
 
     let cues = axes::distinct_by_category(&settled);
     let smells = axes::total_by_category(&smell_hits);
@@ -1065,12 +1071,26 @@ mod tests {
         // Unchecked, a made-up name anchors it as well as a real one.
         assert_eq!(total(made_up), s.total);
 
-        // Nothing named before it in its sentence.
+        // A sentence that opens with the pronoun goes on about the name in
+        // the sentence before it, as grounding reads it too.
+        for text in [
+            "Fix verify_token. It panics on expired tokens.",
+            "verify_token returns None. It should return Err(AuthError::Expired).",
+        ] {
+            let s = score(text).unwrap();
+            assert!(
+                !s.clarity.components[0].detail.contains("vague pronoun"),
+                "{text}: {}",
+                s.clarity.components[0].detail
+            );
+        }
+
+        // Nothing named before it.
         for text in [
             "it's broken again",
             "fix it",
             "make it better",
-            "Fix verify_token. It panics on expired tokens.",
+            "verify_token panics. The parser is fine. It runs first.",
         ] {
             let s = score(text).unwrap();
             assert!(

@@ -14,9 +14,14 @@
 
 /// English pronouns that can stand for pasted material. Sorted, for binary
 /// search.
+///
+/// "that" is one only where it points, as "this" does: yp-core takes the
+/// relative "a function that returns" and the "that" of "make sure that" out of
+/// the vague pronouns before this is asked.
 const EN_DEICTICS: &[&str] = &[
     "it",
     "its",
+    "that",
     "the above",
     "their",
     "them",
@@ -76,7 +81,7 @@ mod tests {
     #[test]
     fn demonstratives_point_and_conversation_history_does_not() {
         for term in [
-            "this", "This", "it", "these", "those", "이거", "이것", "저거", "그거",
+            "this", "This", "it", "that", "these", "those", "이거", "이것", "저거", "그거",
         ] {
             assert!(is_deictic(term), "{term} should point");
         }

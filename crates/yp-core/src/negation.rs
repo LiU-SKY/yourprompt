@@ -463,10 +463,7 @@ mod tests {
         assert!(verbs("never add or remove dependencies").is_empty());
         // "and" starts a new request; "or" after a wanted verb is one too.
         assert_eq!(verbs("don't change the schema and add an index"), ["add"]);
-        assert_eq!(
-            verbs("fix the parser or revert the commit"),
-            ["fix", "revert"]
-        );
+        assert_eq!(verbs("fix the parser or revert it"), ["fix", "revert"]);
         // A new sentence is a new clause.
         assert_eq!(verbs("don't change it. Or rather, rename it"), ["rename"]);
     }
