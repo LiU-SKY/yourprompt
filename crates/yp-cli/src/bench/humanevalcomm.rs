@@ -23,6 +23,18 @@
 //!
 //! Grounding is inactive throughout, since these prompts have no repository.
 //! Ablation therefore covers axes B, C and D.
+//!
+//! # The length baseline
+//!
+//! The damage changes how long a prompt is. An incomplete variant is its
+//! original with text cut out -- shorter in all 164 pairs, by 247 characters
+//! on average -- while an ambiguous one is longer in 107 of 164. So "the
+//! longer prompt is the original" is right more often than not without
+//! reading a word: when this baseline was added it got 72.7% of the
+//! lexically reachable pairs and 59.0% of all of them, against the score's
+//! 65.9% and 53.3%. Every ordering figure is printed beside it, counted by
+//! the same rule, because a score has to be read against that trivial
+//! predictor rather than against a coin toss.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -82,6 +94,58 @@ struct Pair {
     lexically_reachable: bool,
     original: Score,
     perturbed: Score,
+    /// Lengths in characters, which is all the length baseline reads.
+    original_chars: usize,
+    perturbed_chars: usize,
+}
+
+impl Pair {
+    fn new(
+        variant: &Variant,
+        original_text: &str,
+        original: &Score,
+        perturbed_text: &str,
+        perturbed: Score,
+    ) -> Self {
+        Pair {
+            category: variant.category,
+            defects: variant.defects,
+            lexically_reachable: variant.lexically_reachable,
+            original: original.clone(),
+            perturbed,
+            original_chars: original_text.chars().count(),
+            perturbed_chars: perturbed_text.chars().count(),
+        }
+    }
+}
+
+/// One row of the ordering tables: the score and the length baseline,
+/// tallied over the same pairs.
+#[derive(Default)]
+struct Row {
+    score: Tally,
+    length: Tally,
+}
+
+impl Row {
+    fn add(&mut self, pair: &Pair) {
+        self.score.add(pair.original.total, pair.perturbed.total);
+        self.length
+            .add(pair.original_chars as f64, pair.perturbed_chars as f64);
+    }
+
+    /// The columns both ordering tables share, after their labels.
+    fn cells(&self) -> String {
+        format!(
+            "{} | {:.1}% | {} | {:.1} | {:.1}% ({})",
+            self.score.total,
+            self.score.accuracy() * 100.0,
+            self.score.ties,
+            self.score.mean_delta(),
+            self.length.accuracy() * 100.0,
+            self.length.ties,
+        )
+    }
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -148,13 +212,13 @@ fn load_pairs(path: &Path, limit: Option<usize>) -> Result<Vec<Pair>, String> {
             let Some(perturbed) = yp_core::score(text) else {
                 continue;
             };
-            pairs.push(Pair {
-                category: variant.category,
-                defects: variant.defects,
-                lexically_reachable: variant.lexically_reachable,
-                original: original.clone(),
+            pairs.push(Pair::new(
+                variant,
+                original_text,
+                &original,
+                text,
                 perturbed,
-            });
+            ));
         }
     }
     Ok(pairs)
@@ -176,51 +240,49 @@ fn render_report(pairs: &[Pair], ablation: bool) -> String {
     );
 
     // ---- overall + per category -----------------------------------------
-    let mut overall = Tally::default();
-    let mut by_category: BTreeMap<&str, Tally> = BTreeMap::new();
+    let mut overall = Row::default();
+    let mut reachable = Row::default();
+    let mut by_category: BTreeMap<&str, Row> = BTreeMap::new();
     for pair in pairs {
-        overall.add(pair.original.total, pair.perturbed.total);
-        by_category
-            .entry(pair.category)
-            .or_default()
-            .add(pair.original.total, pair.perturbed.total);
-    }
-
-    let mut reachable = Tally::default();
-    for pair in pairs.iter().filter(|p| p.lexically_reachable) {
-        reachable.add(pair.original.total, pair.perturbed.total);
+        overall.add(pair);
+        if pair.lexically_reachable {
+            reachable.add(pair);
+        }
+        by_category.entry(pair.category).or_default().add(pair);
     }
 
     out.push_str(&format!(
         "## Pairwise ordering\n\n\
-         **{:.1}%** of {} pairs score the original above the damaged version \
-         (ties: {}), mean margin {:.1} points.\n\n\
-         Restricted to the {} pairs whose defect is *lexically reachable* -- \
-         visible without evaluating the program -- the figure is **{:.1}%**. \
-         The gap is not a tuning problem; see the note below.\n\n",
-        overall.accuracy() * 100.0,
-        overall.total,
-        overall.ties,
-        overall.mean_delta(),
-        reachable.total,
-        reachable.accuracy() * 100.0,
+         Each row gives how often the score ranks the original above its \
+         damaged version, and beside it the length baseline: \"longer wins\" \
+         calls whichever prompt has more characters the original and reads \
+         nothing else. Both count a tie as a miss. Read the score against the \
+         baseline, not against 50%.\n\n\
+         | | Pairs | Correct | Ties | Mean margin | Longer wins (ties) |\n\
+         |---|---:|---:|---:|---:|---:|\n\
+         | lexically reachable | {} |\n\
+         | all | {} |\n\n\
+         A defect is *lexically reachable* when it is visible without \
+         evaluating the program. The gap between the two rows is not a \
+         tuning problem; see the note below.\n\n",
+        reachable.cells(),
+        overall.cells(),
     ));
 
-    out.push_str("| Defect injected | Reachable | Pairs | Correct | Ties | Mean margin |\n");
-    out.push_str("|---|:---:|---:|---:|---:|---:|\n");
-    for (category, tally) in &by_category {
+    out.push_str(
+        "| Defect injected | Reachable | Pairs | Correct | Ties | Mean margin | Longer wins (ties) |\n",
+    );
+    out.push_str("|---|:---:|---:|---:|---:|---:|---:|\n");
+    for (category, row) in &by_category {
         let is_reachable = pairs
             .iter()
             .find(|p| p.category == *category)
             .is_some_and(|p| p.lexically_reachable);
         out.push_str(&format!(
-            "| {} | {} | {} | {:.1}% | {} | {:.1} |\n",
+            "| {} | {} | {} |\n",
             category,
             if is_reachable { "yes" } else { "no" },
-            tally.total,
-            tally.accuracy() * 100.0,
-            tally.ties,
-            tally.mean_delta(),
+            row.cells(),
         ));
     }
 
@@ -262,7 +324,7 @@ fn render_report(pairs: &[Pair], ablation: bool) -> String {
         );
         out.push_str(&format!(
             "| none (full model) | {:.1}% | -- |\n",
-            overall.accuracy() * 100.0
+            overall.score.accuracy() * 100.0
         ));
         for axis in ["actionability", "clarity", "context"] {
             let mut tally = Tally::default();
@@ -276,7 +338,7 @@ fn render_report(pairs: &[Pair], ablation: bool) -> String {
                 "| {} | {:.1}% | {:+.1} pp |\n",
                 axis,
                 tally.accuracy() * 100.0,
-                (tally.accuracy() - overall.accuracy()) * 100.0,
+                (tally.accuracy() - overall.score.accuracy()) * 100.0,
             ));
         }
     }
@@ -389,5 +451,81 @@ mod tests {
             + total_without(&score, "clarity")
             + total_without(&score, "context");
         assert!(without_all > 0.0, "full {full}");
+    }
+
+    /// A pair built from text the way `load_pairs` builds one. The scores are
+    /// real but beside the point: only the lengths are under test.
+    fn pair(category: &str, original: &str, perturbed: &str) -> Pair {
+        let variant = VARIANTS
+            .iter()
+            .find(|v| v.category == category)
+            .expect("a HumanEvalComm category");
+        let score = |text: &str| yp_core::score(text).expect("scores");
+        Pair::new(
+            variant,
+            original,
+            &score(original),
+            perturbed,
+            score(perturbed),
+        )
+    }
+
+    // One specification damaged the three ways HumanEvalComm damages one:
+    // text cut out, the example contradicted, a vague alternative written in.
+    const ORIGINAL: &str = "Return the decimal part of 3.5, which is 0.5.";
+    const CUT: &str = "Return the decimal part.";
+    const CONTRADICTED: &str = "Return the decimal part of 3.5, which is 3.0.";
+    const VAGUE: &str = "Return a certain part of 3.5 (e.g. integer or decimal).";
+
+    #[test]
+    fn the_length_baseline_calls_the_longer_prompt_the_original() {
+        let mut row = Row::default();
+        // The cut original is the longer side, so the baseline is right.
+        row.add(&pair("incompleteness", ORIGINAL, CUT));
+        assert_eq!((row.length.correct, row.length.ties), (1, 0));
+        // The vague version is the longer side, so the baseline is wrong.
+        row.add(&pair("ambiguity", ORIGINAL, VAGUE));
+        assert_eq!((row.length.correct, row.length.ties), (1, 0));
+        // The contradiction changes no length at all.
+        row.add(&pair("inconsistency", ORIGINAL, CONTRADICTED));
+        assert_eq!((row.length.correct, row.length.ties), (1, 1));
+        // The tie is a miss, as it is for the score.
+        assert!((row.length.accuracy() - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(row.score.total, row.length.total);
+    }
+
+    #[test]
+    fn the_length_baseline_counts_characters_not_bytes() {
+        // Three Hangul syllables are nine bytes but three characters, so the
+        // six-character damaged side is the longer one.
+        let mut row = Row::default();
+        row.add(&pair("ambiguity", "반환해", "fix it"));
+        assert_eq!((row.length.correct, row.length.ties), (0, 0));
+    }
+
+    #[test]
+    fn every_ordering_row_carries_the_length_baseline() {
+        let pairs = [
+            pair("ambiguity", ORIGINAL, VAGUE),
+            pair("ambiguity", ORIGINAL, "Return some part of 3.5."),
+            pair("incompleteness", ORIGINAL, CUT),
+            pair("inconsistency", ORIGINAL, CONTRADICTED),
+        ];
+        let report = render_report(&pairs, false);
+        for (label, baseline) in [
+            // Ambiguity and incompleteness are the reachable defects: three
+            // pairs, two of them won on length alone.
+            ("lexically reachable", "66.7% (0)"),
+            ("all", "50.0% (1)"),
+            ("ambiguity", "50.0% (0)"),
+            ("incompleteness", "100.0% (0)"),
+            ("inconsistency", "0.0% (1)"),
+        ] {
+            let row = report
+                .lines()
+                .find(|line| line.starts_with(&format!("| {label} |")))
+                .unwrap_or_else(|| panic!("no {label} row in\n{report}"));
+            assert!(row.ends_with(&format!("| {baseline} |")), "{row}");
+        }
     }
 }
