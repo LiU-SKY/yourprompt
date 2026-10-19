@@ -74,6 +74,13 @@ fn debug(message: &str) {
 }
 
 pub fn run() -> ExitCode {
+    // The release profile aborts on panic, so no panic can be caught, but the
+    // panic hook still runs before the abort. Exiting from it keeps the second
+    // rule. One Korean file name in the repository used to be enough to panic
+    // the index lookup, and the hook then aborted with the message on stderr:
+    // exit code 0xC0000409 on Windows.
+    std::panic::set_hook(Box::new(|_| std::process::exit(0)));
+
     // Note what is *absent* from this function: any use of `println!`,
     // `print!`, or `std::io::stdout()`. That is the point.
     let mut raw = String::new();
@@ -82,7 +89,7 @@ pub fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let input: HookInput = match serde_json::from_str(&raw) {
+    let input: HookInput = match parse(&raw) {
         Ok(input) => input,
         Err(e) => {
             debug(&format!("could not parse hook payload: {e}"));
@@ -138,4 +145,120 @@ pub fn run() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Parse the payload, with any lone surrogate in it read as U+FFFD.
+///
+/// Node's `JSON.stringify` writes half of a surrogate pair, such as an emoji
+/// cut in two, as an escape like `\ud800`, and serde_json refuses that as a
+/// string. The hook used to stop there without recording anything, and the
+/// status line went on showing the previous prompt's grade as this one's.
+fn parse(raw: &str) -> serde_json::Result<HookInput> {
+    serde_json::from_str(raw).or_else(|e| match replace_lone_surrogates(raw) {
+        Some(repaired) => serde_json::from_str(&repaired),
+        None => Err(e),
+    })
+}
+
+/// `json` with the escape of every unpaired UTF-16 surrogate replaced by the
+/// escape of U+FFFD, or `None` when it has none.
+fn replace_lone_surrogates(json: &str) -> Option<String> {
+    const LEADING: std::ops::RangeInclusive<u16> = 0xD800..=0xDBFF;
+    const TRAILING: std::ops::RangeInclusive<u16> = 0xDC00..=0xDFFF;
+
+    let bytes = json.as_bytes();
+    let mut out = String::with_capacity(json.len());
+    // How much of `json` has been copied to `out`.
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        let Some(unit) = unicode_escape(bytes, i) else {
+            // Skip the escaped character too, so that the second backslash
+            // of `\\ud800` is never read as the start of an escape.
+            i += 2;
+            continue;
+        };
+        let paired = LEADING.contains(&unit)
+            && unicode_escape(bytes, i + 6).is_some_and(|next| TRAILING.contains(&next));
+        if paired {
+            i += 12;
+        } else if LEADING.contains(&unit) || TRAILING.contains(&unit) {
+            out.push_str(&json[copied..i]);
+            out.push_str("\\uFFFD");
+            i += 6;
+            copied = i;
+        } else {
+            i += 6;
+        }
+    }
+    if copied == 0 {
+        return None;
+    }
+    out.push_str(&json[copied..]);
+    Some(out)
+}
+
+/// The code unit of the `\uXXXX` escape at `at` in a JSON text, if one is
+/// there.
+fn unicode_escape(bytes: &[u8], at: usize) -> Option<u16> {
+    match bytes.get(at..at + 6)? {
+        [b'\\', b'u', hex @ ..] if hex.iter().all(u8::is_ascii_hexdigit) => {
+            u16::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the JSON string literal `json` reads as once repaired.
+    fn read(json: &str) -> String {
+        let repaired = replace_lone_surrogates(json).unwrap_or_else(|| json.to_string());
+        serde_json::from_str(&repaired).unwrap()
+    }
+
+    #[test]
+    fn a_lone_surrogate_is_read_as_a_replacement_character() {
+        let input = parse("{\"prompt\": \"fix \\ud800 it\", \"session_id\": \"s1\"}").unwrap();
+        assert_eq!(input.prompt, "fix \u{FFFD} it");
+        assert_eq!(input.session_id, "s1");
+        assert_eq!(read("\"fix it \\uDC00\""), "fix it \u{FFFD}");
+        assert_eq!(read("\"\\ud800\""), "\u{FFFD}");
+    }
+
+    #[test]
+    fn a_surrogate_pair_is_left_alone() {
+        assert_eq!(replace_lone_surrogates("\"\\ud83d\\ude00\""), None);
+        assert_eq!(read("\"\\ud83d\\ude00\""), "\u{1F600}");
+        assert_eq!(read("\"\\ud83d\\ude00\\ude00\""), "\u{1F600}\u{FFFD}");
+        assert_eq!(read("\"\\udbff\\udbff\\udfff\""), "\u{FFFD}\u{10FFFF}");
+    }
+
+    #[test]
+    fn a_leading_surrogate_needs_a_trailing_one_right_after_it() {
+        assert_eq!(read("\"\\ud800\\u0041\""), "\u{FFFD}A");
+        assert_eq!(read("\"\\ud800\\n\""), "\u{FFFD}\n");
+        assert_eq!(read("\"\\ud800 \\udc00\""), "\u{FFFD} \u{FFFD}");
+    }
+
+    #[test]
+    fn an_escaped_backslash_does_not_start_an_escape() {
+        // A backslash and the letters "ud800", not an escape.
+        assert_eq!(replace_lone_surrogates("\"\\\\ud800\""), None);
+        assert_eq!(read("\"\\\\ud800\""), "\\ud800");
+        assert_eq!(read("\"\\\\\\ud800\""), "\\\u{FFFD}");
+    }
+
+    #[test]
+    fn a_payload_broken_in_another_way_is_still_refused() {
+        assert!(parse("{\"prompt\": \"fix it\"").is_err());
+        assert!(parse("{\"prompt\": \"fix \\ud800 it\"").is_err());
+        assert!(parse("{\"prompt\": \"\\ud800 \\x\"}").is_err());
+    }
 }

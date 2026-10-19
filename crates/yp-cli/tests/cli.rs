@@ -295,6 +295,24 @@ fn the_hook_never_blocks_the_prompt_whatever_it_is_fed() {
     }
 }
 
+#[test]
+fn a_prompt_with_half_a_surrogate_pair_is_still_recorded() {
+    // Node writes a lone surrogate, such as half of an emoji cut by a paste,
+    // as an escape that serde_json refuses. The hook used to drop the whole
+    // prompt, and the status line kept the previous grade.
+    let scratch = Scratch::new("lone-surrogate");
+    let payload =
+        "{\"session_id\": \"lone\", \"prompt\": \"fix the parser in src/cli.rs \\ud83d\"}";
+    let out = run_isolated(scratch.path(), &["hook"], payload);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout.len(), 0);
+    let sidecar = sidecar_of(scratch.path(), "lone");
+    assert_eq!(
+        sidecar["latest_prompt"],
+        "fix the parser in src/cli.rs \u{FFFD}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Hook to status line round trip
 // ---------------------------------------------------------------------------

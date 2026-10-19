@@ -28,6 +28,7 @@
 //! a fix to make; such a question leaves it nothing to look at, so it stands
 //! where a remark stands.
 
+use yp_lang::question::Question;
 use yp_lang::{CueId, Hit, SmellHit, SmellId, Token, TokenKind};
 
 use crate::prompt::is_pasted_block;
@@ -45,13 +46,21 @@ pub fn asked(
     smell_hits: Vec<SmellHit>,
     material: bool,
 ) -> (Vec<Hit<CueId>>, Vec<SmellHit>) {
+    // In text order, one per sentence and inside it, so the question words
+    // never overlap. Every lookup below is a binary search: scanning this
+    // list for every smell and every token, and the smells for every
+    // question, was quadratic, and a prompt that is nothing but "why? "
+    // repeated is all questions.
     let found = yp_lang::question::find(text, tokens);
     let smell_hits: Vec<SmellHit> = smell_hits
         .into_iter()
         .filter(|s| {
-            !found.iter().any(|q| {
-                q.interrogative && q.hit.span.start <= s.span.start && s.span.end <= q.hit.span.end
-            })
+            // Only the last question word starting at or before the smell
+            // can contain it.
+            let before = found.partition_point(|q| q.hit.span.start <= s.span.start);
+            !found[..before]
+                .last()
+                .is_some_and(|q| q.interrogative && s.span.end <= q.hit.span.end)
         })
         .collect();
 
@@ -60,28 +69,41 @@ pub fn asked(
             t.kind != TokenKind::Punct
                 && !yp_lang::is_filler(t)
                 && !is_pasted(text, t)
-                && !found
-                    .iter()
-                    .any(|q| t.span.start <= q.hit.span.start && q.hit.span.end <= t.span.end)
+                && !asks(&found, t)
         });
     if !says_something {
         return (Vec::new(), smell_hits);
     }
 
     let named = names_something(text, tokens);
+    // Where the deictics still charged start, sorted so that a question
+    // finds the first one at or after its sentence by binary search.
+    let mut deictics: Vec<usize> = smell_hits
+        .iter()
+        .filter(|s| s.id == SmellId::VaguePronoun && yp_lang::is_deictic(&s.term))
+        .map(|s| s.span.start)
+        .collect();
+    deictics.sort_unstable();
     let questions = found
         .into_iter()
         .filter(|q| {
-            named
-                || !smell_hits.iter().any(|s| {
-                    s.id == SmellId::VaguePronoun
-                        && yp_lang::is_deictic(&s.term)
-                        && q.sentence.contains(s.span.start)
-                })
+            named || {
+                let first = deictics.partition_point(|&d| d < q.sentence.start);
+                !deictics.get(first).is_some_and(|&d| q.sentence.contains(d))
+            }
         })
         .map(|q| q.hit)
         .collect();
     (questions, smell_hits)
+}
+
+/// Whether `token` holds the word that asks one of the `found` questions.
+fn asks(found: &[Question], token: &Token) -> bool {
+    let first = found.partition_point(|q| q.hit.span.start < token.span.start);
+    found[first..]
+        .iter()
+        .take_while(|q| q.hit.span.start < token.span.end)
+        .any(|q| q.hit.span.end <= token.span.end)
 }
 
 /// A pasted block, or the marker left where one was cut out.
@@ -109,6 +131,7 @@ fn names_something(text: &str, tokens: &[Token]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn questions(text: &str) -> Vec<String> {
         let tokens = yp_lang::tokenize(text);
@@ -183,5 +206,47 @@ mod tests {
         assert!(before.iter().any(|s| s.term == "어떤"), "lexicon changed");
         assert!(!smells_after("어떤 테스트가 실패해?").contains(&"어떤".to_string()));
         assert!(smells_after("Could it be a race in verify_token?").contains(&"Could".to_string()));
+    }
+
+    #[test]
+    fn many_questions_cost_about_what_as_many_plain_ones_do() {
+        // Every token, smell and question used to be checked against every
+        // question in the prompt. Each pair below finds the same questions,
+        // but in the first text of a pair those checks are the work: it says
+        // nothing besides its questions, or puts a deictic in every one. At
+        // 80,000 and 20,000 questions, the checks took 7.9 s against 68 ms
+        // and 21.6 s against 26 ms in a debug build. Timed against each
+        // other, the two texts measure how the work grows, not how fast the
+        // machine is.
+        let time = |text: &str| {
+            let tokens = yp_lang::tokenize(text);
+            let smells = yp_lang::resources().unwrap().smells.find(text);
+            (0..3)
+                .map(|_| {
+                    let smells = smells.clone();
+                    let start = Instant::now();
+                    std::hint::black_box(asked(text, &tokens, smells, false));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        for (heavy, light) in [
+            (
+                "why? ".repeat(80_000),
+                format!("the build fails. {}", "why? ".repeat(80_000)),
+            ),
+            (
+                "why is it broken? ".repeat(20_000),
+                "why is the build broken? ".repeat(20_000),
+            ),
+        ] {
+            let (heavy_time, light_time) = (time(&heavy), time(&light));
+            assert!(
+                heavy_time < light_time * 20 + Duration::from_millis(100),
+                "{:?}...: {heavy_time:?} against {light_time:?}",
+                &heavy[..18]
+            );
+        }
     }
 }

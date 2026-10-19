@@ -81,6 +81,8 @@ const EN_MODALS: &[&str] = &["must", "need", "shall", "should"];
 /// dropped, or relabelled as the scope constraint it states when no scope cue
 /// counts that constraint already. Every other hit passes through unchanged
 /// and in order.
+///
+/// `hits` must be sorted and non-overlapping, as the cue matcher returns them.
 pub(crate) fn settle(text: &str, hits: &[Hit<CueId>]) -> Vec<Hit<CueId>> {
     let mut out = Vec::with_capacity(hits.len());
     // The verb before this one, for "don't change the schema or drop a
@@ -114,8 +116,17 @@ pub(crate) fn settle(text: &str, hits: &[Hit<CueId>]) -> Vec<Hit<CueId>> {
 }
 
 /// Whether a scope cue the matcher already found covers this prohibition.
+///
+/// The matcher returns hits sorted and non-overlapping, so their ends are
+/// sorted as well: the hits that overlap the prohibition are the last few
+/// that start before it ends. Scanning every hit for every forbidden verb was
+/// quadratic: "don't change " 80,000 times took 6.3 s on the demo page.
 fn counted(hits: &[Hit<CueId>], prohibition: Span) -> bool {
-    hits.iter()
+    let before_end = hits.partition_point(|h| h.span.start < prohibition.end);
+    hits[..before_end]
+        .iter()
+        .rev()
+        .take_while(|h| h.span.end > prohibition.start)
         .any(|h| h.id == CueId::ScopeConstraint && h.span.overlaps(&prohibition))
 }
 
@@ -328,6 +339,7 @@ fn continues(text: &str, previous: Span, verb: Span) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn settled(text: &str) -> Vec<(CueId, String)> {
         let hits = yp_lang::resources().unwrap().cue_matcher.find(text);
@@ -514,5 +526,31 @@ mod tests {
         let text = "only in src/cli.rs, refactor parse_args so it returns Config; tests must pass";
         let hits = yp_lang::resources().unwrap().cue_matcher.find(text);
         assert_eq!(settle(text, &hits), hits);
+    }
+
+    #[test]
+    fn many_prohibitions_cost_about_what_as_many_requests_do() {
+        // Every forbidden verb used to look through all the hits for a scope
+        // cue that counted its prohibition. At 40,000 of them that took 6.3 s
+        // in a debug build, where the same verb asked for 40,000 times took
+        // 64 ms. Timed against each other, the two texts measure how the work
+        // grows, not how fast the machine is.
+        let time = |text: &str| {
+            let hits = yp_lang::resources().unwrap().cue_matcher.find(text);
+            (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    std::hint::black_box(settle(text, &hits));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let wanted = time(&"please change ".repeat(40_000));
+        let forbidden = time(&"don't change ".repeat(40_000));
+        assert!(
+            forbidden < wanted * 20 + Duration::from_millis(100),
+            "forbidden {forbidden:?}, wanted {wanted:?}"
+        );
     }
 }
