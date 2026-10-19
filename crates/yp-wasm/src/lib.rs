@@ -118,6 +118,11 @@ impl Corpus for WasmCorpus {
     fn flat(&self) -> bool {
         self.0.is_flat()
     }
+
+    // A folder added beside them keeps its paths.
+    fn bare_file(&self, name: &str) -> bool {
+        self.0.is_bare(name)
+    }
 }
 
 /// Score a prompt, optionally against an index.
@@ -381,6 +386,16 @@ mod tests {
         assert_eq!(mark_on(&score, PROMPT, "src/auth/login.rs"), "name:unique");
         assert_eq!(mark_on(&score, PROMPT, "tests/auth.rs"), "name:unique");
         assert_eq!(mark_on(&score, PROMPT, "login"), "name:unique");
+
+        // A picked file beside a dropped folder: only the file that came
+        // without its path is found by its name.
+        let index = index_of(&[("login.rs", LOGIN), ("tests/auth.rs", TESTS)]);
+        let score: serde_json::Value = serde_json::from_str(&page(PROMPT, &index)).unwrap();
+        assert_eq!(mark_on(&score, PROMPT, "src/auth/login.rs"), "name:unique");
+        assert_eq!(mark_on(&score, PROMPT, "tests/auth.rs"), "name:unique");
+        let text = PROMPT.replace("tests/auth.rs", "src/auth.rs");
+        let score: serde_json::Value = serde_json::from_str(&page(&text, &index)).unwrap();
+        assert_eq!(mark_on(&score, &text, "src/auth.rs"), "name:missing");
 
         // Given with their paths, a path the repository lacks is missing.
         let index = index_of(&[("src/auth/login.rs", LOGIN), ("tests/auth.rs", TESTS)]);

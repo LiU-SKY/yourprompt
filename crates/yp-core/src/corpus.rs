@@ -56,6 +56,21 @@ pub trait Corpus {
     fn flat(&self) -> bool {
         false
     }
+
+    /// True when a file called `name` was handed over without a directory.
+    ///
+    /// The same question as [`flat`](Self::flat), asked of one file. The page
+    /// mixes the two kinds: a file picked on its own arrives as `login.rs`, a
+    /// folder added beside it keeps `tests/auth.rs`. Decided for the whole
+    /// index, one directory anywhere turned the fallback off, and the
+    /// showcase prompt with `login.rs` and `tests/auth.rs` loaded scored
+    /// 837.4, with `src/auth/login.rs` "not in this repository", against 865.6
+    /// with both under bare names. Only a path whose file name arrived bare
+    /// is looked up by that name: `src/auth.rs` is still missing where the
+    /// only `auth.rs` is `tests/auth.rs`.
+    fn bare_file(&self, _name: &str) -> bool {
+        self.flat()
+    }
 }
 
 /// A corpus built from a literal list, for tests and examples.
@@ -65,6 +80,7 @@ pub struct MapCorpus {
     documents: usize,
     total_terms: u64,
     flat: bool,
+    bare: std::collections::HashSet<String>,
 }
 
 impl MapCorpus {
@@ -89,12 +105,20 @@ impl MapCorpus {
             documents,
             total_terms,
             flat: false,
+            bare: std::collections::HashSet::new(),
         }
     }
 
     /// The same corpus, as if its files had been indexed under bare names.
     pub fn with_bare_names(mut self) -> Self {
         self.flat = true;
+        self
+    }
+
+    /// The same corpus, as if the file called `name` alone had been handed
+    /// over without its directory.
+    pub fn with_bare_file(mut self, name: &str) -> Self {
+        self.bare.insert(name.to_lowercase());
         self
     }
 }
@@ -114,6 +138,10 @@ impl Corpus for MapCorpus {
 
     fn flat(&self) -> bool {
         self.flat
+    }
+
+    fn bare_file(&self, name: &str) -> bool {
+        self.flat || self.bare.contains(&name.to_lowercase())
     }
 }
 
@@ -154,6 +182,15 @@ mod tests {
     fn a_corpus_has_paths_unless_it_says_otherwise() {
         let corpus = MapCorpus::new(1, &[("login.rs", 1, 1, 1)]);
         assert!(!corpus.flat());
-        assert!(corpus.with_bare_names().flat());
+        assert!(!corpus.bare_file("login.rs"));
+        let flat = corpus.clone().with_bare_names();
+        assert!(flat.flat());
+        assert!(flat.bare_file("login.rs"));
+
+        // One file handed over bare says nothing about the others.
+        let mixed = corpus.with_bare_file("Login.rs");
+        assert!(!mixed.flat());
+        assert!(mixed.bare_file("login.rs"));
+        assert!(!mixed.bare_file("auth.rs"));
     }
 }
