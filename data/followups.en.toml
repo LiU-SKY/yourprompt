@@ -17,9 +17,15 @@
 #     "do that again" is its English twin.
 #   - "retry" is also an action verb in cues.en.toml. Alone it can only mean
 #     the last thing again; with an object ("retry the upload") it is a task.
+#     "correct" is the same: alone it agrees, and "correct the typo" is a
+#     task. "that's correct" is "that's" and "correct", so no term carries
+#     the verb inside a longer phrase.
 #
-# Terms are matched word by word, case-insensitively. "#" stands for a choice
-# number of one or two digits: "2", "option 2".
+# Terms are matched word by word, case-insensitively, and a prompt may chain
+# them: "continue" and "from where you left off" together are Claude Code's
+# own resume prompt, "Continue from where you left off." "#" stands for a
+# choice: a number of one or two digits, or a letter from a to d: "2",
+# "option 2", "b".
 #
 # The ids only group the terms for the reader; matching treats them alike.
 # followups.ko.toml keeps the same ids, so a group added here gets its Korean
@@ -35,8 +41,17 @@ terms = [
   "agreed", "absolutely", "of course", "sounds good", "looks good", "lgtm",
   "good", "great", "perfect", "nice", "cool", "awesome", "fine",
   "that works", "works for me", "that's fine", "that's right",
-  "makes sense", "got it", "understood", "noted",
+  "makes sense", "got it", "understood", "noted", "correct", "sgtm", "+1",
+  "that's", "that is",
 ]
+
+# What the user reports back. Asked, a report asks for one -- "done?" wants
+# to know whether the work is finished -- so these count only in a prompt
+# without a question mark.
+[[reply]]
+id = "report"
+statement = true
+terms = ["done"]
 
 [[reply]]
 id = "decline"
@@ -47,6 +62,7 @@ id = "proceed"
 terms = [
   "continue", "proceed", "go", "go ahead", "go on", "keep going",
   "carry on", "resume", "next", "do it", "go for it", "let's go", "lets go",
+  "where you left off", "from where you left off", "with the plan",
 ]
 
 [[reply]]

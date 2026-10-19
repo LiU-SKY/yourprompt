@@ -17,16 +17,34 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::legible::is_filler;
+use crate::legible::{is_filler, is_laughter};
 use crate::token::{tokenize, Token, TokenKind};
 
-/// Stands for a number given as a choice, so "2", "option 2" and "2번" are
-/// each listed once rather than once per number.
+/// Stands for a choice, so "2", "option 2" and "2번" are each listed once
+/// rather than once per number. A letter from a lettered list is a choice
+/// too: "b", "(b)", "option b".
 pub const CHOICE: &str = "#";
 
 /// Longest number read as a choice. "2" picks an option; "2024" says
 /// something.
 const CHOICE_DIGITS: usize = 2;
+
+/// Letters read as a choice, the way "b" and "option b" answer a list of
+/// lettered options. Every letter here is a word that can make up a skipped
+/// prompt on its own, so the list stops at d.
+const CHOICE_LETTERS: &[&str] = &["a", "b", "c", "d"];
+
+/// Marks that put a letter in code or in quotes, where it picks nothing:
+/// "a = [1, 3, 7]", ">>> 2@B", "'a'". Read one at a time, 17 of the 9,384
+/// lines of SWE-bench Lite and HumanEvalComm text became replies through a
+/// bare letter; with these marks, 2 still do, rows of a printed matrix.
+const CODE_MARKS: &[char] = &[
+    '=', '@', '*', '<', '>', '[', ']', '{', '}', '|', '\'', '"', '`', '\\', '^', '$', '%', '&',
+];
+
+/// The one reply made of punctuation and a digit: agreement, as on a review
+/// thread.
+const PLUS_ONE: &str = "+1";
 
 /// A follow-up is short. Past this many units a prompt is something else,
 /// and is not broken up any further, so a pasted page of Korean is not split
@@ -36,11 +54,24 @@ const MAX_UNITS: usize = 40;
 
 /// One group of replies as it appears in a follow-up TOML file.
 ///
-/// The id documents what the group is for. Matching treats every term alike.
+/// The id documents what the group is for. Matching treats every term alike,
+/// except that a statement is no reply when it is asked.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReplyDef {
     pub id: String,
     pub terms: Vec<String>,
+    /// The terms state something, so asked as a question they ask for
+    /// something: "done" answers the previous turn, "done?" wants to know
+    /// whether the work is finished, and is graded like any question.
+    #[serde(default)]
+    pub statement: bool,
+}
+
+/// A compiled term: its units, and whether it is a statement.
+#[derive(Debug, Clone)]
+struct Phrase {
+    units: Vec<String>,
+    statement: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,22 +111,38 @@ fn is_choice(digits: &str) -> bool {
     (1..=CHOICE_DIGITS).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// Break tokens into units, or `None` at the first token no reply contains.
+/// Break tokens into units, or `None` at the first token no reply contains,
+/// or when a letter that would be a choice stands among code marks.
 fn units(tokens: &[Token]) -> Option<Vec<Unit<'_>>> {
     let mut out = Vec::new();
+    let mut lettered = false;
+    let mut coded = false;
     for token in tokens {
         let filler = is_filler(token);
         match token.kind {
+            TokenKind::Word if CHOICE_LETTERS.contains(&token.text.as_str()) => {
+                lettered = true;
+                out.push(Unit {
+                    text: CHOICE,
+                    filler: false,
+                })
+            }
             TokenKind::Word => out.push(Unit {
                 text: &token.text,
                 filler,
             }),
+            // Laughter typed onto a reply, "넵ㅎㅎ", is skipped like
+            // laughter typed after it.
             TokenKind::Hangul => out.extend(token.text.char_indices().map(|(i, c)| Unit {
                 text: &token.text[i..i + c.len_utf8()],
-                filler,
+                filler: filler || is_laughter(c),
             })),
             TokenKind::Number if is_choice(&token.text) => out.push(Unit {
                 text: CHOICE,
+                filler: false,
+            }),
+            TokenKind::Punct if token.text == PLUS_ONE => out.push(Unit {
+                text: PLUS_ONE,
                 filler: false,
             }),
             TokenKind::Punct
@@ -113,7 +160,9 @@ fn units(tokens: &[Token]) -> Option<Vec<Unit<'_>>> {
             // tokenizer could not place -- kana, Cyrillic, an accented Latin
             // letter -- is a word in some language, and not a listed one;
             // digits are an issue number or a quantity, not a choice.
-            TokenKind::Punct if !token.text.chars().any(char::is_alphanumeric) => {}
+            TokenKind::Punct if !token.text.chars().any(char::is_alphanumeric) => {
+                coded |= token.text.contains(CODE_MARKS);
+            }
             // A name, a path, a pasted snippet, a number too long to be a
             // choice.
             _ => return None,
@@ -122,14 +171,14 @@ fn units(tokens: &[Token]) -> Option<Vec<Unit<'_>>> {
             return None;
         }
     }
-    Some(out)
+    (!(lettered && coded)).then_some(out)
 }
 
 /// Every bundled reply, compiled for matching.
 #[derive(Debug, Clone, Default)]
 pub struct FollowUps {
     /// Each term as a sequence of units, grouped by its first unit.
-    by_first: HashMap<String, Vec<Vec<String>>>,
+    by_first: HashMap<String, Vec<Phrase>>,
 }
 
 impl FollowUps {
@@ -138,7 +187,7 @@ impl FollowUps {
     /// Terms are tokenized exactly as prompts are, so a term and the prompt
     /// that types it can never disagree about where the words are.
     pub fn from_files(files: &[FollowUpFile]) -> Result<Self, BadReply> {
-        let mut by_first: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+        let mut by_first: HashMap<String, Vec<Phrase>> = HashMap::new();
         for file in files {
             for def in &file.replies {
                 for term in &def.terms {
@@ -153,7 +202,10 @@ impl FollowUps {
                         }
                         _ => return Err(BadReply(term.to_string())),
                     };
-                    by_first.entry(phrase[0].clone()).or_default().push(phrase);
+                    by_first.entry(phrase[0].clone()).or_default().push(Phrase {
+                        units: phrase,
+                        statement: def.statement,
+                    });
                 }
             }
         }
@@ -162,7 +214,10 @@ impl FollowUps {
 
     /// Every compiled term, as its units.
     pub fn phrases(&self) -> impl Iterator<Item = &[String]> {
-        self.by_first.values().flatten().map(Vec::as_slice)
+        self.by_first
+            .values()
+            .flatten()
+            .map(|phrase| phrase.units.as_slice())
     }
 
     /// True when every word of the text is one of these replies.
@@ -173,6 +228,9 @@ impl FollowUps {
         let Some(units) = units(tokens) else {
             return false;
         };
+        let asked = tokens
+            .iter()
+            .any(|t| t.kind == TokenKind::Punct && matches!(t.text.as_str(), "?" | "\u{FF1F}"));
         let n = units.len();
         // reach[i]: 0 when nothing ends at unit i, 1 when only skipped
         // fillers do, 2 when a run of replies does.
@@ -194,9 +252,13 @@ impl FollowUps {
                 furthest = furthest.max(i + 1);
             }
             for phrase in self.by_first.get(units[i].text).into_iter().flatten() {
-                let end = i + phrase.len();
+                if asked && phrase.statement {
+                    continue;
+                }
+                let end = i + phrase.units.len();
                 if end <= n
                     && phrase
+                        .units
                         .iter()
                         .zip(&units[i..end])
                         .all(|(p, u)| p.as_str() == u.text)
@@ -279,6 +341,7 @@ mod tests {
             replies: vec![ReplyDef {
                 id: "bad".into(),
                 terms: vec!["fix src/main.rs".into()],
+                statement: false,
             }],
         };
         assert!(FollowUps::from_files(&[file]).is_err());
@@ -382,6 +445,75 @@ mod tests {
         }
         for text in ["2024", "#123", "2.5", "123456 7890"] {
             assert!(!is_follow_up(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_choice_is_a_letter_from_a_to_d() {
+        for text in ["b", "B", "(b)", "b)", "option b", "go with c", "a and d"] {
+            assert!(is_follow_up(text), "{text:?}");
+        }
+        for text in ["e", "option e", "plan b", "b2"] {
+            assert!(!is_follow_up(text), "{text:?}");
+        }
+        // Beside an operator, a bracket or a quote, a letter is code or a
+        // quotation, not a pick.
+        for text in ["a = [1, 3, 7, 13, 21]", ">>> 2@B", "> A", "'a'", "['a']"] {
+            assert!(!is_follow_up(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn plus_one_agrees() {
+        assert!(is_follow_up("+1"));
+        assert!(is_follow_up("+1, go ahead"));
+        assert!(!is_follow_up("+2"));
+    }
+
+    #[test]
+    fn laughter_is_skipped_even_typed_onto_a_reply() {
+        for text in ["넵 ㅎㅎ", "응 ㅋㅋ", "넵ㅎㅎ", "좋아요ㅋㅋㅋ", "ok ㅋㅋ"] {
+            assert!(is_follow_up(text), "{text:?}");
+        }
+        // Laughter alone says nothing, and next to a request it hides none.
+        for text in ["ㅋㅋㅋ", "ㅎㅎ", "고쳐줘ㅋㅋ"] {
+            assert!(!is_follow_up(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_statement_asked_is_a_question() {
+        for text in ["done", "Done.", "ok done", "확인했어", "확인했어요"] {
+            assert!(is_follow_up(text), "{text:?}");
+        }
+        for text in ["done?", "ok, done?", "확인했어?", "확인했어요？"] {
+            assert!(!is_follow_up(text), "{text:?}");
+        }
+        // Other replies stay replies when asked, as they were.
+        assert!(is_follow_up("ok?"));
+    }
+
+    #[test]
+    fn a_stem_that_an_ending_turns_into_a_request_is_not_a_reply() {
+        // Stems and endings combine, so bare "확인" would make "확인해줘",
+        // a request to check something, a reply.
+        for text in [
+            "확인",
+            "확인해줘",
+            "확인해 줘",
+            "다시 확인해줘",
+            "체크해줘",
+            "봐줘",
+        ] {
+            assert!(!is_follow_up(text), "{text:?}");
+        }
+        for text in [
+            "계속해줘요",
+            "진행 부탁드립니다",
+            "다음으로 넘어가",
+            "부탁해요",
+        ] {
+            assert!(is_follow_up(text), "{text:?}");
         }
     }
 
