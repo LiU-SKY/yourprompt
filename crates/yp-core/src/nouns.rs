@@ -14,21 +14,28 @@
 //! ("failing", "flaky", "unit", "dry"), and one directly after another action
 //! word, whose object or compound it is: "run" in "the test run", "test" in
 //! "don't change test files". And so is one quoted on its own, which is
-//! mentioned rather than used: the "build" job, `Output: "test"`.
-//! HumanEvalComm's problem 143 took its whole objective from an expected
-//! output of "test". Such a noun earns no objective, does not count as a
-//! second one, and is not marked as the action.
+//! mentioned rather than used: the "build" job, `Output: "test"`. Three of
+//! HumanEvalComm's damaged versions of problem 143 expect the output "test".
+//! Once the "a test" in its example input was a noun, that quoted word was
+//! all the objective they had, and it put all three above the original. Such
+//! a noun earns no objective, does not count as a second one, and is not
+//! marked as the action.
+//!
+//! So a statement whose only action word is a noun asks for nothing. "the
+//! build is broken" took "build" as its objective and scored 356.4, above
+//! "fix the bug" at 305.4. It now scores 87.2, beside "it's broken again" at
+//! 52.2 and its Korean counterpart, 빌드가 깨졌어, at 41.0.
 //!
 //! The lists leave out words that also open an instruction, so that a
 //! mistake leaves a noun counted, as before, rather than drops a request.
-//! "first", "next" and "then" are out because of "first delete
-//! unique_together, then migrate", which is SWE-bench's own text; "either"
-//! because of "either fix the parser or revert it"; "her" because of "let
-//! her test it". "this" and "that" are in although they can end a clause as
-//! pronouns. In SWE-bench Lite's 300 issues they stand before an action word
-//! six times, and once, in "after that change the field", the pronoun is
-//! followed by a real verb. Of the 82 action words taken for nouns there,
-//! that is the only verb.
+//! "first", "next" and "then" order its steps, as in SWE-bench's own "first
+//! delete unique_together, then do a makemigrations and then migrate".
+//! "either" opens "either fix the parser or revert it", and "her" is out
+//! because of "let her test it". "this" and "that" are in although they can
+//! end a clause as pronouns. In SWE-bench Lite's 300 issues they stand before
+//! an action word six times, and once, in "after that change the field", the
+//! pronoun is followed by a real verb. Of the 82 action words taken for nouns
+//! there, that is the only verb.
 //!
 //! "no" is in too. A prohibition, "fix the bug, no refactor", has been
 //! settled into a scope constraint before this runs, so what follows "no"
@@ -43,7 +50,7 @@
 //! after them, and telling those apart needs a morphological analyser.
 //!
 //! Grounding still reads such a noun as an instruction word rather than as a
-//! name, as it does a forbidden verb, so repository scores do not move.
+//! name, as it does a forbidden verb, so the grounding axis does not move.
 
 use yp_lang::{CueId, Hit};
 

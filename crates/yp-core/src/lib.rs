@@ -874,9 +874,9 @@ mod tests {
 
     #[test]
     fn an_action_word_used_as_a_noun_is_not_a_second_objective() {
-        // Each of these asks for one thing, and each kept 29.6 of the 40
-        // singularity points. "add a run script" fell from 527.1 to 511.1
-        // when "run" became an action.
+        // Each of these asks for one thing, and each kept between 16.3 and
+        // 29.6 of the 40 singularity points. "add a run script" fell from
+        // 527.1 to 511.1 when "run" became an action.
         for text in [
             "add a test for verify_token",
             "fix the failing test in tests/auth.rs",
@@ -903,6 +903,18 @@ mod tests {
         assert!(
             component(&s.actionability, "singularity") < params::actionability::SINGULARITY_MAX
         );
+    }
+
+    #[test]
+    fn a_statement_whose_only_action_word_is_a_noun_asks_for_nothing() {
+        // "the build is broken" took "build" as its objective and scored
+        // 356.4, above "fix the bug" at 305.4. The Korean has no such word to
+        // misread, and scores 41.0.
+        for text in ["the build is broken", "the test is flaky", "빌드가 깨졌어"] {
+            let s = score(text).unwrap();
+            assert_eq!(component(&s.actionability, "objective"), 0.0, "{text}");
+            assert!(s.total < total("fix the bug"), "{text}: {}", s.total);
+        }
     }
 
     #[test]
