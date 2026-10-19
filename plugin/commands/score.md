@@ -1,6 +1,7 @@
 ---
 description: Explain the score of your last prompt, axis by axis
-allowed-tools: Bash(yp explain:*)
+allowed-tools: Bash(yp explain:*), PowerShell(yp explain:*)
+disable-model-invocation: true
 ---
 
 Here is the breakdown of the last prompt you scored:

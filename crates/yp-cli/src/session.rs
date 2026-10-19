@@ -18,10 +18,17 @@ use yp_core::{Kind, Score};
 
 /// Bump when the on-disk shape changes in a way older readers cannot handle.
 ///
-/// Still 1 after `kind` and `language` were added to [`Entry`]: both default
-/// when absent, so sidecars written before them load as the tasks they were,
-/// and older readers ignore fields they do not know.
+/// Still 1 after `kind` and `language` were added to [`Entry`]: a sidecar
+/// written before them loads with no kind, and older readers ignore fields
+/// they do not know.
 pub const SIDECAR_VERSION: u32 = 1;
+
+/// A move smaller than this is shown as no move at all.
+///
+/// Scores are printed to one decimal, so a smaller difference is one the user
+/// cannot see. The status line draws it as "·" and `yp explain` calls it the
+/// same score; before they shared this, explain said "down 0.0" beside a "·".
+pub const UNCHANGED: f64 = 0.05;
 
 /// How many past scores to keep, for trend display.
 const HISTORY_LIMIT: usize = 20;
@@ -55,8 +62,13 @@ pub struct Entry {
     /// What the prompt was. Commands and follow-ups are never recorded, so
     /// this is a task, or an unsupported prompt the status line has to say
     /// it did not grade.
-    #[serde(default)]
-    pub kind: Kind,
+    ///
+    /// `None` on an entry written before kinds existed. Those cannot be
+    /// assumed to be tasks: v0.1.0 recorded "continue" and "/score" as well,
+    /// and after an upgrade the status line went on showing a "/score" graded
+    /// 31.2 F, and the next task's trend was measured from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
     /// The language an unsupported prompt looked like, when that could be
     /// told.
     #[serde(default)]
@@ -70,15 +82,16 @@ impl Entry {
             grade: score.grade.to_string(),
             renormalized: score.renormalized,
             prompt_chars: prompt.chars().count(),
-            kind: score.kind,
+            kind: Some(score.kind),
             language: score.language.map(str::to_string),
         }
     }
 
     /// True when `total` and `grade` describe the prompt. They are stored
-    /// for every entry, but only a task's are meant to be shown.
+    /// for every entry, but only a task's are meant to be shown, and an entry
+    /// of unknown kind is not known to be one.
     pub fn is_graded(&self) -> bool {
-        self.kind.is_graded()
+        self.kind.is_some_and(Kind::is_graded)
     }
 }
 
@@ -109,9 +122,25 @@ impl Sidecar {
     /// The previous graded score in this session, if there is one.
     ///
     /// An ungraded entry has no number worth comparing against, so the trend
-    /// arrow and `yp explain` look past it to the last task.
+    /// arrow and `yp explain` look past it to the last task. So do entries
+    /// from before kinds existed, which may be follow-ups.
     pub fn previous(&self) -> Option<&Entry> {
         self.history.iter().find(|entry| entry.is_graded())
+    }
+
+    /// What the latest prompt was, and its language when it is unsupported.
+    ///
+    /// A sidecar written before kinds existed stores neither, so its prompt
+    /// is classified again, which needs no index: it is the check the hook
+    /// makes before it loads one.
+    pub fn latest_kind(&self) -> (Kind, Option<String>) {
+        match self.latest.kind {
+            Some(kind) => (kind, self.latest.language.clone()),
+            None => {
+                let (kind, language) = yp_core::kind_of(&self.latest_prompt);
+                (kind, language.map(str::to_string))
+            }
+        }
     }
 }
 
@@ -189,7 +218,18 @@ pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Re
 
     let mut history = Vec::new();
     if let Some(previous) = existing {
-        history.push(previous.latest);
+        let (kind, language) = previous.latest_kind();
+        let mut latest = previous.latest;
+        if latest.kind.is_none() {
+            latest.kind = Some(kind);
+            latest.language = language;
+        }
+        // A command or follow-up can only be here from a sidecar written
+        // before kinds existed. This version would never have recorded it,
+        // so it does not enter the history either.
+        if !matches!(kind, Kind::Command | Kind::FollowUp) {
+            history.push(latest);
+        }
         history.extend(previous.history);
         history.truncate(HISTORY_LIMIT);
     }
@@ -232,9 +272,11 @@ fn truncate_on_char_boundary(text: &str, limit: usize) -> (&str, bool) {
 
 /// The sidecar most recently written from `cwd`, or the most recent overall.
 ///
-/// Slash commands do not receive a session id, so `yp explain` has to guess.
-/// Preferring a matching working directory makes the guess right whenever the
-/// user has several sessions open in different projects.
+/// A guess, for when `yp explain` is not told which session it is in: run
+/// from a terminal, or under a Claude Code older than 2.1.132, which does not
+/// set `CLAUDE_CODE_SESSION_ID`. Preferring a matching working directory
+/// makes the guess right whenever the user has several sessions open in
+/// different projects, but not two in one.
 pub fn most_recent(cwd: &str) -> Option<Sidecar> {
     let dir = sessions_dir()?;
     let mut best: Option<Sidecar> = None;
@@ -348,28 +390,78 @@ mod tests {
             grade: "B".into(),
             renormalized: true,
             prompt_chars: 10,
-            kind: Kind::Task,
+            kind: Some(Kind::Task),
             language: None,
         }
     }
 
-    #[test]
-    fn a_sidecar_written_before_kinds_existed_still_loads() {
-        // v0.1.0 wrote entries with no kind; every one of them was graded,
-        // so each must come back as a task rather than fail to parse.
-        let _s = Scratch::new("pre-kind");
+    /// A v0.1.0 sidecar: no kinds anywhere, and `latest_prompt` as given.
+    fn write_v010_sidecar(id: &str, latest_prompt: &str) {
         let dir = sessions_dir().unwrap();
         fs::create_dir_all(&dir).unwrap();
-        let old = r#"{"version":1,"session_id":"old","updated_unix":1,"cwd":"",
-            "latest":{"total":512.3,"grade":"C","renormalized":true,"prompt_chars":9},
-            "latest_prompt":"fix it","prompt_truncated":false,
-            "history":[{"total":208.0,"grade":"F","renormalized":true,"prompt_chars":6}]}"#;
-        fs::write(dir.join("old.json"), old).unwrap();
+        let old = serde_json::json!({
+            "version": 1, "session_id": id, "updated_unix": 1, "cwd": "",
+            "latest": {"total": 31.2, "grade": "F", "renormalized": true, "prompt_chars": 6},
+            "latest_prompt": latest_prompt, "prompt_truncated": false,
+            "history": [
+                {"total": 25.0, "grade": "F", "renormalized": true, "prompt_chars": 8},
+                {"total": 732.9, "grade": "A-", "renormalized": true, "prompt_chars": 140}
+            ]
+        });
+        fs::write(dir.join(format!("{id}.json")), old.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_sidecar_written_before_kinds_existed_still_loads() {
+        let _s = Scratch::new("pre-kind");
+        write_v010_sidecar("old", "fix it");
 
         let loaded = load("old").expect("an old sidecar must still load");
-        assert_eq!(loaded.latest.kind, Kind::Task);
+        assert_eq!(loaded.latest.kind, None);
         assert_eq!(loaded.latest.language, None);
-        assert_eq!(loaded.previous().unwrap().total, 208.0);
+        // Its prompt is classified again rather than assumed to be a task.
+        assert_eq!(loaded.latest_kind(), (Kind::Task, None));
+        assert_eq!(load_with_latest("/score").latest_kind().0, Kind::Command);
+        assert_eq!(load_with_latest("continue").latest_kind().0, Kind::FollowUp);
+        // v0.1.0 recorded "continue" (25.0) between the task and "/score",
+        // and nothing in its history says which entry was which.
+        assert!(loaded.previous().is_none());
+    }
+
+    fn load_with_latest(prompt: &str) -> Sidecar {
+        write_v010_sidecar("probe", prompt);
+        load("probe").unwrap()
+    }
+
+    #[test]
+    fn upgrading_over_a_v010_sidecar_keeps_its_slash_command_out_of_the_history() {
+        // The reported sequence: a 732.9 task, "continue" (25.0) and "/score"
+        // (31.2), all recorded by v0.1.0, then a task scored by this version.
+        let _s = Scratch::new("pre-kind-upgrade");
+        write_v010_sidecar("old", "/score");
+        record("old", "", "fix the bug in statusline.rs", entry(661.7)).unwrap();
+
+        let loaded = load("old").unwrap();
+        assert_eq!(loaded.latest.kind, Some(Kind::Task));
+        assert_eq!(loaded.history.len(), 2, "{:?}", loaded.history);
+        // The legacy entries stay of unknown kind on disk, rather than being
+        // written back as tasks.
+        assert!(loaded.history.iter().all(|e| e.kind.is_none()));
+        let text = fs::read_to_string(sidecar_path("old").unwrap()).unwrap();
+        assert_eq!(text.matches("\"kind\"").count(), 1, "{text}");
+        // So the trend is not measured from the 31.2 "/score".
+        assert!(loaded.previous().is_none());
+    }
+
+    #[test]
+    fn upgrading_over_a_v010_task_keeps_it_with_its_kind() {
+        let _s = Scratch::new("pre-kind-task");
+        write_v010_sidecar("old", "fix verify_token in src/auth.rs");
+        record("old", "", "fix the parser in src/cli.rs", entry(500.0)).unwrap();
+
+        let loaded = load("old").unwrap();
+        assert_eq!(loaded.history[0].kind, Some(Kind::Task));
+        assert_eq!(loaded.previous().unwrap().total, 31.2);
     }
 
     #[test]
@@ -377,13 +469,13 @@ mod tests {
         let _s = Scratch::new("skip-ungraded");
         record("s", "", "fix the parser", entry(300.0)).unwrap();
         let mut unsupported = entry(149.1);
-        unsupported.kind = Kind::Unsupported;
+        unsupported.kind = Some(Kind::Unsupported);
         unsupported.language = Some("Spanish".into());
         record("s", "", "arregla el bug", unsupported).unwrap();
         record("s", "", "fix the parser in src/cli.rs", entry(500.0)).unwrap();
 
         let loaded = load("s").unwrap();
-        assert_eq!(loaded.history[0].kind, Kind::Unsupported);
+        assert_eq!(loaded.history[0].kind, Some(Kind::Unsupported));
         assert_eq!(loaded.previous().unwrap().total, 300.0);
     }
 

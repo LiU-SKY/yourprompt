@@ -4,10 +4,14 @@
 //! justified: which action verb was found, which vague pronoun cost what,
 //! why the length curve landed where it did.
 //!
-//! Backing the `/score` slash command. Slash commands are not handed a
-//! session id, so with no `--session` this falls back to the most recently
-//! written sidecar, preferring one whose working directory matches -- which
-//! picks the right session whenever several are open in different projects.
+//! Backing the `/score` slash command. A slash command's `!` lines run
+//! through Claude Code's Bash tool, or its PowerShell tool on Windows without
+//! Git Bash, and both carry the session id in `CLAUDE_CODE_SESSION_ID`: the
+//! Bash tool since Claude Code 2.1.132. So with no `--session`, that is the
+//! session explained. Without it this falls back to the most recently
+//! written sidecar, preferring one whose working directory matches. That
+//! guess picked the wrong session when two shared a repository: `/score`
+//! typed in one explained the other's "fix the bug".
 //!
 //! Re-scoring the stored prompt rather than storing the whole breakdown keeps
 //! the sidecar small, and is free: scoring is deterministic, so the number
@@ -21,26 +25,39 @@
 use std::process::ExitCode;
 
 use crate::report::{self, Style};
-use crate::session;
+use crate::session::{self, UNCHANGED};
+
+/// The session Claude Code says this command is running in, if it says.
+fn current_session() -> Option<String> {
+    std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .filter(|id| !id.trim().is_empty())
+}
 
 pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let sidecar = match session_id.as_deref() {
+    let known = session_id.or_else(current_session);
+    let sidecar = match known.as_deref() {
         Some(id) => session::load(id),
         None => session::most_recent(&cwd),
     };
 
     let Some(sidecar) = sidecar else {
-        println!("No scored prompt found yet.");
+        if known.is_some() {
+            println!("No scored prompt found yet in this session.");
+        } else {
+            println!("No scored prompt found yet.");
+        }
         println!("The score appears once you send a prompt with the hook installed.");
         println!("Run `yp install` if you have not already.");
         return ExitCode::SUCCESS;
     };
 
-    if let Some(why) = report::not_graded(sidecar.latest.kind, sidecar.latest.language.as_deref()) {
+    let (kind, language) = sidecar.latest_kind();
+    if let Some(why) = report::not_graded(kind, language.as_deref()) {
         println!("Your last prompt was not graded: {why}.");
         if let Some(previous) = sidecar.previous() {
             println!(
@@ -105,13 +122,20 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
 
     if let Some(previous) = sidecar.previous() {
         let delta = sidecar.latest.total - previous.total;
-        let direction = if delta > 0.0 { "up" } else { "down" };
-        println!(
-            "  {} {:.1} from your previous prompt in this session ({:.1})\n",
-            direction,
-            delta.abs(),
-            previous.total
-        );
+        if delta.abs() <= UNCHANGED {
+            println!(
+                "  same as your previous prompt in this session ({:.1})\n",
+                previous.total
+            );
+        } else {
+            let direction = if delta > 0.0 { "up" } else { "down" };
+            println!(
+                "  {} {:.1} from your previous prompt in this session ({:.1})\n",
+                direction,
+                delta.abs(),
+                previous.total
+            );
+        }
     }
 
     ExitCode::SUCCESS

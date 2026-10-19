@@ -4,6 +4,7 @@
 //! `yp-core` (which knows what to do with the statistics). Kept in the CLI so
 //! that `yp-core` stays free of file access.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use yp_core::{Corpus, TermFacts};
@@ -32,12 +33,98 @@ impl Corpus for IndexCorpus {
     }
 }
 
+/// One spelling for one directory: absolute, with symlinks resolved, and on
+/// Windows without the `\\?\` prefix and with an upper-case drive letter.
+///
+/// The index file is named after a hash of its root, so every spelling used
+/// to get an index of its own. A repository indexed as
+/// `C:/Users/.../repo`, the way Git Bash types it, was missed by a hook whose
+/// payload said `C:\Users\...\repo`, and a task that scored 529.8 grounded
+/// came out as an ungrounded 356.4. `c:\...` and a trailing backslash missed
+/// the same way.
+pub fn canonical(path: &Path) -> PathBuf {
+    let resolved = std::fs::canonicalize(path)
+        // A directory that is gone still gets one spelling, made absolute
+        // without touching the disk.
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf());
+    plain(resolved)
+}
+
+/// `path` without the Windows verbatim prefix `canonicalize` adds, which
+/// nothing else writes, and with its drive letter in upper case.
+fn plain(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    let mut text = if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        text.strip_prefix(r"\\?\").unwrap_or(text).to_string()
+    };
+    if text.as_bytes().get(1) == Some(&b':') {
+        text[..1].make_ascii_uppercase();
+    }
+    // `absolute` keeps a trailing separator that `canonicalize` drops; a
+    // root keeps the one that makes it a root.
+    let is_root = |t: &str| t == "/" || (t.len() == 3 && t.as_bytes()[1] == b':');
+    while text.ends_with(['/', '\\']) && !is_root(&text) {
+        text.pop();
+    }
+    PathBuf::from(text)
+}
+
+/// The home directory, spelt as [`canonical`] spells it.
+fn home() -> Option<PathBuf> {
+    session::home_dir().map(|h| canonical(&h))
+}
+
 /// The repository root containing `start`.
 ///
 /// Walks up looking for a `.git` directory (or file, for worktrees and
 /// submodules). Falls back to `start` itself, so the index still works in a
 /// directory that is not a repository at all.
+///
+/// The walk stops at the home directory. A home directory under version
+/// control (dotfiles kept in place) otherwise claimed every directory below
+/// it that is not a repository itself: a session opened in a scratch folder
+/// indexed 19,996 home files, and every such session was then graded
+/// against that one index. Home is a root only when it is where you are.
 pub fn repo_root(start: &Path) -> PathBuf {
+    let start = canonical(start);
+    let home = home();
+    let mut current = start.as_path();
+    loop {
+        if home.as_deref() == Some(current) {
+            return start;
+        }
+        if current.join(".git").exists() {
+            return current.to_path_buf();
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => return start,
+        }
+    }
+}
+
+/// True when `root` is the home directory, which is never indexed: what is
+/// under it is everything, not a project.
+fn is_home(root: &Path) -> bool {
+    home().as_deref() == Some(root)
+}
+
+pub fn index_dir() -> Option<PathBuf> {
+    session::state_dir().map(|d| d.join("index"))
+}
+
+pub fn index_path(root: &Path) -> Option<PathBuf> {
+    index_dir().map(|d| d.join(yp_index::index_file_name(root)))
+}
+
+/// The root an earlier version would have found for `start`: the same walk
+/// over the path exactly as it was spelt.
+fn spelt_root(start: &Path) -> PathBuf {
     let mut current = start;
     loop {
         if current.join(".git").exists() {
@@ -50,12 +137,30 @@ pub fn repo_root(start: &Path) -> PathBuf {
     }
 }
 
-pub fn index_dir() -> Option<PathBuf> {
-    session::state_dir().map(|d| d.join("index"))
-}
-
-pub fn index_path(root: &Path) -> Option<PathBuf> {
-    index_dir().map(|d| d.join(yp_index::index_file_name(root)))
+/// The index file serving the repository containing `cwd`, if one exists.
+///
+/// Indexes built before roots were made canonical are named after the
+/// spelling they were built from, so that name is tried second, when it is
+/// the same directory. An upgrade keeps its grounding until the next rebuild
+/// writes the canonical name.
+fn existing_index(cwd: &Path) -> Option<PathBuf> {
+    let root = repo_root(cwd);
+    if is_home(&root) {
+        return None;
+    }
+    let path = index_path(&root)?;
+    if path.exists() {
+        return Some(path);
+    }
+    // The spellings are compared as text, as the name hashes them. `Path`
+    // equality would call `C:\repo\` and `C:/repo` the same path, which
+    // they are, and so never try the name the first one was given.
+    let spelt = spelt_root(cwd);
+    if spelt.as_os_str() == root.as_os_str() || canonical(&spelt) != root {
+        return None;
+    }
+    let earlier = index_path(&spelt)?;
+    earlier.exists().then_some(earlier)
 }
 
 /// Load an index from an explicit path.
@@ -76,20 +181,20 @@ pub fn load_index_at(path: &Path) -> Option<IndexCorpus> {
 /// runs on every prompt and must never block on indexing a large repository.
 /// A missing index costs the grounding axis, not the user's time.
 pub fn load_for(cwd: &Path) -> Option<IndexCorpus> {
-    let root = repo_root(cwd);
-    let path = index_path(&root)?;
-    let index = RepoIndex::load(&path)?;
-    if index.is_empty() {
-        return None;
-    }
-    Some(IndexCorpus(index))
+    load_index_at(&existing_index(cwd)?)
 }
 
 /// Build and save the index for the repository containing `cwd`.
-pub fn build_for(cwd: &Path) -> std::io::Result<(PathBuf, usize, usize)> {
+pub fn build_for(cwd: &Path) -> io::Result<(PathBuf, usize, usize)> {
     let root = repo_root(cwd);
+    if is_home(&root) {
+        return Err(io::Error::other(format!(
+            "{} is your home directory, not a project; run it from a repository",
+            root.display()
+        )));
+    }
     let Some(path) = index_path(&root) else {
-        return Err(std::io::Error::other("no state directory available"));
+        return Err(io::Error::other("no state directory available"));
     };
     let index = RepoIndex::build(&root);
     index.save(&path)?;
@@ -98,8 +203,10 @@ pub fn build_for(cwd: &Path) -> std::io::Result<(PathBuf, usize, usize)> {
 
 /// How long ago the index for `cwd` was written.
 pub fn age(cwd: &Path) -> Option<std::time::Duration> {
-    let path = index_path(&repo_root(cwd))?;
-    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let modified = std::fs::metadata(existing_index(cwd)?)
+        .ok()?
+        .modified()
+        .ok()?;
     std::time::SystemTime::now().duration_since(modified).ok()
 }
 
@@ -123,7 +230,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(base.join("outer/.git")).unwrap();
 
-        assert_eq!(repo_root(&nested), base.join("outer"));
+        assert_eq!(repo_root(&nested), canonical(&base.join("outer")));
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -136,11 +243,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("yp-anc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let root = repo_root(&dir);
+        let start = canonical(&dir);
         assert!(
-            dir.ancestors().any(|a| a == root),
+            start.ancestors().any(|a| a == root),
             "{} is not an ancestor of {}",
             root.display(),
-            dir.display()
+            start.display()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -150,5 +258,110 @@ mod tests {
         let a = yp_index::index_file_name(Path::new("/one"));
         let b = yp_index::index_file_name(Path::new("/two"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn one_directory_spelt_several_ways_is_one_root() {
+        let dir = std::env::temp_dir().join(format!("yp-spelling-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let text = dir.to_string_lossy().into_owned();
+        let mut spellings = vec![text.clone(), format!("{text}/"), format!("{text}/./")];
+        if cfg!(windows) {
+            // What Git Bash types, a lower-case drive, a trailing backslash.
+            spellings.push(text.replace('\\', "/"));
+            spellings.push(text[..1].to_ascii_lowercase() + &text[1..]);
+            spellings.push(format!("{text}\\"));
+        }
+        let roots: Vec<PathBuf> = spellings.iter().map(|s| repo_root(Path::new(s))).collect();
+        for (spelling, root) in spellings.iter().zip(&roots) {
+            assert_eq!(root, &roots[0], "{spelling}");
+            let name = index_path(root).map(|p| p.file_name().unwrap().to_owned());
+            assert_eq!(
+                name,
+                index_path(&roots[0]).map(|p| p.file_name().unwrap().to_owned())
+            );
+        }
+        let shown = roots[0].to_string_lossy();
+        assert!(!shown.starts_with(r"\\?\"), "got {shown}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_verbatim_prefix_and_a_lower_case_drive_are_dropped() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\C:\Users\me\repo")),
+            PathBuf::from(r"C:\Users\me\repo")
+        );
+        assert_eq!(
+            plain(PathBuf::from(r"c:\Users\me\repo\")),
+            PathBuf::from(r"C:\Users\me\repo")
+        );
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo")
+        );
+        assert_eq!(plain(PathBuf::from(r"C:\")), PathBuf::from(r"C:\"));
+        assert_eq!(plain(PathBuf::from("/")), PathBuf::from("/"));
+    }
+
+    /// HOME, and USERPROFILE, which Windows reads, pointed at another
+    /// directory until this is dropped, even by a failing assertion. Tests
+    /// that touch the environment hold its lock.
+    struct Home {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Home {
+        fn at(home: &Path) -> Self {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let keys = ["HOME", "USERPROFILE"];
+            let saved = keys.map(|key| (key, std::env::var_os(key))).to_vec();
+            for key in keys {
+                std::env::set_var(key, home);
+            }
+            Home { saved, _lock: lock }
+        }
+    }
+
+    impl Drop for Home {
+        fn drop(&mut self) {
+            for (key, value) in self.saved.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_home_directory_under_git_does_not_claim_what_is_below_it() {
+        let home = std::env::temp_dir().join(format!("yp-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let scratch = home.join("Downloads/pkg/src");
+        let project = home.join("code/project");
+        std::fs::create_dir_all(home.join(".git")).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        // Every directory here exists, so each is canonical the same way:
+        // macOS keeps the temporary directory behind a symlink, and GitHub's
+        // Windows runners spell it with an 8.3 name.
+        std::fs::create_dir_all(project.join("src")).unwrap();
+
+        {
+            let _home = Home::at(&home);
+            // Not a repository: indexed on its own, not as part of home.
+            assert_eq!(repo_root(&scratch), canonical(&scratch));
+            // A repository below home is still found.
+            assert_eq!(repo_root(&project.join("src")), canonical(&project));
+            // Home itself is a root only when it is where you are, and even
+            // then it is not indexed.
+            assert_eq!(repo_root(&home), canonical(&home));
+            let err = build_for(&home).expect_err("home must not be indexed");
+            assert!(err.to_string().contains("home directory"), "{err}");
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

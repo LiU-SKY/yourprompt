@@ -13,7 +13,7 @@ mod serve;
 mod session;
 mod statusline;
 
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -119,10 +119,12 @@ enum Command {
 
     /// Show the full breakdown of the prompt that was just scored.
     ///
-    /// Backs the `/score` slash command. With no --session, uses the most
-    /// recently scored session, preferring one from this directory.
+    /// Backs the `/score` slash command. With no --session, explains the
+    /// session in CLAUDE_CODE_SESSION_ID, which Claude Code sets for the
+    /// commands it runs; outside Claude Code, the most recently scored
+    /// session, preferring one from this directory.
     Explain {
-        /// Explain a specific session rather than the most recent one.
+        /// Explain a specific session rather than the current one.
         #[arg(long, value_name = "ID")]
         session: Option<String>,
         /// Never colourise, even on a terminal.
@@ -130,10 +132,10 @@ enum Command {
         no_color: bool,
     },
 
-    /// Register the hook and status line in Claude Code's settings.
+    /// Register the hooks, the status line and /score with Claude Code.
     ///
-    /// Backs up your settings first, and wraps any status line you already
-    /// have rather than replacing it.
+    /// Backs up your settings the first time it changes them, and wraps any
+    /// status line you already have rather than replacing it.
     Install {
         /// Print the settings that would be written, without writing them.
         #[arg(long)]
@@ -166,9 +168,13 @@ enum Command {
     /// output never reaches the model, which is what keeps this free of
     /// context cost.
     Statusline {
+        /// Run the status line `yp install` found and kept, and append ours
+        /// to its output.
+        #[arg(long, conflicts_with = "wrap")]
+        wrapped: bool,
         /// A status line command to run first, whose output ours is appended
-        /// to. Lets `yp` be added to an existing status line rather than
-        /// replacing it.
+        /// to. What earlier installs wrote; `yp install` now keeps the
+        /// command out of the command line and passes --wrapped instead.
         #[arg(long, value_name = "COMMAND")]
         wrap: Option<String>,
     },
@@ -287,6 +293,21 @@ fn run_index(root: Option<String>, max_age: Option<u64>, quiet: bool) -> ExitCod
 }
 
 fn main() -> ExitCode {
+    // `yp install` writes its hooks in the exec form, which Claude Code
+    // 2.1.139 introduced. One older than that, if it skips the `args` it does
+    // not know, runs the executable alone: plain `yp`, with the hook payload
+    // on stdin. clap's usage error exits 2, and exit 2 from a
+    // UserPromptSubmit hook blocks the prompt. So with no arguments and no
+    // one at a terminal to read the usage, say what is missing on stderr,
+    // which `claude --debug` shows, and exit 0.
+    if std::env::args_os().len() <= 1 && !std::io::stdin().is_terminal() {
+        eprintln!(
+            "yp: no command given (`yp --help` lists them); a hook that runs yp \
+             needs Claude Code 2.1.139 or newer to pass its arguments"
+        );
+        return ExitCode::SUCCESS;
+    }
+
     let cli = Cli::parse();
     match cli.command {
         Command::Score {
@@ -324,6 +345,6 @@ fn main() -> ExitCode {
             uninstall,
         } => install::run(print_only, uninstall),
         Command::Serve { bind, port, repo } => serve::run(bind, port, repo),
-        Command::Statusline { wrap } => statusline::run(wrap),
+        Command::Statusline { wrapped, wrap } => statusline::run(wrap, wrapped),
     }
 }
