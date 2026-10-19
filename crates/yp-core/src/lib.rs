@@ -18,11 +18,16 @@
 //! number stays comparable rather than silently capping at 650 -- but the
 //! score is flagged as renormalised, because a grounded score and an
 //! ungrounded one are not the same measurement.
+//!
+//! Only a task is graded. A slash command, a "yes" or a "continue", and a
+//! prompt in a language the lexicons cannot read are scored all the same,
+//! but [`Score::kind`] says the number does not describe them.
 
 pub mod axes;
 pub mod corpus;
 pub mod grade;
 pub mod grounding;
+pub mod kind;
 pub mod marks;
 pub mod params;
 pub mod prompt;
@@ -32,6 +37,7 @@ use serde::Serialize;
 
 pub use axes::{Axis, Component};
 pub use corpus::{Corpus, MapCorpus, TermFacts};
+pub use kind::{kind_of, Kind};
 pub use marks::{Mark, Tone};
 pub use stats::PromptStats;
 
@@ -41,6 +47,12 @@ pub struct Score {
     /// 0.0 to 1000.0.
     pub total: f64,
     pub grade: &'static str,
+    /// What the prompt is. Everything here is computed for every kind, but
+    /// only a [`Kind::Task`] is meant to be shown as a grade.
+    pub kind: Kind,
+    /// For an unsupported prompt, the English name of the language it looks
+    /// like, when that can be told. Always `None` for the other kinds.
+    pub language: Option<&'static str>,
     /// Axis A. `None` when no repository index was available, in which case
     /// the remaining axes were renormalised to 1000.
     pub grounding: Option<Axis>,
@@ -146,6 +158,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     let tokens = yp_lang::tokenize(text);
     let stats = stats::analyze(text, &tokens);
     let code = yp_lang::token::code_regions(text);
+    let (kind, language) = kind::classify(text, &tokens);
 
     let cue_hits = resources.cue_matcher.find_masked(text, &code);
     let smell_hits = resources.smells.find_masked(text, &code);
@@ -212,6 +225,8 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     Some(Score {
         total,
         grade: grade::grade(total),
+        kind,
+        language,
         grounding: grounding_axis,
         actionability,
         clarity,
@@ -539,6 +554,52 @@ mod tests {
         assert!(json.contains("\"total\""));
         assert!(json.contains("\"actionability\""));
         assert!(json.contains("\"renormalized\":true"));
+        assert!(json.contains("\"kind\":\"task\""), "{json}");
+        assert!(json.contains("\"language\":null"), "{json}");
+
+        let s = score("corrige le bug dans le parseur pour que les tests passent").unwrap();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"kind\":\"unsupported\""), "{json}");
+        assert!(json.contains("\"language\":\"French\""), "{json}");
+    }
+
+    #[test]
+    fn every_kind_is_still_scored() {
+        // The kind says whether the number describes the prompt. It never
+        // changes the number: what to show is the consumer's call.
+        for (text, kind) in [
+            ("refactor parse_args in src/cli.rs", Kind::Task),
+            ("/compact keep the API notes", Kind::Command),
+            ("ok do it", Kind::FollowUp),
+            (
+                "arregla el bug en src/auth/login.rs para que verify_token devuelva \
+                 Err(AuthError::Expired). Los tests deben pasar.",
+                Kind::Unsupported,
+            ),
+        ] {
+            let s = score(text).unwrap();
+            assert_eq!(s.kind, kind, "{text}");
+            assert!((0.0..=1000.0).contains(&s.total), "{text}");
+            assert_eq!(s.grade, grade::grade(s.total));
+        }
+    }
+
+    #[test]
+    fn classifying_a_prompt_agrees_with_scoring_it() {
+        // The hook classifies the raw text before deciding whether to score
+        // it at all; scoring classifies the instruction left once
+        // attachments are cut out. Both see code where the paste was.
+        let file = "fn helper() { let value = 1; }\n".repeat(30);
+        for text in [
+            "continue".to_string(),
+            format!("continue\n```rust\n{file}```"),
+            format!("/score\n```\n{file}```"),
+            format!("arregla el bug para que el parser no falle con esto:\n```rust\n{file}```"),
+            "fix the parser".to_string(),
+        ] {
+            let s = score(&text).unwrap();
+            assert_eq!(kind_of(&text), (s.kind, s.language), "{text:.40}");
+        }
     }
 
     #[test]
