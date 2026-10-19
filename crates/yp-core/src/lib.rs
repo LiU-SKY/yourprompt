@@ -54,7 +54,7 @@ pub use stats::PromptStats;
 /// the text the score reads, and the two always agree. [`kind::kind_of`] reads
 /// the raw prompt, and past the cap it can answer differently. The cap is not
 /// what keeps this fast any more: a megabyte of short fenced blocks is
-/// classified in 12.5 ms read raw and in 3.7 ms read like this.
+/// classified in about 10 ms read raw and 3 ms read like this.
 pub fn kind_of(text: &str) -> (Kind, Option<&'static str>) {
     let parts = prompt::split(text);
     let capped = parts.capped();
