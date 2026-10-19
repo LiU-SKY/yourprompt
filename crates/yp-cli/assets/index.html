@@ -3,9 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>yourprompt</title>
+<title>yourprompt · score your prompt before the agent reads it</title>
+<!-- An empty icon, so the browser does not ask the server for a favicon.ico
+     it does not have and log the 404. -->
+<link rel="icon" href="data:,">
 <style>
+  /* The page follows the system theme and has no switch of its own; saying
+     so lets the browser draw scrollbars and form controls to match. */
   :root {
+    color-scheme: light dark;
     --bg: #fbfbfa; --panel: #fff; --ink: #1a1a18; --dim: #6b6b66;
     --line: #e4e4e0; --accent: #2f6f4f; --warn: #8a6d1f; --bad: #9b3a2f;
     --track: #ecece8; --drop: rgba(47,111,79,.08);
@@ -27,6 +33,9 @@
     font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
           "Noto Sans KR", Roboto, sans-serif;
   }
+  /* Korean breaks between words, not between syllables. The prompt box and
+     the marks under it inherit the same rule, so they still wrap alike. */
+  :lang(ko) { word-break: keep-all; overflow-wrap: break-word; }
   .wrap { max-width: 960px; margin: 0 auto; padding: 34px 20px 72px; }
   header { margin-bottom: 22px; }
   .top { display: flex; align-items: baseline; gap: 12px; }
@@ -143,7 +152,7 @@
   <header>
     <div class="top">
       <h1>yourprompt</h1>
-      <div class="langs" role="group" aria-label="Language">
+      <div class="langs" id="langs" role="group" aria-label="Language">
         <button type="button" id="lang-en">EN</button>
         <button type="button" id="lang-ko">한국어</button>
       </div>
@@ -215,6 +224,11 @@ const STR = {
         'name:unique': 'defined once in your code',
         'name:ambiguous': n => `could be any of ${n}`,
         'name:missing': 'not in your code',
+        // pronoun:dangling comes only from a prompt checked against an index,
+        // when no name before the pronoun is in it. smell:vague_pronoun is a
+        // pronoun the scorer could not settle either way, so its label claims
+        // no more than that. It used to say "with nothing to point at", of
+        // the "it" right after verify_token in the showcase prompt.
         'pronoun:dangling': 'points at nothing named before it',
         'pronoun:anchored': 'pronoun; probably the name before it',
         'pronoun:pasted': 'points at the pasted material',
@@ -226,14 +240,16 @@ const STR = {
         'smell:uncertain_verb': 'hedge',
         'smell:ambiguous_adverb': 'vague adverb',
         'smell:vague_noun': 'vague noun',
-        'smell:vague_pronoun': 'pronoun with nothing to point at',
+        'smell:vague_pronoun': 'pronoun: unclear what it points at',
         'smell:open_ended': 'open-ended',
         'smell:loophole': 'escape clause',
         'smell:polysemous_verb': 'verb that names no specific action',
       },
     },
+    title: 'yourprompt · score your prompt before the agent reads it',
+    lang_group: 'Language',
     lede: 'Scores how well an AI coding agent can understand your prompt, with a reason for every point.',
-    placeholder: 'What do you want the agent to do?\n\ne.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.',
+    placeholder: 'What do you want the agent to do?\ne.g. In src/auth/login.rs, make verify_token return Err(AuthError::Expired) instead of panicking. tests/auth.rs must still pass.',
     label_prompt: 'Prompt',
     label_att: 'Attached context <span class="hint">· files the agent should read, judged as evidence</span>',
     open: 'Attach a file…',
@@ -299,14 +315,16 @@ const STR = {
         'smell:uncertain_verb': '불확실한 표현',
         'smell:ambiguous_adverb': '모호한 부사',
         'smell:vague_noun': '모호한 명사',
-        'smell:vague_pronoun': '가리킬 대상 없는 지시어',
+        'smell:vague_pronoun': '무엇을 가리키는지 불분명한 지시어',
         'smell:open_ended': '열린 결말',
         'smell:loophole': '도피 조항',
         'smell:polysemous_verb': '구체적 행동을 말하지 않는 동사',
       },
     },
+    title: 'yourprompt · 에이전트가 읽기 전에 프롬프트를 채점합니다',
+    lang_group: '언어',
     lede: 'AI 코딩 에이전트가 프롬프트를 얼마나 이해할 수 있는지, 모든 점수의 사유와 함께 채점합니다.',
-    placeholder: '에이전트가 무엇을 하길 원하나요?\n\n예: src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.',
+    placeholder: '에이전트가 무엇을 하길 원하나요?\n예: src/auth/login.rs 의 verify_token 이 panic 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. tests/auth.rs 는 계속 통과해야 함.',
     label_prompt: '프롬프트',
     label_att: '첨부 컨텍스트 <span class="hint">· 에이전트가 읽어야 할 파일, 지시가 아니라 근거로 채점됩니다</span>',
     open: '파일 첨부…',
@@ -327,13 +345,17 @@ const STR = {
       follow_up: () => '이런 후속 메시지는 앞선 대화에 기대므로 채점하지 않습니다. Claude Code 에서는 상태줄이 직전 작업의 등급을 그대로 보여 줍니다.',
       unsupported: name => `${name || '다른 언어'} 프롬프트로 보입니다. yourprompt 는 영어와 한국어만 채점합니다.`,
     },
-    // The engine names a language in English.
+    // The engine names a language in English, one of the names in
+    // crates/yp-lang/src/foreign.rs; a name missing here shows in English.
     languages: {
       Japanese: '일본어', Chinese: '중국어', Spanish: '스페인어', French: '프랑스어',
       German: '독일어', Portuguese: '포르투갈어', Russian: '러시아어', Italian: '이탈리아어',
       Vietnamese: '베트남어', Thai: '태국어', Arabic: '아랍어', Hindi: '힌디어',
       Turkish: '튀르키예어', Dutch: '네덜란드어', Polish: '폴란드어', Ukrainian: '우크라이나어',
       Indonesian: '인도네시아어', Greek: '그리스어', Hebrew: '히브리어',
+      Persian: '페르시아어', Urdu: '우르두어', Swedish: '스웨덴어', Danish: '덴마크어',
+      Norwegian: '노르웨이어', Finnish: '핀란드어', Czech: '체코어', Hungarian: '헝가리어',
+      Romanian: '루마니아어',
     },
     unreadable: '채점기가 입력을 읽지 못했습니다',
     server_err: s => '서버 응답 ' + s,
@@ -377,6 +399,8 @@ function renderSub() {
 
 function applyLang() {
   document.documentElement.lang = lang;
+  document.title = T().title;
+  $('langs').setAttribute('aria-label', T().lang_group);
   $('lang-en').className = lang === 'en' ? 'on' : '';
   $('lang-ko').className = lang === 'ko' ? 'on' : '';
   $('lede').innerHTML = T().lede;
