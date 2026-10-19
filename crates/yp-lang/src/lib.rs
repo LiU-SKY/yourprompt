@@ -7,15 +7,18 @@
 //! languages [`foreign`] reports as unread, not touching the scorer.
 
 pub mod cues;
+pub mod deixis;
 pub mod followup;
 pub mod foreign;
 pub mod legible;
 pub mod lexicon;
 pub mod matcher;
+pub mod question;
 pub mod span;
 pub mod token;
 
 pub use cues::{CueId, Cues};
+pub use deixis::is_deictic;
 pub use followup::FollowUps;
 pub use foreign::Foreign;
 pub use legible::{is_filler, is_legible, legible_share};

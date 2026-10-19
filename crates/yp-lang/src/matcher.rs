@@ -12,8 +12,8 @@ use crate::token::{code_regions, is_hangul};
 /// "등" would hit inside "등록", "코드" inside "코드베이스". So a match that is
 /// followed by Hangul only counts when that Hangul is one of these, which is a
 /// cheap stand-in for a morphological analyser and errs toward false negatives.
-const KO_FOLLOW: &str = "은는이가을를에의도만과와랑로으서써부터까지보다처럼한테에게\
-                         야여요다임함줘주라봐고며나든지밖뿐대로같하한할했합니시";
+pub(crate) const KO_FOLLOW: &str = "은는이가을를에의도만과와랑로으서써부터까지보다처럼한테에게\
+                                    야여요다임함줘주라봐고며나든지밖뿐대로같하한할했합니시";
 
 /// A flat list of literal patterns, each tagged with the category it belongs to.
 ///

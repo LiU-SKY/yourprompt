@@ -28,9 +28,16 @@ pub enum CueId {
     /// Joins one objective to another. Used by the singularity check, which
     /// is the one cue category that can *cost* points.
     Conjunction,
+    /// A direct question: "why does verify_token panic?", "verify_token이 왜
+    /// panic 나?". Asks for its answer the way an action verb asks for its
+    /// action. Recognised by the shape of the sentence (see
+    /// [`crate::question`]) rather than by a term list, so the lexicons do not
+    /// define it and it is not in [`CueId::ALL`].
+    Question,
 }
 
 impl CueId {
+    /// Every category a cue lexicon defines.
     pub const ALL: [CueId; 6] = [
         CueId::ActionVerb,
         CueId::IoSpec,
@@ -48,6 +55,7 @@ impl CueId {
             CueId::ScopeConstraint => "scope_constraint",
             CueId::ExampleMarker => "example_marker",
             CueId::Conjunction => "conjunction",
+            CueId::Question => "question",
         }
     }
 }
@@ -267,5 +275,13 @@ mod tests {
             assert_eq!(id.as_str().parse::<CueId>().unwrap(), id);
         }
         assert!("nope".parse::<CueId>().is_err());
+    }
+
+    #[test]
+    fn a_lexicon_cannot_define_questions() {
+        // Questions are recognised by sentence shape. A term list under this
+        // id would match "when" and "how" inside statements.
+        assert!(CueId::Question.as_str().parse::<CueId>().is_err());
+        assert!(!CueId::ALL.contains(&CueId::Question));
     }
 }

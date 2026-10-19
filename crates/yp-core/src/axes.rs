@@ -87,39 +87,63 @@ fn join_terms(terms: &[String], limit: usize) -> String {
     }
 }
 
+/// How many things the prompt asks for.
+///
+/// Each distinct action verb is one. With no action verb, each distinct
+/// question is one: "why does it panic, and what should it return?" asks two
+/// things. A question never adds to an action, though: "can you fix X?" asks
+/// for the fix, and the question is only how it asks.
+pub fn objectives(cues: &BTreeMap<CueId, Vec<String>>) -> usize {
+    match cues.get(&CueId::ActionVerb).map_or(0, Vec::len) {
+        0 => cues.get(&CueId::Question).map_or(0, Vec::len),
+        actions => actions,
+    }
+}
+
 /// Axis B -- does the prompt name one concrete action, with a stated result
 /// and a way to tell when it is done?
 pub fn actionability(cues: &BTreeMap<CueId, Vec<String>>) -> Axis {
     let empty = Vec::new();
     let actions = cues.get(&CueId::ActionVerb).unwrap_or(&empty);
+    let questions = cues.get(&CueId::Question).unwrap_or(&empty);
     let conjunctions = cues.get(&CueId::Conjunction).unwrap_or(&empty);
     let io = cues.get(&CueId::IoSpec).unwrap_or(&empty);
     let acceptance = cues.get(&CueId::Acceptance).unwrap_or(&empty);
 
-    let objective = if actions.is_empty() {
-        Component::new(
-            "objective",
-            0.0,
-            b::OBJECTIVE_MAX,
-            "no concrete action verb -- the prompt does not say what to do",
-        )
-    } else {
+    let objective = if !actions.is_empty() {
         Component::new(
             "objective",
             b::OBJECTIVE_MAX,
             b::OBJECTIVE_MAX,
             format!("action: {}", join_terms(actions, 3)),
         )
+    } else if !questions.is_empty() {
+        // "Why does verify_token panic?" asks for its answer as plainly as
+        // "explain why verify_token panics" does, and earns what it earns.
+        Component::new(
+            "objective",
+            b::OBJECTIVE_MAX,
+            b::OBJECTIVE_MAX,
+            format!("question: {}", join_terms(questions, 3)),
+        )
+    } else {
+        Component::new(
+            "objective",
+            0.0,
+            b::OBJECTIVE_MAX,
+            "no concrete action verb -- the prompt does not say what to do",
+        )
     };
 
-    // Every action verb past the first, plus every joining conjunction, is
+    // Every objective past the first, plus every joining conjunction, is
     // another thing being asked for in one breath.
     //
-    // Singularity is a property *of* an objective, so a prompt that names no
-    // action scores zero here rather than full marks. Otherwise saying
+    // Singularity is a property *of* an objective, so a prompt that asks for
+    // nothing scores zero here rather than full marks. Otherwise saying
     // nothing at all would be rewarded as admirably focused.
-    let extra = actions.len().saturating_sub(1) + conjunctions.len();
-    let singularity = if actions.is_empty() {
+    let objectives = objectives(cues);
+    let extra = objectives.saturating_sub(1) + conjunctions.len();
+    let singularity = if objectives == 0 {
         Component::new(
             "singularity",
             0.0,
@@ -209,13 +233,15 @@ pub fn clarity(
     // collect full marks for the absence.
     let earned = crate::params::axis_max::CLARITY
         * (-k * density).exp()
-        * substance(stats.content_tokens)
+        * stats.substance()
         * stats.legibility()
         * stats.diversity()
         * request;
 
     worst.sort_by(|a, b| b.2.total_cmp(&a.2));
-    let detail = if worst.is_empty() && stats.content_tokens < c::MIN_CONTENT_UNITS as usize {
+    let detail = if worst.is_empty()
+        && stats.content_tokens + stats.pasted < c::MIN_CONTENT_UNITS as usize
+    {
         format!(
             "too thin to judge ({} content tokens)",
             stats.content_tokens
