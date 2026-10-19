@@ -43,7 +43,7 @@ fn ungraded(kind: Kind) -> &'static str {
     }
 }
 
-/// The segment this tool contributes, e.g. `⟦ 742.3 ▓▓▓▓▓▓▓░░░ A- ▲ ⟧`.
+/// The segment this tool contributes, e.g. `⟦ 740.5 ▓▓▓▓▓▓▓░░░ B+ ▲ ⟧`.
 pub fn segment(sidecar: &Sidecar, style: &Style) -> String {
     if !sidecar.latest.is_graded() {
         // Showing the previous task's number here would pass it off as this

@@ -2,7 +2,7 @@
 
 <p align="center">
   A prompt score for Claude Code that costs zero context tokens.<br>
-  Grounded in your repository. Deterministic. Runs in about 5 ms.
+  Grounded in your repository. Deterministic. No model call.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 </p>
 
 ```
-[Opus] ~/proj main 42% ctx  ⟦ 742.3 ▓▓▓▓▓▓▓░░░ A- ▲ ⟧
+[Opus] ~/proj main 42% ctx  ⟦ 740.5 ▓▓▓▓▓▓▓░░░ B+ ▲ ⟧
 ```
 
 <p align="center">
@@ -46,7 +46,11 @@ one place or forty, and whether you said what done looks like.
 - **Shows it in place.** In the web UI the prompt is coloured as you type:
   green where it earned points, yellow where it is unclear, red where it lost
   them, with a chip per word saying why.
-- **English and Korean.**
+- **Grades tasks, not chatter.** Slash commands and short follow-ups like
+  "yes", "continue" or "계속해" are not graded, so the status line keeps your
+  last task's score instead of flashing an F.
+- **English and Korean.** A prompt in another language says "not graded"
+  rather than failing.
 
 ## Try it
 
@@ -54,14 +58,22 @@ No install: **<https://liu-sky.github.io/yourprompt/>**. The scorer is compiled
 to WebAssembly. Drop your own source files on the page and they are indexed
 locally, so the grounding axis is about your code. Nothing is uploaded.
 
-Or from the command line:
+With no files loaded, names cannot be checked, and the page says so next to
+the grade: a prompt about a made-up `src/banana.rs` scores the same 740.5 as
+the real one. Load the six-file sample repo and the real prompt rises to 851.8
+while the made-up one falls to 563.8.
+
+Or from the command line, here in a directory with no index:
 
 ```console
 $ yp score "fix the login handler"
   294.3 / 1000  F  ▓▓▓░░░░░░░
 
 $ yp score "In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Keep the public signature of login(). tests/auth.rs::expired_token_is_rejected must pass."
-  722.4 / 1000  B+  ▓▓▓▓▓▓▓░░░
+  735.0 / 1000  B+  ▓▓▓▓▓▓▓░░░
+
+$ yp score "continue"
+  not graded: a follow-up like this leans on the conversation
 ```
 
 ## Install
@@ -152,14 +164,14 @@ The specificity measure comes from pre-retrieval query performance prediction
 ### Grounding, on this repository
 
 ```
-fix simplified_clarity_score in crates/yp-core/src/grounding.rs
-  grounding  338.1 / 350   resolution 150.0/150  all 2 name(s) resolve to exactly one thing
+fix dangling_deixis in crates/yp-core/src/grounding.rs
+  grounding  345.7 / 350   resolution 150.0/150  all 2 name(s) resolve to exactly one thing
 
 fix the score handler
-  grounding  212.5 / 350   resolution  37.5/150  0 of 1 names resolve; "score" could be any of 8
+  grounding   80.0 / 350   resolution   0.0/150  names nothing that exists in this repository
 
 fix compute_paycheck in payroll.rs
-  grounding  264.5 / 350   resolution  75.0/150  1 of 2 names resolve; "payroll.rs" is not in this repository
+  grounding  197.0 / 350   resolution  26.5/150  0 of 2 names resolve; "payroll.rs" is not in this repository
 ```
 
 ### Things that used to score well and no longer do
@@ -175,6 +187,19 @@ Attached files are treated as evidence rather than as claims. Pasting the file
 a task is about raises the score. It used to cost 70 points, because the file's
 434 identifiers were averaged into the dozen you typed.
 
+The same goes for a pasted error. "fix this" over a stack trace in a code
+fence scored 278.3, because "this" was read as pointing at nothing. The trace
+is what it points at: the same prompt now scores 536.2, and a fence of
+keyboard mash still earns nothing.
+
+A direct question is a request. "Why does verify_token panic on expired
+tokens?" scored 155.3 for having no action verb; it now scores 511.1, while
+"why is it broken again?" stays at 65.9.
+
+A forbidden verb is a boundary, not the task. "Don't change anything. Tests
+must still pass." scored 673.4, with "change" read as the thing to do. It is
+now 519.6, and "Done means: the test suite passes." counts as a finish line.
+
 ## Benchmarks
 
 The score is checked against published datasets, and the first results were
@@ -183,19 +208,28 @@ bad. They are in the commit history. Reproduce any of these with `yp bench`.
 ### Ordering: HumanEvalComm
 
 164 HumanEval problems, each damaged into ambiguous, inconsistent and
-incomplete variants. 771 pairs where the worse side is known.
+incomplete variants. 771 pairs where the worse side is known. Beside the score
+is the baseline to beat: call whichever prompt is longer the original.
 
-| | Pairs | Original scores higher |
-|---|---:|---:|
-| Defects visible in the text | 399 | **65.9%** |
-| All pairs | 771 | 53.3% |
+| | Pairs | Original scores higher | Longer prompt wins |
+|---|---:|---:|---:|
+| Defects visible in the text | 399 | 65.9% | 72.7% |
+| All pairs | 771 | 53.3% | 59.0% |
 
-| Defect | Pairs | Correct |
-|---|---:|---:|
-| incompleteness | 164 | 83.5% |
-| ambiguity + incompleteness | 71 | 77.5% |
-| ambiguity | 164 | 43.3% |
-| inconsistency | 163 | 24.5%, 98 ties |
+| Defect | Pairs | Correct | Longer prompt wins |
+|---|---:|---:|---:|
+| incompleteness | 164 | 83.5% | 100.0% |
+| ambiguity + incompleteness | 71 | 77.5% | 100.0% |
+| ambiguity | 164 | **43.3%** | 33.5% |
+| inconsistency | 163 | 24.5%, 98 ties | 35.6% |
+
+Length beats the score overall, and that is worth saying first. HumanEvalComm
+makes a prompt incomplete by cutting text out, so the shorter side is the
+damaged one in all 164 incomplete pairs: no scorer can do better than length
+there, and this one does not. The score wins where length cannot help, on
+vague wording, which is what its lexicons are for. The grounding benchmark
+below is immune to length altogether, because both sides of every comparison
+are the same text.
 
 Inconsistency is out of reach for a lexical scorer. HumanEvalComm makes a
 docstring inconsistent by contradicting its worked example, for instance
@@ -249,7 +283,21 @@ change to the English numbers. The fixture runs in CI. See [bench/korean.md](ben
 - HumanEvalComm prompts are function stubs, not requests to an agent. The
   ordering means something; the absolute values on that dataset do not.
 - Scoring parameters are reasoned defaults, not fitted ones.
+- It grades whether an agent can act on a prompt, not whether the request is
+  wise. A precise "delete every file and force-push" scores well.
+- Word-level rules can be gamed: a sentence built from the cue words scores
+  better than it deserves, most of all with no files to check names against.
 - The per-component explanation sentences are English only for now.
+
+## How this was built
+
+It started with a question: what actually makes a prompt good? I wanted to
+see a score for a prompt before I sent it to the AI, not after the answer came
+back wrong.
+
+Claude Code wrote most of the code with me, and the commits carry its
+trailer. The failures along the way, like the first benchmark runs that came
+out below chance, are in the history as well.
 
 ## Local web UI
 

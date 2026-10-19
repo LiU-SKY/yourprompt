@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "yp-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "serde",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "yp-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -352,11 +352,11 @@ dependencies = [
 
 [[package]]
 name = "yp-index"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "yp-lang"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aho-corasick",
  "once_cell",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "yp-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "yp-core",

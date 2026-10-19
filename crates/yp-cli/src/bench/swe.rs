@@ -398,7 +398,7 @@ fn render(trials: &[Trial], repos: &[String]) -> String {
          - The cross-repository control shows the axis is repository-specific. \
          It does not show that the resulting *number* predicts whether an \
          agent will succeed; that would need agent runs, not scores.\n\
-         - sphinx remains below chance. Its vocabulary appears in every other \
+         - sphinx is barely above chance. Its vocabulary appears in every other \
          repository here, because they all build their documentation with \
          sphinx: `toctree` sits in 244 of sphinx's own files and in 8 to 44 \
          files of each of the others. Counting definition sites rather than \

@@ -1,7 +1,7 @@
 {
   "name": "yourprompt",
   "displayName": "yourprompt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Scores how well Claude can understand your prompt, for zero context tokens",
   "author": {
     "name": "LiU-SKY"
