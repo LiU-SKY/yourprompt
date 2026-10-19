@@ -5,13 +5,28 @@ Registers the `UserPromptSubmit` hook that scores each prompt, and the
 
 ## Requirements
 
-The `yp` binary must be on your `PATH`. Install it first:
+The `yp` binary must be on your `PATH`, because the plugin's hooks call it by
+name. Install it first.
+
+macOS and Linux:
 
 ```bash
-# from a release
 curl -fsSL https://raw.githubusercontent.com/LiU-SKY/yourprompt/main/install.sh | sh
+```
 
-# or from source
+Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/LiU-SKY/yourprompt/main/install.ps1 | iex
+```
+
+Both download a prebuilt binary from the latest release and check its SHA-256.
+The Windows script adds its directory to your user PATH; the macOS and Linux
+one installs to `~/.local/bin` and tells you if that is not on your `PATH` yet.
+
+Or from source, with Rust 1.85 or newer:
+
+```bash
 cargo install --git https://github.com/LiU-SKY/yourprompt yp-cli
 ```
 
