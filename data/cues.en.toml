@@ -41,6 +41,10 @@ terms = [
   # as a smell, in both languages.
   "make", "optimize", "optimise", "speed up", "explain", "investigate",
   "diagnose", "find", "look at", "look into", "clean up",
+  # "run the tests" scored 65 with no objective at all. "run" is also a
+  # noun, and "the CI run failed, fix it" pays for it as a second objective
+  # (328 -> 312): the same trade "build", "test" and "release" already make.
+  "run", "rerun", "re-run", "execute",
 ]
 
 [[cue]]
@@ -66,6 +70,15 @@ terms = [
   "must pass", "has to pass", "still pass", "still passes", "keeps passing",
   "make sure", "ensure", "confirm", "succeeds", "fails with", "done when",
   "criteria", "must hold", "should hold",
+  # Saying what done means is the most repeated advice there is, and
+  # "Done means: the test suite passes" earned none of the acceptance points
+  # that "The existing tests must still pass" did.
+  "done means", "done is when", "done looks like", "finished when",
+  "complete when", "test suite passes", "test suite pass", "suite passes",
+  "suite pass", "tests passing", "pass all tests", "passes all tests",
+  "pass the tests", "passes the tests", "build passes", "lint passes",
+  "without warnings", "no warnings", "no new warnings", "zero warnings",
+  "without errors",
 ]
 
 [[cue]]

@@ -22,6 +22,16 @@ terms = [
   "pretty", "modern", "professional", "intuitive", "seamless", "smooth",
   "readable", "maintainable", "idiomatic", "sensible", "reasonable",
   "robust", "solid", "decent", "good", "great", "bad", "ugly", "messy",
+  # Hype: it praises the result without saying what would count as one.
+  # "Write 10 viral hooks" passed with no smell at all. "killer" is listed
+  # only in its marketing phrases, because the OOM killer is a real thing,
+  # and "awesome" not at all, because "Add a Font Awesome icon" lost 135
+  # points to it.
+  "viral", "engaging", "compelling", "stunning", "amazing",
+  "sleek", "slick", "delightful", "catchy", "punchy", "eye-catching",
+  "gorgeous", "polished", "high-quality", "high quality",
+  "seamlessly", "effortless", "effortlessly", "killer feature",
+  "killer features", "killer app",
 ]
 
 [[smell]]
@@ -46,6 +56,10 @@ terms = [
   "perfect", "perfectly", "ideal", "maximum", "minimum", "most", "least",
   "as much as possible", "as fast as possible", "as clean as possible",
   "state of the art", "world class", "production grade", "production-grade",
+  "state-of-the-art", "world-class", "best in class", "best-in-class",
+  "cutting edge", "cutting-edge", "top notch", "top-notch",
+  "industry-leading", "blazing fast", "blazingly fast", "lightning fast",
+  "lightning-fast",
 ]
 
 [[smell]]
