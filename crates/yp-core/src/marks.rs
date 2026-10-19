@@ -324,6 +324,20 @@ mod tests {
     }
 
     #[test]
+    fn a_noun_is_not_marked_as_the_action() {
+        let text = "add a test for verify_token";
+        let m = marks(text);
+        let on = |word: &str| -> Vec<&str> {
+            m.iter()
+                .filter(|m| &text[m.start..m.end] == word)
+                .map(|m| m.kind.as_str())
+                .collect()
+        };
+        assert_eq!(on("add"), ["cue:action_verb"]);
+        assert!(on("test").is_empty());
+    }
+
+    #[test]
     fn offsets_survive_an_attachment_being_cut_out() {
         let body = "fn a() {}\n".repeat(20);
         let text = format!("fix the parser\n```rust\n{body}```\nroughly please");

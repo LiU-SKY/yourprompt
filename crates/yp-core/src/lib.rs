@@ -30,6 +30,7 @@ pub mod grounding;
 pub mod kind;
 pub mod marks;
 mod negation;
+mod nouns;
 pub mod params;
 pub mod pasted;
 pub mod prompt;
@@ -179,6 +180,8 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     // still takes every hit as an instruction word rather than a name.
     let settled = [negation::settle(text, &cue_hits), questions.clone()].concat();
     let cue_hits = [cue_hits, questions].concat();
+    // "test" in "add a test" names the work rather than adding to it.
+    let settled = nouns::strip(text, &cue_hits, settled);
 
     let cues = axes::distinct_by_category(&settled);
     let smells = axes::total_by_category(&smell_hits);
@@ -858,6 +861,39 @@ mod tests {
         assert_eq!(
             component(&s.actionability, "singularity"),
             params::actionability::SINGULARITY_MAX
+        );
+    }
+
+    #[test]
+    fn an_action_word_used_as_a_noun_is_not_a_second_objective() {
+        // Each of these asks for one thing, and each kept 29.6 of the 40
+        // singularity points. "add a run script" fell from 527.1 to 511.1
+        // when "run" became an action.
+        for text in [
+            "add a test for verify_token",
+            "fix the failing test in tests/auth.rs",
+            "add a run script to package.json",
+            "make the test run faster",
+            "the test run is flaky, fix the retry in tests/auth.rs",
+        ] {
+            let s = score(text).unwrap();
+            assert_eq!(
+                component(&s.actionability, "objective"),
+                params::actionability::OBJECTIVE_MAX,
+                "{text}"
+            );
+            assert_eq!(
+                component(&s.actionability, "singularity"),
+                params::actionability::SINGULARITY_MAX,
+                "{text}: {}",
+                s.actionability.components[1].detail
+            );
+        }
+        // Two requests are still two.
+        let s = score("Make the login return a 401 when the password is empty, and add a test.")
+            .unwrap();
+        assert!(
+            component(&s.actionability, "singularity") < params::actionability::SINGULARITY_MAX
         );
     }
 
