@@ -24,6 +24,11 @@
 [Opus] ~/proj main 42% ctx  ⟦ 742.3 ▓▓▓▓▓▓▓░░░ A- ▲ ⟧
 ```
 
+<p align="center">
+  <img src="docs/og.png" width="720"
+       alt="&quot;fix the bug&quot; scores 305.4, an F. A prompt that names the file, the function and when it is done scores 740.5, a B+.">
+</p>
+
 Every prompt you send gets a 0 to 1000 score in the status line, before the
 model answers. The score says how well a coding agent can act on the prompt
 *in this repository*: whether the things you name exist, whether they point at
@@ -152,14 +157,14 @@ incomplete variants. 771 pairs where the worse side is known.
 | | Pairs | Original scores higher |
 |---|---:|---:|
 | Defects visible in the text | 399 | **65.9%** |
-| All pairs | 771 | 53.0% |
+| All pairs | 771 | 53.3% |
 
 | Defect | Pairs | Correct |
 |---|---:|---:|
-| incompleteness | 164 | 80.5% |
-| ambiguity + incompleteness | 71 | 78.9% |
-| ambiguity | 164 | 42.7% |
-| inconsistency | 163 | 24.5%, 99 ties |
+| incompleteness | 164 | 83.5% |
+| ambiguity + incompleteness | 71 | 77.5% |
+| ambiguity | 164 | 43.3% |
+| inconsistency | 163 | 24.5%, 98 ties |
 
 Inconsistency is out of reach for a lexical scorer. HumanEvalComm makes a
 docstring inconsistent by contradicting its worked example, for instance
@@ -181,16 +186,16 @@ same number both times.
 | Comparison | Issues | Own repo scores higher | Mean margin |
 |---|---:|---:|---:|
 | vs the mean foreign repo | 270 | **87.4%** | +42.7 |
-| vs the best foreign repo | 270 | 66.3% | +24.1 |
+| vs the best foreign repo | 270 | 69.6% | +25.4 |
 
 | Repository | Issues | Own repo higher |
 |---|---:|---:|
 | scikit-learn | 23 | 100.0% |
 | matplotlib | 23 | 95.7% |
-| sympy | 77 | 90.9% |
-| django | 114 | 88.6% |
+| django | 114 | 89.5% |
+| sympy | 77 | 87.0% |
 | pytest | 17 | 76.5% |
-| sphinx | 16 | 43.8% |
+| sphinx | 16 | 56.2% |
 
 The first run was 47.0%, below chance. The specificity measure was inverted:
 it smoothed unseen terms as maximally distinctive, so the further a prompt was
@@ -199,14 +204,14 @@ Resolution was a flat average over 100+ names, so the one name that mattered
 counted for nothing. Details and the fixes are in
 [bench/grounding.md](bench/grounding.md).
 
-sphinx is still below chance, and part of that is real: every project here
+sphinx is barely above chance, and part of that is real: every project here
 builds its docs with sphinx, so sphinx's vocabulary lives in all of them.
 
 ### Korean
 
 A 32-prompt fixture in five tiers, from a held-down key to a full request.
-Cross-tier ordering went from 74.4% to **98.5%** with no change to the English
-numbers. The fixture runs in CI. See [bench/korean.md](bench/korean.md).
+Cross-tier ordering went from 74.4% to **97.5%** (385 of 395 pairs) with no
+change to the English numbers. The fixture runs in CI. See [bench/korean.md](bench/korean.md).
 
 ### Caveats
 
