@@ -8,41 +8,61 @@
 # with an F. Follow-ups are not graded and not recorded.
 #
 # A prompt is a follow-up only when *every* word in it is covered by these
-# terms. Fillers ("please", "hmm"), punctuation and emoji are skipped; any
-# other word -- a name, a path, an action verb, a pronoun that points at
-# something -- makes it a task again, graded exactly as before. So:
+# terms. Fillers ("please", "hmm", "haha"), punctuation and unlisted emoji are
+# skipped; any other word -- a name, a path, an action verb, a pronoun that
+# points at something -- makes it a task again, graded exactly as before. So:
 #   - No term may name work on its own. "fix", "test" and "commit" are absent
-#     on purpose, and "it" appears only inside the fixed phrase "do it".
-#     "do that" is absent too: "그거 다시 해줘" has to stay a task, and
-#     "do that again" is its English twin.
+#     on purpose, and "it" appears only inside fixed phrases such as "do it",
+#     "skip it" and "it worked". "do that" is absent too: "그거 다시 해줘" has
+#     to stay a task, and "do that again" is its English twin.
 #   - "retry" is also an action verb in cues.en.toml. Alone it can only mean
 #     the last thing again; with an object ("retry the upload") it is a task.
 #     "correct" is the same: alone it agrees, and "correct the typo" is a
 #     task. "that's correct" is "that's" and "correct", so no term carries
-#     the verb inside a longer phrase.
+#     the verb inside a longer phrase -- except "move on", which moves
+#     nothing.
 #
 # Terms are matched word by word, case-insensitively, and a prompt may chain
 # them: "continue" and "from where you left off" together are Claude Code's
-# own resume prompt, "Continue from where you left off." "#" stands for a
-# choice: a number of one or two digits, or a letter from a to d: "2",
-# "option 2", "b".
+# own resume prompt, "Continue from where you left off." A contraction is one
+# word, typed with a straight or a curly apostrophe: "let's", "that’s".
+#
+# "#" stands for a choice: a number of one or two digits, a letter from a to
+# d, or a number or a place in a list spelled out, up to four: "2",
+# "option 2", "b", "option two", "2nd". "one" is a choice too, so "one sec"
+# also covers "a sec", and "the #" followed by "#" is "the second one".
+#
+# A group marked `lead` opens a reply and is not one on its own: "let's" and
+# "yes to" need what follows them, as in "let's continue" and "yes to both".
 #
 # The ids only group the terms for the reader; matching treats them alike.
 # followups.ko.toml keeps the same ids, so a group added here gets its Korean
-# counterpart there.
+# counterpart there. Emoji are listed here once and serve both languages.
 
 lang = "en"
 
 [[reply]]
 id = "affirm"
 terms = [
-  "yes", "y", "yeah", "yea", "yep", "yup", "ya", "sure", "sure thing",
-  "ok", "okay", "k", "kk", "alright", "all right", "right", "exactly",
-  "agreed", "absolutely", "of course", "sounds good", "looks good", "lgtm",
-  "good", "great", "perfect", "nice", "cool", "awesome", "fine",
-  "that works", "works for me", "that's fine", "that's right",
-  "makes sense", "got it", "understood", "noted", "correct", "sgtm", "+1",
-  "that's", "that is",
+  "yes", "y", "yeah", "yea", "yep", "yup", "ya", "yas", "yass", "yes sir",
+  "yessir", "sure", "sure thing", "ok", "okay", "k", "kk", "okk", "oki",
+  "okie", "okey", "okey dokey", "okie dokie", "alright", "all right", "right",
+  "exactly", "agreed", "agree", "i agree", "absolutely", "definitely",
+  "of course", "indeed", "sounds good", "sounds great", "sounds fine",
+  "sounds right", "sounds like a plan", "looks good", "looks great",
+  "looks fine", "looks right", "seems good", "seems fine", "seems right",
+  "to me", "lgtm", "sgtm", "+1", "good", "great", "perfect", "nice", "cool",
+  "awesome", "fine", "excellent", "amazing", "wonderful", "brilliant",
+  "fantastic", "sweet", "neat", "better", "much better", "good idea",
+  "great idea", "good call", "good to go", "fine by me", "ok by me",
+  "works for me", "that works", "approved", "accepted", "confirmed",
+  "confirm", "ah", "oh", "aha", "i see", "makes sense", "got it",
+  "understood", "noted", "correct", "that's", "that is", "that's fine",
+  "that's right", "that's it", "what i meant", "it's fine", "it's ok",
+  "it's okay", "its fine", "its ok", "is fine", "is good", "is better",
+  "is best",
+  "👍", "👌", "✅", "✔", "☑", "🆗", "💯", "🙌", "👏", "🎉", "🙂", "😊", "😀", "😃",
+  "😄", "😁",
 ]
 
 # What the user reports back. Asked, a report asks for one -- "done?" wants
@@ -51,47 +71,83 @@ terms = [
 [[reply]]
 id = "report"
 statement = true
-terms = ["done"]
+terms = [
+  "done", "i'm done", "im done", "i did it", "did it", "finished", "ready",
+  "i'm ready", "it worked", "that worked", "worked", "it works", "works",
+  "working", "it's working", "fixed", "fixed it", "that fixed it",
+  "it's fixed",
+]
 
 [[reply]]
 id = "decline"
-terms = ["no", "n", "nope", "nah", "not yet", "not now", "no thanks"]
+terms = [
+  "no", "n", "nope", "nah", "not yet", "not now", "no thanks", "no need",
+  "not needed", "not really", "later", "maybe later",
+  "👎", "❌", "✖", "🙅",
+]
 
 [[reply]]
 id = "proceed"
 terms = [
-  "continue", "proceed", "go", "go ahead", "go on", "keep going",
-  "carry on", "resume", "next", "do it", "go for it", "let's go", "lets go",
+  "continue", "cont", "proceed", "go", "go ahead", "go on", "keep going",
+  "carry on", "resume", "start", "next", "the next", "to the next",
+  "with the next", "on to the next", "step", "to step", "with step",
+  "the rest", "with the rest", "do", "do it", "with it", "go for it",
+  "get on with it", "keep at it", "move on", "skip", "skip it",
   "where you left off", "from where you left off", "with the plan",
+  "until you're done", "until it's done", "until done", "till done",
+  "🚀", "▶", "⏩", "➡",
 ]
 
 [[reply]]
 id = "halt"
 terms = [
-  "stop", "wait", "hold on", "hang on", "cancel", "abort", "pause",
-  "never mind", "nevermind", "nvm", "don't", "dont", "do not",
+  "stop", "wait", "hold on", "hold up", "hang on", "one sec", "one moment",
+  "one minute", "give me a sec", "cancel", "abort", "pause", "never mind",
+  "nevermind", "nvm", "forget it", "forget about it", "enough", "don't",
+  "dont", "do not",
+  "🛑", "✋", "⏸", "⏹", "⛔",
 ]
 
 [[reply]]
 id = "retry"
-terms = ["again", "try again", "retry", "redo", "one more time", "once more"]
+terms = [
+  "again", "try again", "retry", "redo", "one more time", "once more",
+  "try once more", "try one more time",
+  "🔁", "🔄",
+]
 
 [[reply]]
 id = "thank"
 terms = [
   "thanks", "thank you", "thx", "ty", "tysm", "cheers", "appreciate it",
-  "much appreciated", "good job", "great job", "nice job", "nice work",
-  "well done",
+  "appreciated", "much appreciated", "thanks a lot", "thanks a bunch",
+  "thanks so much", "thank you so much", "thanks very much",
+  "thank you very much", "many thanks", "good job", "great job", "nice job",
+  "nice work", "good work", "great work", "excellent work", "amazing work",
+  "awesome work", "well done",
+  "🙏", "❤", "♥",
 ]
 
 [[reply]]
 id = "choose"
 terms = [
-  "#", "option #", "number #", "both", "either", "either one", "neither",
-  "first one", "second one", "third one", "the first one",
-  "the second one", "the third one", "go with",
+  "#", "option #", "number #", "approach #", "choice #", "the #", "# option",
+  "the # option", "# approach", "the # approach", "# choice", "the # choice",
+  "both", "both of them", "either", "neither", "all", "all of them",
+  "all of the above", "any", "any of them", "whichever", "last", "the last",
+  "latter", "the latter", "former", "the former", "go with", "your call",
+  "your choice", "up to you", "you decide", "you choose", "you pick",
+  "whatever", "whatever you think", "whatever works", "whatever you prefer",
 ]
 
 [[reply]]
 id = "join"
-terms = ["and", "then", "and then", "just", "now"]
+terms = ["and", "then", "and then", "just", "now", "actually"]
+
+# Each of these opens a reply: "let's continue", "I'd go with b", "yes to
+# both". On its own, "let's" asks nothing.
+[[reply]]
+id = "lead"
+lead = true
+terms = ["let's", "lets", "let us", "yes to", "i'd", "i'll", "i would", "i will"]

@@ -106,7 +106,7 @@ pub fn run() -> ExitCode {
     // The sidecar keeps the last task, which is what the status line and
     // `/score` should still be showing.
     let (kind, _) = yp_core::kind_of(&input.prompt);
-    if matches!(kind, Kind::Command | Kind::FollowUp) {
+    if matches!(kind, Kind::Command | Kind::FollowUp | Kind::Automated) {
         debug(&format!(
             "session={} kind={kind:?}; not recorded",
             input.session_id

@@ -92,6 +92,7 @@ pub fn not_graded(kind: Kind, language: Option<&str>) -> Option<String> {
             None => "looks like neither English nor Korean, the only languages yourprompt reads"
                 .to_string(),
         }),
+        Kind::Automated => Some("Claude Code sent this turn, not you".to_string()),
     }
 }
 
@@ -226,6 +227,10 @@ mod tests {
                 "arregla el bug en src/auth/login.rs para que verify_token devuelva \
                  Err(AuthError::Expired). Los tests deben pasar.",
                 "looks like Spanish; yourprompt reads English and Korean only",
+            ),
+            (
+                "<task-notification>\n<status>completed</status>\n</task-notification>",
+                "Claude Code sent this turn, not you",
             ),
         ] {
             let s = score(text);
