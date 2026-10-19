@@ -10,7 +10,10 @@
 //!
 //! Code is set aside first. Fences, inline spans, paths, URLs and identifiers
 //! read the same in every language, and in a prompt about `verify_token` in
-//! `src/auth/login.rs` they can outweigh the prose around them.
+//! `src/auth/login.rs` they can outweigh the prose around them. A comment
+//! beside unfenced code is the code's too: "# Berechne die Summe der Werte"
+//! over `def total(values):` made a prompt that asked "add docstrings" under
+//! it read as German.
 //!
 //! Quotations are set aside next, because the language of a quotation is not
 //! the language of the prompt: "ru.json has 'Сохранить' twice" is an English
@@ -19,12 +22,14 @@
 //!
 //! What is left is judged in this order:
 //!
-//! - **Hangul anywhere** means Korean, and **one English word** from a list
-//!   of common ones means English or a mix with it. Both are read, so both
-//!   are tasks.
+//! - **Hangul anywhere** means Korean, and a request about text in another
+//!   language -- "translate", "summarize", "TL;DR" -- is made in English.
+//!   Both are read, so both are tasks.
 //! - **Script.** Kana is Japanese; Han without kana is Chinese; Cyrillic,
 //!   Greek, Arabic, Hebrew, Thai and Devanagari each name a language. The
-//!   script has to outweigh the Latin prose around it.
+//!   script has to outweigh the Latin prose around it, and that prose must
+//!   hold no English: "npm install fails with: Не удалось найти указанный
+//!   файл" pastes an error message into a request made in English.
 //! - **Function words**, for Latin script. Every language has a few dozen
 //!   short words that hold its sentences together and are not English --
 //!   "que", "und", "het", "için" -- and a handful of verbs every request
@@ -32,12 +37,24 @@
 //!   same language, in a prompt of at least four words, decide it. From
 //!   three words on, so does stronger evidence: two that no list of locale
 //!   codes could hold, "behebe den Login-Fehler", or one of those and a word
-//!   with a letter English does not use, "napraw błąd w logowaniu".
+//!   with a letter English does not use, "napraw błąd w logowaniu". English
+//!   words in the same prose count against them.
+//!
+//! # Borrowed words
+//!
+//! A sentence that mixes two languages takes its grammar from one of them
+//! and borrows nouns and verbs from the other: "このbugをfixして", "haz un
+//! fix rápido del login". So what tells English is its grammar -- "the",
+//! "with", "it's", "should" -- and a request verb says nothing about the
+//! language around it. Read the other way, one "fix", "update" or "run" was
+//! enough to make a prompt English, and each of 22 such prompts was graded,
+//! as low as 153.9.
 //!
 //! Every rule leans toward reading the prompt. A wrong "unsupported" hides a
 //! real prompt's grade; a wrong "task" only grades a foreign prompt badly,
 //! which is what happened to every one of them before.
 
+use crate::span::Span;
 use crate::token::{code_regions, is_hangul};
 
 /// A prompt written in a language the lexicons do not read.
@@ -66,6 +83,21 @@ const MIN_SHORT_WORDS: usize = 3;
 /// Distinct function words of one language needed to name it.
 const MIN_FUNCTION_WORDS: usize = 2;
 
+/// Function words of another language needed for each English word before
+/// the prose is that language. "à la carte pricing broken" has two French
+/// ones to one English word, and is an English report; "arregla el bug para
+/// que funcione, it's broken since the last deploy" has four of each, and
+/// is read. A few English words are words of other languages too and stay
+/// on the list, because a sentence outweighs them: "Le but est de corriger
+/// le login" has three French ones to its "but", which is French for "aim".
+///
+/// The other language's words are counted once each, as they are to name
+/// it, and English words every time they are used, which leans toward
+/// reading: "The Spanish string in es.json reads: La sesión ha expirado, por
+/// favor inicia sesión de nuevo. Fix the typo." says "the" twice to three
+/// Spanish words, and asks in English.
+const FOREIGN_PER_ENGLISH: usize = 3;
+
 /// Lowercase words that sit inside names: "Ursula von der Leyen", "Vincent
 /// van Gogh", "José de la Cruz". Each also spells a function word, and "Seed
 /// users: Ursula von der Leyen, Mark van der Berg" was reported as German.
@@ -78,22 +110,27 @@ const NAME_PARTICLES: &[&str] = &[
     "da", "de", "den", "der", "di", "dos", "la", "van", "von", "zu",
 ];
 
-/// English words that settle the question: a prompt containing one is
-/// English, or a mix the lexicons can still read.
+/// English words, each a sign that the prose around it is English.
 ///
-/// Function words and the commonest request verbs, minus every word that is
-/// also a word in one of the languages below. "a", "in", "no", "do", "to",
-/// "of", "was", "will" and "also" each mean something else somewhere, so
-/// they are evidence of nothing. "has" is Spanish too, "¿por qué has
-/// borrado el test?"; "for" is Danish and Norwegian, "i stedet for"; "are"
-/// is Romanian for "has", and "add hozzá" is Hungarian for "add it". Each
-/// of them made a prompt in those languages read as English.
+/// Function words and the few words a terse report is made of, minus every
+/// one that is also a word in one of the languages below. "a", "in", "no",
+/// "do", "to", "of", "was", "will" and "also" each mean something else
+/// somewhere, so they are evidence of nothing. "has" is Spanish too, "¿por
+/// qué has borrado el test?"; "for" is Danish and Norwegian, "i stedet for";
+/// "are" is Romanian for "has"; "add hozzá" is Hungarian for "add it"; and
+/// "dont" is French, "le fichier dont il a besoin". Each of them made a
+/// prompt in those languages read as English.
 ///
-/// "english", "translate" and "summarize" are here because a request about
-/// text in another language says in English what to do with it. "missing",
-/// "broken", "fails" and "failing" are how a terse report says what is
-/// wrong, and in "café con leche option missing" they are the only English
-/// a short phrase borrowed from another language leaves. Sorted, for
+/// The verbs a request is made of are left off as well, because another
+/// language borrows them (see the module notes), and some are its own words
+/// already: "change" is French, "find" Danish and Norwegian, "help" Dutch,
+/// and "use", "move" and "remove" are how Portuguese asks for those. A
+/// 33-word French request that said "Ne change pas la signature publique"
+/// was graded C.
+///
+/// "missing", "broken", "fails" and "failing" are how a terse report says
+/// what is wrong, and in "café con leche option missing" they are the only
+/// English a short phrase borrowed from another language leaves. Sorted, for
 /// binary search.
 const ENGLISH: &[&str] = &[
     "about",
@@ -119,11 +156,8 @@ const ENGLISH: &[&str] = &[
     "can't",
     "cannot",
     "cant",
-    "change",
     "could",
     "couldn't",
-    "create",
-    "delete",
     "did",
     "didn't",
     "does",
@@ -131,24 +165,16 @@ const ENGLISH: &[&str] = &[
     "doing",
     "don't",
     "done",
-    "dont",
     "each",
-    "english",
     "every",
-    "explain",
     "failing",
     "fails",
     "few",
-    "find",
-    "fix",
     "from",
-    "get",
-    "give",
     "going",
     "had",
     "have",
     "having",
-    "help",
     "here",
     "how",
     "however",
@@ -161,24 +187,18 @@ const ENGLISH: &[&str] = &[
     "it's",
     "its",
     "just",
-    "keep",
-    "know",
     "least",
     "less",
     "let",
     "let's",
     "like",
-    "look",
-    "make",
     "many",
     "might",
     "missing",
     "more",
-    "move",
     "much",
     "must",
     "my",
-    "need",
     "never",
     "not",
     "nothing",
@@ -192,27 +212,16 @@ const ENGLISH: &[&str] = &[
     "please",
     "rather",
     "really",
-    "remove",
-    "rename",
-    "replace",
-    "run",
     "same",
-    "say",
-    "see",
-    "set",
     "she",
     "should",
     "shouldn't",
-    "show",
     "since",
     "some",
     "something",
     "still",
     "such",
-    "summarise",
-    "summarize",
     "sure",
-    "take",
     "than",
     "that",
     "that's",
@@ -228,18 +237,11 @@ const ENGLISH: &[&str] = &[
     "those",
     "though",
     "through",
-    "tldr",
     "too",
-    "translate",
-    "translation",
-    "try",
     "until",
-    "update",
     "upon",
     "us",
-    "use",
     "very",
-    "want",
     "wasn't",
     "we",
     "well",
@@ -259,11 +261,24 @@ const ENGLISH: &[&str] = &[
     "won't",
     "would",
     "wouldn't",
-    "write",
     "yet",
     "you",
     "you're",
     "your",
+];
+
+/// Words with which an English request says what to do with text in another
+/// language. One settles the question however much of that text follows:
+/// "Summarize: Dieses Modul kümmert sich um die Anmeldung der Benutzer" has
+/// four German function words to its one English word. Sorted, for binary
+/// search.
+const ABOUT_LANGUAGE: &[&str] = &[
+    "english",
+    "summarise",
+    "summarize",
+    "tldr",
+    "translate",
+    "translation",
 ];
 
 /// The function words of the Latin-script languages most likely to turn up,
@@ -273,31 +288,91 @@ const ENGLISH: &[&str] = &[
 /// Words that read as English are left out even where they are the
 /// commonest word of their language: Italian "per", German "die", Dutch
 /// "van" and "op", Polish "to" and "ten", Turkish "ve" (what "I've" leaves
-/// behind), Danish "at" and "for", Hungarian "add", "is" and "van".
+/// behind), Danish "at" and "for", Hungarian "add", "is" and "van", French
+/// "pour" and "comment". So are words English prompts use in their own
+/// sense: "dir", "bin", "min" and "deg" are a directory, a folder, a minimum
+/// and degrees, and "todo" and "todos" are what is left to do.
 /// Spanish "del" is a Python keyword, but it takes a second Spanish word to
 /// count, and leaving it out let "arregla el error del login" be graded.
 /// An elided article or pronoun is listed with its apostrophe, "l'" and
 /// "dell'", and is read off the front of the word it is joined to.
 ///
 /// The verbs are what a short request has instead of function words:
-/// "corrija o erro de login" holds one function word and its verb. The
-/// lists may share words with each other; the language with the most
-/// distinct matches wins. Each list is sorted, for binary search.
+/// "corrija o erro de login" holds one function word and its verb. So are
+/// the question words and the commonest auxiliaries, because a short
+/// question has little else: "pourquoi ce test échoue ?", "waarom faalt
+/// deze test?" and "dlaczego ten test nie przechodzi?" were each graded D,
+/// 356.4 or 357.3, until "pourquoi", "waarom" and "dlaczego" were listed.
+/// French asks by putting the pronoun after the verb, and a hyphen keeps
+/// the pair one word, so "peux-tu" and "est-ce" are listed as they are
+/// written. The lists may share words with each other; the language with
+/// the most distinct matches wins. Each list is sorted, for binary search.
 const FUNCTION_WORDS: &[(&str, &[&str])] = &[
     (
         "Czech",
         &[
-            "aby", "bude", "být", "jak", "jen", "ještě", "když", "která", "které", "který", "musí",
-            "místo", "napiš", "nebo", "není", "odstraň", "oprav", "pokud", "pouze", "proč", "při",
-            "přidej", "tak", "také", "tento", "toto", "uprav", "už", "změň", "že",
+            "aby",
+            "bude",
+            "byl",
+            "bylo",
+            "být",
+            "chyba",
+            "chybu",
+            "co",
+            "funguje",
+            "jak",
+            "jaká",
+            "jaké",
+            "jaký",
+            "je",
+            "jen",
+            "ještě",
+            "jsou",
+            "kde",
+            "kdy",
+            "když",
+            "která",
+            "které",
+            "který",
+            "musí",
+            "místo",
+            "můžete",
+            "můžeš",
+            "napiš",
+            "nebo",
+            "nefunguje",
+            "není",
+            "odstraň",
+            "oprav",
+            "padá",
+            "pokud",
+            "pouze",
+            "prosím",
+            "proč",
+            "při",
+            "přidej",
+            "spusť",
+            "tak",
+            "také",
+            "tento",
+            "toto",
+            "udělej",
+            "uprav",
+            "už",
+            "zkontroluj",
+            "změň",
+            "že",
         ],
     ),
     (
         "Danish",
         &[
-            "alle", "den", "denne", "det", "dette", "efter", "eller", "fejl", "fejlen", "fjern",
-            "fra", "har", "hvad", "hvordan", "hvorfor", "ikke", "jeg", "kan", "med", "når", "og",
-            "også", "opdater", "på", "rette", "skal", "skriv", "som", "så", "tilføj", "være",
+            "alle", "blev", "bliver", "den", "denne", "det", "dette", "din", "dit", "du", "efter",
+            "eller", "fejl", "fejlen", "fejler", "fjern", "fordi", "fra", "gør", "har", "hvad",
+            "hvilke", "hvilken", "hvis", "hvor", "hvordan", "hvorfor", "hvornår", "ikke", "jeg",
+            "kan", "kunne", "kør", "køre", "med", "mig", "mit", "må", "når", "og", "også", "om",
+            "opdater", "på", "ret", "rette", "skal", "skriv", "skulle", "som", "så", "tak", "til",
+            "tilføj", "tjek", "ud", "uden", "ved", "venligst", "vil", "ville", "virker", "være",
             "ændr",
         ],
     ),
@@ -305,109 +380,318 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
         "Dutch",
         &[
             "aan",
+            "al",
+            "alles",
             "als",
+            "alsjeblieft",
+            "altijd",
+            "bedankt",
+            "ben",
             "bij",
+            "daar",
+            "dan",
             "dat",
             "de",
             "deze",
             "dit",
+            "doen",
             "een",
             "en",
+            "faalt",
+            "gaat",
             "geen",
             "graag",
+            "heb",
+            "hebben",
+            "heeft",
             "herstel",
             "het",
+            "hier",
+            "hoe",
+            "iets",
+            "je",
+            "jij",
+            "jouw",
             "kan",
+            "kijk",
+            "kun",
+            "kunnen",
+            "kunt",
             "maak",
             "maar",
+            "mijn",
             "moet",
             "moeten",
             "naar",
             "niet",
+            "niets",
             "nog",
+            "nooit",
+            "nu",
+            "om",
+            "ons",
+            "onze",
             "ook",
+            "pas",
             "repareer",
             "schrijf",
+            "sinds",
             "te",
+            "uit",
             "verwijder",
             "voeg",
             "voor",
+            "waar",
+            "waarom",
+            "wanneer",
             "wat",
+            "weer",
             "wel",
+            "welke",
+            "werd",
+            "werkt",
             "wijzig",
+            "wil",
+            "wilt",
             "worden",
             "wordt",
             "zal",
+            "ze",
+            "zij",
             "zijn",
+            "zo",
             "zodat",
+            "zoek",
+            "zou",
         ],
     ),
     (
         "Finnish",
         &[
+            "aja",
             "ei",
             "ennen",
+            "epäonnistuu",
             "että",
             "ja",
+            "jo",
             "jos",
             "jotta",
             "kaikki",
             "kanssa",
+            "kiitos",
             "kirjoita",
             "korjaa",
             "kun",
             "lisää",
             "miksi",
+            "mikä",
+            "milloin",
+            "minun",
+            "minä",
+            "missä",
             "miten",
+            "mitä",
             "mutta",
             "muuta",
             "myös",
             "niin",
+            "nyt",
             "ole",
             "olla",
+            "pitää",
             "poista",
             "päivitä",
             "sen",
+            "siis",
             "siitä",
+            "sinun",
+            "sinä",
             "sitä",
             "tai",
+            "tarkista",
+            "toimi",
+            "toimii",
             "tämä",
             "tässä",
+            "täytyy",
+            "vain",
             "vielä",
+            "virhe",
+            "virheen",
+            "virheet",
+            "voisitko",
+            "voit",
+            "voitko",
         ],
     ),
     (
         "French",
         &[
-            "ajoute", "au", "avec", "c'est", "ce", "cette", "corrige", "crée", "d'", "dans", "de",
-            "des", "du", "elle", "en", "enlève", "est", "et", "fais", "il", "j'", "je", "l'", "la",
-            "le", "les", "m'", "mais", "modifie", "n'", "ne", "nous", "ou", "où", "pas", "qu'",
-            "que", "qui", "remplace", "répare", "s'", "se", "sont", "supprime", "sur", "un", "une",
-            "vous", "vérifie", "à", "ça", "écris", "être",
+            "aide-moi",
+            "ajoute",
+            "après",
+            "au",
+            "aussi",
+            "avec",
+            "avez",
+            "avons",
+            "c'est",
+            "ce",
+            "ceci",
+            "cela",
+            "cette",
+            "chez",
+            "corrige",
+            "crée",
+            "d'",
+            "dans",
+            "de",
+            "depuis",
+            "des",
+            "devrait",
+            "dis-moi",
+            "dois",
+            "doit",
+            "doivent",
+            "donc",
+            "du",
+            "elle",
+            "en",
+            "enlève",
+            "entre",
+            "erreur",
+            "est",
+            "est-ce",
+            "est-il",
+            "et",
+            "explique",
+            "explique-moi",
+            "exécute",
+            "faire",
+            "fais",
+            "faut",
+            "fonctionne",
+            "il",
+            "j'",
+            "jamais",
+            "je",
+            "l'",
+            "la",
+            "le",
+            "les",
+            "leur",
+            "leurs",
+            "lui",
+            "m'",
+            "ma",
+            "mais",
+            "marche",
+            "merci",
+            "mes",
+            "mets",
+            "modifie",
+            "moi",
+            "mon",
+            "montre-moi",
+            "n'",
+            "ne",
+            "nous",
+            "ont",
+            "ou",
+            "où",
+            "pas",
+            "peut",
+            "peut-on",
+            "peux",
+            "peux-tu",
+            "plante",
+            "pourquoi",
+            "pourrais",
+            "pourriez",
+            "pouvez",
+            "pouvez-vous",
+            "qu'",
+            "quand",
+            "que",
+            "quel",
+            "quelle",
+            "quelles",
+            "quels",
+            "qui",
+            "regarde",
+            "remplace",
+            "renomme",
+            "rien",
+            "répare",
+            "s'",
+            "sa",
+            "se",
+            "ses",
+            "sont",
+            "stp",
+            "supprime",
+            "sur",
+            "svp",
+            "te",
+            "tes",
+            "toi",
+            "toujours",
+            "tous",
+            "toutes",
+            "très",
+            "tu",
+            "un",
+            "une",
+            "vers",
+            "veux",
+            "voudrais",
+            "vous",
+            "vérifie",
+            "à",
+            "ça",
+            "échoue",
+            "écris",
+            "était",
+            "été",
+            "être",
         ],
     ),
     (
         "German",
         &[
+            "aber",
             "aktualisiere",
+            "alle",
+            "alles",
             "auch",
             "auf",
             "aus",
             "behebe",
             "bei",
             "beim",
+            "bis",
+            "bist",
             "bitte",
+            "brauche",
             "damit",
+            "danke",
             "dann",
+            "darf",
             "das",
             "dass",
+            "dein",
+            "deine",
             "dem",
             "den",
             "der",
             "des",
+            "dich",
             "diese",
             "dieser",
             "dieses",
+            "doch",
+            "du",
             "durch",
             "ein",
             "eine",
@@ -415,51 +699,103 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
             "einen",
             "einer",
             "entferne",
+            "erkläre",
             "ersetze",
             "erstelle",
             "es",
+            "etwas",
+            "euch",
+            "funktioniert",
             "füge",
             "für",
+            "gegen",
+            "geht",
+            "gibt",
+            "habe",
             "haben",
+            "hast",
+            "hier",
             "ich",
+            "ihr",
+            "ihre",
             "im",
+            "immer",
             "ins",
             "ist",
+            "jetzt",
             "kann",
+            "kannst",
+            "kein",
+            "keine",
             "korrigiere",
             "können",
+            "könntest",
+            "lass",
             "lösche",
             "mach",
             "mache",
+            "mein",
+            "meine",
+            "mich",
+            "mir",
             "mit",
             "muss",
+            "möchte",
             "müssen",
             "nach",
+            "nein",
             "nicht",
+            "nichts",
             "noch",
             "nur",
+            "ob",
             "oder",
+            "ohne",
             "prüfe",
             "repariere",
+            "schau",
+            "schlägt",
+            "schon",
             "schreibe",
+            "sehr",
+            "seit",
             "sich",
             "sie",
             "sind",
             "soll",
             "sollen",
             "sollte",
+            "starte",
+            "um",
             "und",
+            "uns",
+            "unsere",
+            "viel",
             "vom",
             "von",
+            "vor",
+            "wann",
             "warum",
+            "weil",
+            "welche",
+            "welcher",
+            "welches",
             "wenn",
             "werden",
+            "weshalb",
             "wie",
+            "wieder",
+            "wieso",
             "wir",
             "wird",
+            "wo",
+            "worden",
+            "wurde",
+            "zeig",
             "zu",
             "zum",
             "zur",
+            "zwischen",
             "ändere",
             "über",
         ],
@@ -467,71 +803,144 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
     (
         "Hungarian",
         &[
+            "adj",
             "amely",
             "ami",
             "amit",
+            "az",
+            "azok",
             "azt",
             "csak",
+            "csináld",
             "egy",
+            "ellenőrizd",
             "előtt",
             "esetén",
+            "ez",
+            "ezek",
             "ezt",
             "frissítsd",
+            "futtasd",
             "helyett",
+            "hiba",
+            "hibás",
+            "hibát",
             "hogy",
+            "hogyan",
+            "hol",
+            "itt",
             "javítsd",
             "kell",
+            "kérem",
+            "kérlem",
+            "lehet",
             "lesz",
+            "légyszi",
+            "melyik",
             "mert",
+            "mikor",
+            "minden",
+            "mindig",
+            "mit",
+            "miért",
             "már",
             "még",
             "módosítsd",
+            "működik",
+            "nagyon",
             "nem",
             "nincs",
             "nélkül",
+            "nézd",
+            "ott",
+            "sem",
+            "semmi",
+            "soha",
+            "teszteld",
+            "tudnád",
+            "tudod",
+            "tudsz",
             "töröld",
             "után",
             "vagy",
+            "valami",
             "változtasd",
             "és",
             "írd",
+            "írj",
         ],
     ),
     (
         "Indonesian",
         &[
+            "ada",
+            "adalah",
             "agar",
             "akan",
+            "aku",
             "apa",
             "atau",
             "bagaimana",
+            "bantu",
             "belum",
+            "berhasil",
+            "bikin",
             "bisa",
             "buat",
             "buatkan",
+            "cek",
+            "coba",
             "dalam",
             "dan",
             "dari",
+            "deh",
             "dengan",
             "di",
+            "dimana",
+            "gagal",
+            "gimana",
             "hapus",
             "harus",
             "ini",
             "itu",
+            "jalankan",
             "jika",
             "juga",
             "kalau",
+            "kami",
             "kamu",
+            "kapan",
             "karena",
             "ke",
+            "kemudian",
             "kenapa",
+            "kita",
+            "kok",
+            "lagi",
+            "lalu",
+            "lihat",
+            "masih",
+            "mengapa",
+            "mereka",
+            "mohon",
+            "nanti",
+            "nya",
             "oleh",
             "pada",
             "perbaiki",
             "perbarui",
+            "periksa",
+            "sama",
             "saya",
+            "sekarang",
+            "semua",
+            "setiap",
+            "siapa",
+            "sini",
             "sudah",
             "tambahkan",
+            "tapi",
+            "tetapi",
             "tidak",
             "tolong",
             "tulis",
@@ -543,40 +952,388 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
     (
         "Italian",
         &[
-            "aggiorna", "aggiungi", "al", "all'", "alla", "anche", "che", "con", "correggi",
-            "cosa", "d'", "da", "dal", "dall'", "degli", "dei", "del", "dell'", "della", "delle",
-            "dello", "deve", "di", "fai", "gli", "il", "l'", "la", "le", "lo", "ma", "metti", "mi",
-            "modifica", "nei", "nel", "nell'", "nella", "perché", "più", "puoi", "quando",
-            "questa", "questo", "rimuovi", "scrivi", "se", "si", "sistema", "sono", "sul", "sull'",
-            "togli", "tra", "un", "un'", "una", "è",
+            "abbiamo",
+            "aggiorna",
+            "aggiungi",
+            "al",
+            "all'",
+            "alla",
+            "anche",
+            "ancora",
+            "che",
+            "chi",
+            "con",
+            "controlla",
+            "correggi",
+            "cosa",
+            "d'",
+            "da",
+            "dal",
+            "dall'",
+            "degli",
+            "dei",
+            "del",
+            "dell'",
+            "della",
+            "delle",
+            "dello",
+            "deve",
+            "devi",
+            "di",
+            "dimmi",
+            "dopo",
+            "dove",
+            "errore",
+            "esegui",
+            "essere",
+            "fai",
+            "fallisce",
+            "fammi",
+            "funziona",
+            "già",
+            "gli",
+            "hai",
+            "hanno",
+            "ho",
+            "il",
+            "l'",
+            "la",
+            "le",
+            "lo",
+            "ma",
+            "mai",
+            "metti",
+            "mi",
+            "mia",
+            "mio",
+            "modifica",
+            "molto",
+            "nei",
+            "nel",
+            "nell'",
+            "nella",
+            "niente",
+            "nostro",
+            "ogni",
+            "perché",
+            "più",
+            "posso",
+            "prima",
+            "puoi",
+            "può",
+            "quale",
+            "quali",
+            "quando",
+            "quella",
+            "quello",
+            "questa",
+            "questo",
+            "rimuovi",
+            "scrivi",
+            "se",
+            "sempre",
+            "senza",
+            "si",
+            "sistema",
+            "sono",
+            "stato",
+            "sua",
+            "sul",
+            "sull'",
+            "suo",
+            "togli",
+            "tra",
+            "tua",
+            "tuo",
+            "tutte",
+            "tutti",
+            "tutto",
+            "un",
+            "un'",
+            "una",
+            "viene",
+            "voglio",
+            "vuoi",
+            "è",
         ],
     ),
     (
         "Norwegian",
         &[
-            "alle", "den", "denne", "det", "dette", "eller", "endre", "etter", "feil", "feilen",
-            "fiks", "fjern", "fra", "har", "hva", "hvordan", "hvorfor", "ikke", "jeg", "kan",
-            "legg", "med", "når", "og", "også", "oppdater", "på", "skal", "skriv", "slik", "som",
-            "så", "være",
+            "alle",
+            "av",
+            "ble",
+            "blir",
+            "den",
+            "denne",
+            "det",
+            "dette",
+            "din",
+            "ditt",
+            "du",
+            "eller",
+            "endre",
+            "etter",
+            "feil",
+            "feilen",
+            "feiler",
+            "fiks",
+            "finn",
+            "fjern",
+            "fordi",
+            "fra",
+            "fungerer",
+            "gjør",
+            "har",
+            "hele",
+            "hva",
+            "hvilke",
+            "hvilken",
+            "hvis",
+            "hvor",
+            "hvordan",
+            "hvorfor",
+            "ikke",
+            "jeg",
+            "kan",
+            "kjør",
+            "kjøre",
+            "kunne",
+            "legg",
+            "med",
+            "meg",
+            "mitt",
+            "må",
+            "nå",
+            "når",
+            "og",
+            "også",
+            "om",
+            "opp",
+            "oppdater",
+            "oss",
+            "på",
+            "sjekk",
+            "skal",
+            "skriv",
+            "skulle",
+            "slik",
+            "som",
+            "så",
+            "takk",
+            "til",
+            "ut",
+            "uten",
+            "ved",
+            "vennligst",
+            "vil",
+            "ville",
+            "være",
         ],
     ),
     (
         "Polish",
         &[
-            "aby", "być", "czy", "dla", "dodaj", "gdy", "jak", "jest", "jeszcze", "jeśli", "już",
-            "która", "które", "który", "lub", "może", "musi", "muszą", "na", "napisz", "napraw",
-            "nie", "od", "oraz", "popraw", "proszę", "przez", "się", "sprawdź", "tak", "tego",
-            "tylko", "tym", "usuń", "utwórz", "za", "zamiast", "zmień", "że", "żeby",
+            "aby",
+            "bez",
+            "być",
+            "był",
+            "była",
+            "było",
+            "będzie",
+            "błąd",
+            "błędu",
+            "co",
+            "czemu",
+            "czy",
+            "dla",
+            "dlaczego",
+            "dodaj",
+            "działa",
+            "gdy",
+            "gdzie",
+            "jak",
+            "jaka",
+            "jaki",
+            "jakie",
+            "jej",
+            "jest",
+            "jeszcze",
+            "jeśli",
+            "już",
+            "kiedy",
+            "która",
+            "które",
+            "który",
+            "lub",
+            "mam",
+            "mamy",
+            "mnie",
+            "moja",
+            "moje",
+            "może",
+            "możesz",
+            "musi",
+            "muszą",
+            "mój",
+            "na",
+            "nad",
+            "napisz",
+            "napraw",
+            "nic",
+            "nie",
+            "od",
+            "oraz",
+            "popraw",
+            "proszę",
+            "przed",
+            "przez",
+            "przy",
+            "się",
+            "sprawdź",
+            "są",
+            "tak",
+            "tego",
+            "twój",
+            "tylko",
+            "tym",
+            "uruchom",
+            "usuń",
+            "utwórz",
+            "wszystkie",
+            "wszystko",
+            "za",
+            "zamiast",
+            "zmień",
+            "zrób",
+            "że",
+            "żeby",
         ],
     ),
     (
         "Portuguese",
         &[
-            "adiciona", "adicione", "altere", "ao", "aos", "apague", "arrume", "atualize", "com",
-            "como", "conserte", "corrija", "crie", "da", "das", "de", "em", "escreva", "esta",
-            "este", "está", "faça", "isso", "isto", "mais", "mas", "mude", "na", "nas", "nos",
-            "não", "para", "pela", "pelo", "pode", "por", "que", "remova", "se", "sem", "também",
-            "troque", "uma", "você", "é",
+            "adiciona",
+            "adicione",
+            "ainda",
+            "altere",
+            "antes",
+            "ao",
+            "aos",
+            "apague",
+            "aquela",
+            "aquele",
+            "arrume",
+            "atualize",
+            "até",
+            "com",
+            "como",
+            "consegue",
+            "conserte",
+            "corrija",
+            "crie",
+            "da",
+            "das",
+            "de",
+            "depois",
+            "diz",
+            "dá",
+            "ela",
+            "elas",
+            "ele",
+            "eles",
+            "em",
+            "erro",
+            "escreva",
+            "essa",
+            "essas",
+            "esse",
+            "esses",
+            "esta",
+            "estar",
+            "este",
+            "está",
+            "eu",
+            "explica",
+            "explique",
+            "falha",
+            "falham",
+            "falhando",
+            "faz",
+            "faça",
+            "foi",
+            "isso",
+            "isto",
+            "já",
+            "mais",
+            "mas",
+            "meu",
+            "minha",
+            "mostra",
+            "mostre",
+            "mova",
+            "mude",
+            "muito",
+            "na",
+            "nas",
+            "nos",
+            "nossa",
+            "nosso",
+            "nunca",
+            "não",
+            "olha",
+            "onde",
+            "os",
+            "para",
+            "pela",
+            "pelo",
+            "pode",
+            "poderia",
+            "por",
+            "porque",
+            "porquê",
+            "pra",
+            "precisa",
+            "preciso",
+            "quais",
+            "qual",
+            "quando",
+            "que",
+            "quebrado",
+            "quebrando",
+            "quero",
+            "remova",
+            "renomeie",
+            "roda",
+            "rodar",
+            "se",
+            "sem",
+            "sempre",
+            "ser",
+            "seu",
+            "sua",
+            "são",
+            "só",
+            "também",
+            "tem",
+            "ter",
+            "testa",
+            "todas",
+            "troque",
+            "tudo",
+            "tá",
+            "têm",
+            "tô",
+            "um",
+            "uma",
+            "umas",
+            "uns",
+            "vai",
+            "veja",
+            "verifique",
+            "você",
+            "vou",
+            "é",
         ],
     ),
     (
@@ -587,28 +1344,61 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
             "acest",
             "acum",
             "adaugă",
+            "asta",
             "astfel",
+            "avea",
+            "ce",
+            "cine",
+            "cu",
             "când",
             "că",
             "dacă",
             "dar",
+            "din",
             "doar",
+            "după",
+            "ea",
+            "eroare",
+            "eroarea",
+            "erori",
             "este",
+            "eu",
+            "eșuează",
+            "fiecare",
+            "fost",
+            "fă",
             "fără",
+            "lor",
             "mai",
+            "mea",
+            "meu",
             "modifică",
+            "nimic",
+            "noi",
             "nu",
             "pe",
             "pentru",
+            "poate",
+            "poți",
+            "prin",
             "repară",
+            "rulează",
             "sau",
             "schimbă",
             "scrie",
+            "sunt",
             "să",
+            "toate",
             "trebuie",
+            "tu",
+            "tău",
             "unde",
+            "verifică",
+            "voi",
+            "îmi",
             "în",
             "încât",
+            "ăsta",
             "şi",
             "şterge",
             "și",
@@ -620,24 +1410,37 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
         &[
             "actualiza",
             "agrega",
+            "ahora",
             "al",
+            "aquí",
             "arregla",
             "añade",
             "borra",
+            "cada",
             "cambia",
             "como",
             "con",
+            "corre",
             "corrige",
             "crea",
             "cuando",
+            "cuál",
+            "cuáles",
+            "cuándo",
+            "cómo",
             "de",
             "debe",
             "deben",
+            "decirme",
             "del",
+            "desde",
             "donde",
+            "dónde",
+            "ejecuta",
             "el",
             "elimina",
             "en",
+            "entre",
             "es",
             "escribe",
             "esta",
@@ -645,25 +1448,54 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
             "esto",
             "está",
             "están",
+            "explica",
+            "explícame",
+            "falla",
+            "fallan",
+            "fue",
+            "funciona",
+            "hace",
+            "hacer",
+            "hasta",
             "haz",
+            "hazme",
             "la",
             "las",
             "lo",
             "los",
+            "muy",
+            "muéstrame",
             "más",
+            "necesito",
+            "nuestra",
+            "nuestro",
+            "nunca",
             "para",
             "pero",
+            "podrías",
             "por",
             "porque",
+            "prueba",
+            "pruebas",
             "puede",
             "puedes",
             "que",
+            "quiero",
             "quita",
+            "quién",
             "qué",
             "revisa",
             "se",
+            "siempre",
+            "sobre",
             "sube",
+            "sí",
+            "sólo",
             "también",
+            "tengo",
+            "tiene",
+            "tienen",
+            "tus",
             "un",
             "una",
         ],
@@ -671,40 +1503,81 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
     (
         "Swedish",
         &[
+            "aldrig",
+            "alla",
+            "alltid",
             "att",
+            "av",
+            "bara",
+            "blev",
+            "blir",
             "bort",
             "den",
             "det",
             "detta",
+            "din",
+            "ditt",
+            "du",
             "där",
             "efter",
+            "eftersom",
             "eller",
             "ett",
             "fel",
             "felet",
             "fixa",
             "från",
+            "fungerar",
+            "funkar",
             "för",
+            "gör",
             "har",
+            "hitta",
             "hur",
+            "här",
+            "igen",
+            "ingen",
+            "inget",
             "inte",
             "jag",
             "kan",
+            "kolla",
+            "kunde",
             "lägg",
             "med",
+            "mig",
+            "misslyckas",
+            "mitt",
             "måste",
+            "nu",
             "när",
+            "något",
             "och",
             "också",
+            "om",
+            "oss",
             "på",
+            "redan",
             "rätta",
             "ska",
             "skriv",
+            "skulle",
+            "snälla",
             "som",
             "så",
+            "testet",
+            "till",
+            "upp",
             "uppdatera",
+            "ut",
+            "utan",
             "vad",
             "varför",
+            "varje",
+            "vilka",
+            "vilken",
+            "vilket",
+            "vill",
             "ändra",
             "är",
         ],
@@ -714,20 +1587,33 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
         &[
             "ama",
             "ancak",
+            "artık",
             "bana",
+            "benim",
             "bir",
+            "bizim",
             "bu",
+            "bunlar",
+            "bunu",
             "cok",
             "daha",
             "degil",
             "değil",
             "değiştir",
             "düzelt",
+            "edebilir",
+            "eder",
             "ekle",
             "eğer",
             "gibi",
             "güncelle",
+            "hala",
+            "hangi",
+            "hata",
+            "hatası",
+            "hatayı",
             "hiç",
+            "hâlâ",
             "icin",
             "ile",
             "ise",
@@ -735,40 +1621,62 @@ const FUNCTION_WORDS: &[(&str, &[&str])] = &[
             "kadar",
             "kaldır",
             "ki",
+            "kim",
+            "kontrol",
             "lutfen",
             "lütfen",
             "mi",
             "misin",
+            "mu",
+            "musun",
+            "mü",
+            "müsün",
             "mı",
             "mısın",
             "nasıl",
             "ne",
             "neden",
+            "nerede",
+            "niye",
+            "niçin",
             "olan",
             "olarak",
+            "oldu",
+            "olmuyor",
+            "olur",
             "oluştur",
+            "onu",
+            "onun",
+            "senin",
             "sil",
             "sonra",
             "tüm",
             "veya",
             "yani",
+            "yap",
+            "yapar",
             "yaz",
             "yerine",
             "yok",
+            "çalışmıyor",
+            "çalıştır",
             "çok",
             "önce",
             "şey",
             "şimdi",
             "şu",
+            "şunu",
         ],
     ),
     (
         "Vietnamese",
         &[
-            "bạn", "cho", "các", "có", "của", "giúp", "hãy", "khi", "không", "là", "làm", "lỗi",
-            "một", "như", "những", "này", "nếu", "sẽ", "sửa", "theo", "thêm", "thì", "trong",
-            "tôi", "tạo", "từ", "viết", "và", "về", "với", "xoá", "xóa", "đang", "đã", "được",
-            "để", "đổi",
+            "bạn", "bị", "cho", "chưa", "chạy", "các", "cái", "có", "cần", "của", "dùm", "giùm",
+            "giúp", "gì", "hàm", "hãy", "khi", "không", "kiểm", "là", "làm", "lại", "lỗi", "muốn",
+            "mã", "mình", "một", "nha", "nhé", "như", "những", "nào", "này", "nếu", "phải", "rồi",
+            "sao", "sẽ", "sửa", "theo", "thêm", "thì", "thử", "tra", "trong", "tôi", "tại", "tạo",
+            "từ", "viết", "và", "về", "với", "xem", "xoá", "xóa", "đang", "đi", "đâu", "đã",
+            "được", "để", "đổi", "ở",
         ],
     ),
 ];
@@ -937,11 +1845,32 @@ fn split_elision(word: &str) -> (Option<&str>, &str) {
     (Some(head), rest)
 }
 
+/// The ISO 639-1 language codes, which a list of locales is made of. Sorted,
+/// for binary search.
+const LANGUAGE_CODES: &[&str] = &[
+    "aa", "ab", "ae", "af", "ak", "am", "an", "ar", "as", "av", "ay", "az", "ba", "be", "bg", "bh",
+    "bi", "bm", "bn", "bo", "br", "bs", "ca", "ce", "ch", "co", "cr", "cs", "cu", "cv", "cy", "da",
+    "de", "dv", "dz", "ee", "el", "en", "eo", "es", "et", "eu", "fa", "ff", "fi", "fj", "fo", "fr",
+    "fy", "ga", "gd", "gl", "gn", "gu", "gv", "ha", "he", "hi", "ho", "hr", "ht", "hu", "hy", "hz",
+    "ia", "id", "ie", "ig", "ii", "ik", "io", "is", "it", "iu", "ja", "jv", "ka", "kg", "ki", "kj",
+    "kk", "kl", "km", "kn", "ko", "kr", "ks", "ku", "kv", "kw", "ky", "la", "lb", "lg", "li", "ln",
+    "lo", "lt", "lu", "lv", "mg", "mh", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "na", "nb",
+    "nd", "ne", "ng", "nl", "nn", "no", "nr", "nv", "ny", "oc", "oj", "om", "or", "os", "pa", "pi",
+    "pl", "ps", "pt", "qu", "rm", "rn", "ro", "ru", "rw", "sa", "sc", "sd", "se", "sg", "si", "sk",
+    "sl", "sm", "sn", "so", "sq", "sr", "ss", "st", "su", "sv", "sw", "ta", "te", "tg", "th", "ti",
+    "tk", "tl", "tn", "to", "tr", "ts", "tt", "tw", "ty", "ug", "uk", "ur", "uz", "ve", "vi", "vo",
+    "wa", "wo", "xh", "yi", "yo", "za", "zh", "zu",
+];
+
 /// A function word no list of locale codes could hold. Two letters is where
 /// function words and ISO 639-1 codes meet: "en es de fr" is a list of
-/// locales, not a Spanish sentence.
+/// locales, not a Spanish sentence. A two-letter word that is no language's
+/// code tells as a longer one does: "change la couleur du bouton de
+/// connexion en bleu" was graded, though "du" is French and no locale.
 fn is_telling(word: &str) -> bool {
-    word.chars().count() > 2 || !word.bytes().all(|b| b.is_ascii_lowercase())
+    word.chars().count() > 2
+        || !word.bytes().all(|b| b.is_ascii_lowercase())
+        || LANGUAGE_CODES.binary_search(&word).is_err()
 }
 
 /// Characters that code uses inside a word and prose does not.
@@ -966,6 +1895,97 @@ fn is_code(core: &str) -> bool {
             .any(|w| w[0].is_ascii_alphanumeric() && w[1] == b'.' && w[2].is_ascii_alphanumeric())
 }
 
+/// What a line of comment opens with: `#` in Python, shell and Ruby, `//`
+/// and `/*` in the C family and the `*` a block comment goes on with, and
+/// `--` in SQL, Lua and Haskell.
+const COMMENT_MARKS: [&str; 5] = ["#", "//", "/*", "*", "--"];
+
+/// Whether a line is code: at least half of what is written on it is
+/// identifiers, calls, operators and brackets, and one of them is more than
+/// punctuation. "def total(values): return sum(values)" is, and so is
+/// "int main() { return 0; }"; "fix the parser in src/parse.rs" is not.
+fn is_code_line(line: &str) -> bool {
+    let (mut code, mut all, mut shaped) = (0, 0, false);
+    for token in line.split_whitespace() {
+        let n = token.chars().count();
+        all += n;
+        let core = token.trim_matches(|c: char| c.is_ascii_punctuation() || c == '\u{2019}');
+        // A name and its opening bracket, "main()", is a call however the
+        // brackets are trimmed off it.
+        let call = token
+            .as_bytes()
+            .windows(2)
+            .any(|w| w[0].is_ascii_alphanumeric() && w[1] == b'(');
+        if core.is_empty() {
+            code += n;
+        } else if call || is_code(core) {
+            code += n;
+            shaped = true;
+        }
+    }
+    shaped && 2 * code >= all
+}
+
+/// The comment lines of every paragraph that holds a line of unfenced code,
+/// as byte ranges. A blank line or a fence ends a paragraph, so a heading
+/// over prose -- "# Fehler beim Login" -- is still read.
+fn comments_beside_code(text: &str, code: &[Span]) -> Vec<Span> {
+    let fence: Vec<bool> = code.iter().map(|r| r.slice(text).contains('\n')).collect();
+    let mut out = Vec::new();
+    let mut comments = Vec::new();
+    let mut holds_code = false;
+    // The first code region that ends past the start of the current line.
+    let mut next = 0;
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let end = start + line.len();
+        while next < code.len() && code[next].end <= start {
+            next += 1;
+        }
+        let fenced = (next..code.len())
+            .take_while(|&i| code[i].start < end)
+            .any(|i| fence[i]);
+        let body = line.trim_end_matches(['\n', '\r']);
+        let trimmed = body.trim_start();
+        if trimmed.is_empty() || fenced {
+            if holds_code {
+                out.append(&mut comments);
+            }
+            comments.clear();
+            holds_code = false;
+        } else if COMMENT_MARKS.iter().any(|mark| trimmed.starts_with(mark)) {
+            comments.push(Span::new(start, start + body.len()));
+        } else {
+            holds_code |= is_code_line(body);
+        }
+        start = end;
+    }
+    if holds_code {
+        out.append(&mut comments);
+    }
+    out
+}
+
+/// Everything read as code: the regions [`code_regions`] finds and the
+/// comments beside unfenced code, in order and merged where they meet.
+fn set_aside(text: &str) -> Vec<Span> {
+    let code = code_regions(text);
+    let comments = comments_beside_code(text, &code);
+    if comments.is_empty() {
+        return code;
+    }
+    let mut all = [code, comments].concat();
+    all.sort_unstable();
+    let mut merged: Vec<Span> = Vec::with_capacity(all.len());
+    for span in all {
+        match merged.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            _ => merged.push(span),
+        }
+    }
+    merged
+}
+
 /// A Latin-script word of prose.
 struct Word {
     /// Lowercased, with a typographic apostrophe made plain.
@@ -983,7 +2003,15 @@ struct Word {
 #[derive(Default)]
 struct Prose {
     letters: [usize; SCRIPTS],
+    /// The Latin letters of names and acronyms. A script is weighed against
+    /// the Latin prose without them: "README を更新して" is a Japanese
+    /// request about a file, though "README" has more letters than the rest.
+    named: usize,
     words: Vec<Word>,
+    /// Words on the [`ENGLISH`] list, each counted as often as it is used.
+    /// A name is not counted: "Show More" on a button in a French request is
+    /// the button's label.
+    english: usize,
     /// A quotation was set aside unread.
     quoted: bool,
     /// Letters that tell a language apart from the commonest one of its
@@ -992,12 +2020,28 @@ struct Prose {
     ukrainian: bool,
     urdu: bool,
     persian: bool,
-    /// Set at the first Hangul letter or English word. Either means the
-    /// lexicons can read the prompt and nothing after it changes that, so
-    /// reading stops there: an English prompt is settled by its first few
-    /// words, however long it goes on.
+    /// Set at the first Hangul letter, at a word that asks in English about
+    /// text in another language, or at the English word no language's
+    /// function words could outweigh. Each means the lexicons can read the
+    /// prompt and nothing after it changes that, so reading stops there: a
+    /// long English prompt is settled within its first hundred or so words,
+    /// however long it goes on.
     readable: bool,
 }
+
+/// The most function words one language can show, the size of its list.
+/// More than a third as many English words outweigh any of them.
+const MOST_FUNCTION_WORDS: usize = {
+    let mut most = 0;
+    let mut i = 0;
+    while i < FUNCTION_WORDS.len() {
+        if FUNCTION_WORDS[i].1.len() > most {
+            most = FUNCTION_WORDS[i].1.len();
+        }
+        i += 1;
+    }
+    most
+};
 
 impl Prose {
     fn count(&mut self, c: char) {
@@ -1052,8 +2096,8 @@ impl Prose {
         ends_sentence
     }
 
-    /// Count one word of prose, or stop at an English one: false once the
-    /// prompt is known to be readable.
+    /// Count one word of prose: false once the prompt is known to be
+    /// readable.
     fn read_word(&mut self, word: &str, first: bool) -> bool {
         let letters = word.chars().filter(|c| c.is_alphabetic()).count();
         self.letters[Script::Latin as usize] += letters;
@@ -1067,15 +2111,29 @@ impl Prose {
                 .filter(|c| c.is_alphabetic())
                 .all(char::is_uppercase);
         let text = word.to_lowercase().replace('\u{2019}', "'");
-        if ENGLISH.binary_search(&text.as_str()).is_ok() {
+        // "Translate 'Bonjour le monde' to English" capitalises the word
+        // that settles it.
+        if ABOUT_LANGUAGE.binary_search(&text.as_str()).is_ok() {
             self.readable = true;
             return false;
         }
+        let name_like = shouted || (capital && !first);
+        if name_like {
+            self.named += letters;
+        }
+        let english = !name_like && ENGLISH.binary_search(&text.as_str()).is_ok();
         self.words.push(Word {
             text,
             capital,
-            name_like: shouted || (capital && !first),
+            name_like,
         });
+        if english {
+            self.english += 1;
+            if FOREIGN_PER_ENGLISH * self.english > MOST_FUNCTION_WORDS {
+                self.readable = true;
+                return false;
+            }
+        }
         true
     }
 
@@ -1186,8 +2244,9 @@ impl Prose {
         out
     }
 
-    /// The Latin-script language whose function words this prose uses most.
-    fn function_word_language(&self) -> Option<Foreign> {
+    /// The Latin-script language whose function words this prose uses most,
+    /// and how many distinct ones it uses.
+    fn function_word_language(&self) -> Option<(Foreign, usize)> {
         if self.words.len() < MIN_SHORT_WORDS {
             return None;
         }
@@ -1238,8 +2297,9 @@ impl Prose {
                 }
             }
         }
-        best.map(|(language, _)| Foreign {
-            name: (!tied).then_some(language),
+        best.map(|(language, found)| {
+            let name = (!tied).then_some(language);
+            (Foreign { name }, found)
         })
     }
 }
@@ -1272,7 +2332,7 @@ fn read_with(text: &str, skip_quotes: bool) -> Prose {
     let mut prose = Prose::default();
     let mut sentence = true;
     let mut cursor = 0;
-    for region in code_regions(text) {
+    for region in set_aside(text) {
         prose.read_prose(&text[cursor..region.start], &mut sentence, skip_quotes);
         if prose.readable {
             return prose;
@@ -1295,12 +2355,15 @@ pub fn detect(text: &str) -> Option<Foreign> {
     }
     let latin = prose.letters[Script::Latin as usize];
     let other: usize = prose.letters.iter().sum::<usize>() - latin;
-    if other >= MIN_LETTERS && other >= latin {
-        return Some(Foreign {
+    if other >= MIN_LETTERS && other >= latin - prose.named {
+        // A borrowed verb is not on the English list, so what is left there
+        // is English grammar, and grammar is the language of the request.
+        return (prose.english == 0).then_some(Foreign {
             name: prose.script_language(),
         });
     }
-    prose.function_word_language()
+    let (foreign, found) = prose.function_word_language()?;
+    (found >= FOREIGN_PER_ENGLISH * prose.english).then_some(foreign)
 }
 
 #[cfg(test)]
@@ -1324,6 +2387,8 @@ mod tests {
             );
         };
         check("ENGLISH", ENGLISH);
+        check("ABOUT_LANGUAGE", ABOUT_LANGUAGE);
+        check("LANGUAGE_CODES", LANGUAGE_CODES);
         for (language, list) in FUNCTION_WORDS {
             check(language, list);
         }
@@ -1336,7 +2401,8 @@ mod tests {
         for (language, list) in FUNCTION_WORDS {
             for word in *list {
                 assert!(
-                    ENGLISH.binary_search(word).is_err(),
+                    ENGLISH.binary_search(word).is_err()
+                        && ABOUT_LANGUAGE.binary_search(word).is_err(),
                     "{language} {word:?} is on the English list"
                 );
                 assert!(
@@ -1555,11 +2621,13 @@ mod tests {
 
     #[test]
     fn a_word_that_is_also_another_language_settles_nothing() {
-        // "has", "for", "are" and "add" would each settle many a terse
-        // English prompt, but on the English list each makes one of these
-        // read as English too.
+        // "has", "for", "are", "add" and "dont" would each settle many a
+        // terse English prompt, but on the English list each makes one of
+        // these read as English too.
         for (text, name) in [
             ("¿Por qué has borrado el test de login?", "Spanish"),
+            // Graded 254.1, an F.
+            ("corrige la fonction dont le nom est verify_token", "French"),
             (
                 "Ret verify_token i src/auth/login.rs, så den returnerer \
                  Err(AuthError::Expired) i stedet for at gå i panik, når tokenet er \
@@ -1704,6 +2772,8 @@ mod tests {
             // Two-letter locale codes collide with two-letter function words.
             "i18n: en es de fr pt",
             "locales en, es, de",
+            // Four of Spanish's own, and every one a code: Greek is "el".
+            "Add translations for en, es, de, el",
             // Capitalised mid-sentence, these are names.
             "El Capitan build fails on Los Angeles server",
             "Jean de la Fontaine quote widget",
@@ -1720,5 +2790,207 @@ mod tests {
         // else to go on, the prompt is plainly not English, and not plainly
         // either one.
         assert_eq!(language("para que como bug"), Some(None));
+    }
+
+    #[test]
+    fn an_english_verb_borrowed_into_another_language_is_not_english() {
+        // Each of these was graded, from 153.9 to 494.6: one "fix",
+        // "update" or "run" made the whole prompt English.
+        for (text, name) in [
+            ("このbugをfixして、テストも追加してください", "Japanese"),
+            ("依存関係をupdateしてからテストを実行して", "Japanese"),
+            ("帮我 fix 一下这个 bug", "Chinese"),
+            ("能不能 run 一下测试，然后把失败的都修好", "Chinese"),
+            ("сделай update зависимостей и запусти тесты", "Russian"),
+            ("اعمل fix للمشكلة دي في صفحة الدخول", "Arabic"),
+            (
+                "haz un fix rápido del login, se rompe con la contraseña vacía",
+                "Spanish",
+            ),
+            (
+                "fais un fix rapide sur le login, ça plante quand le mot de passe est vide",
+                "French",
+            ),
+            ("tu peux run les tests stp", "French"),
+            (
+                "mach bitte ein Update der Dependencies und lass die Tests laufen",
+                "German",
+            ),
+            ("tolong fix bug ini di halaman login", "Indonesian"),
+            (
+                "puoi fare il fix del login? crasha con la password vuota",
+                "Italian",
+            ),
+            ("zrób update zależności i odpal testy", "Polish"),
+            ("udělej update závislostí a pusť testy", "Czech"),
+            (
+                "faz um fix rápido no login, tá quebrando com senha vazia",
+                "Portuguese",
+            ),
+            ("fix giúp mình cái bug này ở trang login với", "Vietnamese"),
+        ] {
+            assert_eq!(language(text), Some(Some(name)), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_request_verb_that_is_also_another_language_settles_nothing() {
+        // "change" is French, "find" Danish and "help" Dutch, and on the
+        // English list each made these read as English. The first was graded
+        // C, 537.1, though the same request with "Ne modifie pas" was named.
+        for (text, name) in [
+            (
+                "Dans src/auth/login.rs, modifie verify_token pour qu'il renvoie \
+                 Err(AuthError::Expired) au lieu de paniquer quand le jeton a expiré. Ne \
+                 change pas la signature publique de login(), et les tests de \
+                 tests/auth.rs doivent passer.",
+                "French",
+            ),
+            (
+                "ne change pas l'API publique, corrige seulement le bug",
+                "French",
+            ),
+            ("find fejlen i login-funktionen og ret den", "Danish"),
+            (
+                "help me met de login bug, het werkt niet meer na de update",
+                "Dutch",
+            ),
+            // Every other French word here has two letters, and only "du" is
+            // no locale's code.
+            ("change la couleur du bouton de connexion en bleu", "French"),
+            // Portuguese asks with "use", "move" and "remove". These were
+            // graded 120.9, 311.7 and 163.4.
+            (
+                "use o método novo em vez do antigo e atualize os testes",
+                "Portuguese",
+            ),
+            (
+                "move a função para outro arquivo e atualize os imports",
+                "Portuguese",
+            ),
+            ("remove o botão de login e atualize os testes", "Portuguese"),
+            // An English word that is a word of the sentence's own language
+            // too stays on the list, and the rest of the sentence outweighs
+            // it: French "but" is an aim, Swedish "just nu" is "right now".
+            ("Le but est de corriger le login", "French"),
+            ("kan du fixa det här just nu?", "Swedish"),
+        ] {
+            assert_eq!(language(text), Some(Some(name)), "{text}");
+        }
+    }
+
+    #[test]
+    fn english_grammar_keeps_a_pasted_message_or_a_borrowed_phrase_english() {
+        for text in [
+            // Messages pasted, unquoted, into a request made in English, each
+            // about as long as the request around it or longer.
+            "npm install fails with: Не удалось найти указанный файл",
+            "add this to ja.json: ログインしてください",
+            "Customer wrote: la aplicación se cierra cuando subo una foto, can you \
+             reproduce it?",
+            "The Spanish string in es.json reads: La sesión ha expirado, por favor \
+             inicia sesión de nuevo. Fix the typo.",
+            // The request verb alone is not English, but nothing else here is
+            // another language's.
+            "fix login",
+            "use DI container",
+            "help me find the leak",
+        ] {
+            assert_eq!(detect(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_short_question_is_named_by_its_question_word() {
+        // Each of these was graded, between 7.8 and 357.3, before its
+        // question word or auxiliary was listed.
+        for (text, name) in [
+            ("pourquoi ce test échoue ?", "French"),
+            ("waarom faalt de build op main sinds gisteren?", "Dutch"),
+            (
+                "kun je de dependencies updaten en de tests runnen?",
+                "Dutch",
+            ),
+            ("dlaczego ten test nie przechodzi?", "Polish"),
+            ("miért bukik el ez a teszt?", "Hungarian"),
+            ("roda os testes e me diz quais falham", "Portuguese"),
+            // And these were left unnamed, between two languages that share
+            // their other words.
+            ("por que esse teste está falhando?", "Portuguese"),
+            ("hvorfor feiler denne testen?", "Norwegian"),
+        ] {
+            assert_eq!(language(text), Some(Some(name)), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_french_question_is_named_by_its_inverted_verb() {
+        // A hyphen keeps "peux-tu" one word, so it is listed as one.
+        for text in [
+            "Peux-tu corriger le bug ?",
+            "pouvez-vous regarder les logs du serveur",
+        ] {
+            assert_eq!(language(text), Some(Some("French")), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_comment_beside_unfenced_code_is_code() {
+        // Each of these was reported as the language of its comment.
+        for text in [
+            "# Berechne die Summe der Werte und gib sie zurück\n\
+             def total(values): return sum(values)\n\
+             add docstrings",
+            "# calcula el total de la compra con los impuestos incluidos\n\
+             def total(items):\n    return sum(i.price for i in items)\n\nadd docstrings",
+            "// TODO: corrigir isso depois, está muito lento\n\
+             const rows = await db.query(sql)\n\nmake this faster",
+        ] {
+            assert_eq!(detect(text), None, "{text:?}");
+        }
+        // The request around the code is still read, and an English comment
+        // no longer outweighs it.
+        assert_eq!(
+            language(
+                "Füge bitte Docstrings hinzu, damit man die Funktion versteht:\n\
+                 # compute the total of all values\n\
+                 def total(values): return sum(values)"
+            ),
+            Some(Some("German"))
+        );
+        // A heading over prose is prose, and so is one over a fence.
+        for text in [
+            "# Fehler beim Login\nDer Login schlägt fehl, wenn das Passwort leer ist.",
+            "## Fehler beim Laden von Bildern\n```\nError: ENOENT\n```",
+        ] {
+            assert_eq!(language(text), Some(Some("German")), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_prompt_is_read_in_one_pass() {
+        // English is settled once no language could outweigh it, not at the
+        // first English word, and not at the end of the prompt.
+        let english = "fix the parser so it accepts this input. ".repeat(2_000);
+        assert_eq!(detect(&english), None);
+        let read = read(&english);
+        assert!(
+            read.readable && read.words.len() < 200,
+            "{}",
+            read.words.len()
+        );
+        // The same English after a sentence of another language does not
+        // settle it sooner, or later.
+        let mixed = format!("arregla el bug para que funcione. {english}");
+        assert_eq!(detect(&mixed), None);
+        // Whatever is not settled early is read once, comments and all.
+        let fence = format!("# note\n```\n{}```\n", "let x = 1;\n".repeat(100_000));
+        assert!(comments_beside_code(&fence, &code_regions(&fence)).is_empty());
+        let unfenced = "# Kommentar\nlet x = f(1);\n".repeat(50_000);
+        assert_eq!(
+            comments_beside_code(&unfenced, &code_regions(&unfenced)).len(),
+            50_000
+        );
+        assert_eq!(detect(&unfenced), None);
     }
 }
