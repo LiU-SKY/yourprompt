@@ -35,6 +35,7 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
@@ -124,18 +125,29 @@
     display: flex; align-items: center; gap: 10px; font-size: 13px;
     border: 1px dashed var(--line); border-radius: 7px; padding: 7px 10px;
   }
-  .att .nm { font-family: ui-monospace, Menlo, Consolas, monospace; }
-  .att .sz { color: var(--dim); }
+  .att .nm { font-family: ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .att .sz { color: var(--dim); white-space: nowrap; }
   .att button { margin-left: auto; padding: 2px 8px; font-size: 12px; }
+  .att.sample { flex-wrap: wrap; row-gap: 4px; }
+  .att.sample .nm { order: 1; flex-basis: 100%; color: var(--dim); font-size: 12.5px; }
   .empty-att { color: var(--dim); font-size: 12.5px; font-style: italic;
                border: 1px dashed var(--line); border-radius: 7px; padding: 9px 10px; }
+  .empty-att button, .why button { font-size: 12.5px; padding: 2px 9px; font-style: normal; }
+  .offered-below .empty-att button { display: none; }
 
-  .bar-row { display: flex; align-items: baseline; gap: 14px; margin: 22px 0 6px; }
+  .bar-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+             margin: 22px 0 6px; }
   .total { font-size: 42px; font-weight: 650; letter-spacing: -0.02em;
            font-variant-numeric: tabular-nums; }
   .grade { font-size: 21px; font-weight: 600; }
   .of { color: var(--dim); font-size: 13px; }
-  .flag { color: var(--dim); font-size: 12.5px; margin-left: auto; }
+  .badge { font-size: 12.5px; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+           color: var(--ink); }
+  .badge.warn { background: var(--m-warn); }
+  .badge.good { background: var(--m-good); }
+  .why { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
+         margin: 10px 0 0; font-size: 13px; color: var(--dim); }
+  .why.ungraded { color: var(--ink); font-size: 14px; }
   .track { height: 8px; background: var(--track); border-radius: 999px; overflow: hidden; }
   .fill { height: 100%; border-radius: 999px; transition: width .18s ease; }
 
@@ -156,6 +168,7 @@
   a { color: var(--accent); }
   .err { color: var(--bad); }
   @media (max-width: 640px) {
+    .wrap { padding: 24px 16px 56px; }
     .comp { grid-template-columns: 1fr; gap: 2px; }
     .comp .cd { margin-bottom: 6px; }
     .note { margin-left: 0; width: 100%; }
@@ -199,17 +212,18 @@
       <button type="button" id="download" disabled></button>
       <button type="button" id="share" disabled></button>
       <button type="button" id="clear"></button>
-      <input type="file" id="file" hidden multiple accept=".txt,.md,.markdown,.rst,.text,text/*">
+      <input type="file" id="file" hidden multiple>
       <span class="note" id="note"></span>
     </div>
 
     <div class="bar-row">
       <span class="total" id="total">--</span>
-      <span class="of">/ 1000</span>
+      <span class="of" id="of">/ 1000</span>
       <span class="grade" id="grade"></span>
-      <span class="flag" id="flag"></span>
+      <span class="badge" id="badge" hidden></span>
     </div>
     <div class="track"><div class="fill" id="fill" style="width:0"></div></div>
+    <p class="why" id="why" hidden></p>
   </div>
 
   <div class="axes" id="axes"></div>
@@ -224,7 +238,7 @@ const MAX_BYTES = 256 * 1024;
 const enc = new TextEncoder(), dec = new TextDecoder();
 
 let wasm = null, indexBytes = null, lastScore = null;
-let files = [];         // { name, text } -- the visitor's codebase
+let files = [];         // { name, text, sample } -- the visitor's codebase
 
 // --- language ---------------------------------------------------------------
 // Everything the page says exists in both languages; the per-component
@@ -265,11 +279,13 @@ const STR = {
     star: 'Star',
     try_label: 'Try:',
     examples: [
-      ['it\'s broken again'], ['make it better'], ['fix the login bug'],
+      ['it\'s broken again'], ['make it better'], ['fix the bug'],
       ['a prompt that scores well', 'In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.'],
+      ['the same, with made-up names', 'In src/banana.rs, change gravity() so it returns Err(MoonError::Full) instead of panicking on a full moon. Don\'t change the public signature of orbit(). tests/moon.rs must still pass.'],
     ],
     share: 'Copy link',
     copied: 'link copied; the prompt is inside it',
+    copied_sample: 'link copied; the prompt and the sample repo are inside it',
     copy_failed: 'could not copy; the link is in the address bar',
     placeholder: 'What do you want the agent to do?\n\ne.g. In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) instead of panicking on an expired token. Don\'t change the public signature of login(). tests/auth.rs must still pass.',
     label_prompt: 'Prompt',
@@ -279,18 +295,30 @@ const STR = {
     clear: 'Clear',
     remove: 'remove',
     empty: 'No files yet, so grounding is not scored. Drop source files here: whether the things you name exist, and whether they point at one thing or forty.',
+    load_sample: 'Load the sample repo',
+    sample: 'sample repo',
+    unchecked: 'names not checked',
+    unchecked_why: 'No code loaded, so a made-up name scores the same as a real one.',
+    indexed: n => n === 1 ? '1 file indexed' : `${n} files indexed`,
+    ungraded: {
+      command: () => 'Slash commands aren\'t graded.',
+      follow_up: () => 'A follow-up like this leans on the conversation, so it isn\'t graded. In Claude Code the status line keeps your last task\'s grade.',
+      unsupported: name => `This looks like ${name || 'another language'}. yourprompt grades English and Korean only.`,
+    },
     footer: 'The whole scorer is compiled to WebAssembly and runs here; there is no server and no model call. The files you add are indexed in your browser and never leave it. For a whole repository rather than a handful of files, run <code>yp serve --repo .</code> locally.<br><a href="https://github.com/LiU-SKY/yourprompt">source and benchmarks</a>',
     loading: 'Loading the scorer…',
     ready: v => `v${v} · runs in your browser · nothing uploaded · deterministic`,
     load_failed: 'could not load the scorer: ',
     not_scored: 'not scored',
     no_index: 'No repository index loaded, so the remaining axes were rescaled to 1000.',
-    rescaled: 'ungrounded, rescaled',
     unreadable: 'the scorer could not read that',
     too_big: (n, kb) => `${n} is ${kb} KB, over the 256 KB limit`,
     read_failed: n => `could not read ${n}`,
     not_text: n => `${n} does not look like text`,
     added: n => `added ${n}`,
+    added_many: n => `added ${n} files`,
+    skipped_many: n => `skipped ${n}: not text, or over 256 KB`,
+    sample_added: n => `loaded the sample repo, ${n} files`,
     saved: n => `saved ${n}`,
     axes: { grounding: 'grounding', actionability: 'actionability',
             clarity: 'clarity', context: 'context' },
@@ -341,9 +369,11 @@ const STR = {
     examples: [
       ['그거 다시 해줘'], ['좀 더 좋게 만들어줘'], ['버그 고쳐줘'],
       ['잘 쓴 프롬프트', 'src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.'],
+      ['같은 프롬프트, 지어낸 이름', 'src/banana.rs 의 gravity() 가 보름달일 때 panic 하는 대신 Err(MoonError::Full) 을 반환하도록 수정해줘. orbit() 의 공개 시그니처는 바꾸지 말 것. tests/moon.rs 는 계속 통과해야 함.'],
     ],
     share: '링크 복사',
     copied: '링크를 복사했습니다. 프롬프트가 링크 안에 담겨 있습니다',
+    copied_sample: '링크를 복사했습니다. 프롬프트와 샘플 저장소가 링크 안에 담겨 있습니다',
     copy_failed: '복사하지 못했습니다. 주소창의 링크를 쓰세요',
     placeholder: '에이전트가 무엇을 하길 원하나요?\n\n예: src/auth/login.rs 의 verify_token 이 만료된 토큰에서 panic 하는 대신 Err(AuthError::Expired) 를 반환하도록 수정해줘. login() 의 공개 시그니처는 바꾸지 말 것. tests/auth.rs 는 계속 통과해야 함.',
     label_prompt: '프롬프트',
@@ -353,18 +383,38 @@ const STR = {
     clear: '지우기',
     remove: '제거',
     empty: '아직 파일이 없어 그라운딩 축은 채점되지 않습니다. 소스 파일을 끌어다 놓으면 당신의 코드베이스 기준으로 채점합니다.',
+    load_sample: '샘플 저장소 불러오기',
+    sample: '샘플 저장소',
+    unchecked: '이름 확인 안 함',
+    unchecked_why: '코드가 없어 지어낸 이름도 실제 이름과 같은 점수를 받습니다.',
+    indexed: n => `파일 ${n}개 인덱싱됨`,
+    ungraded: {
+      command: () => '슬래시 명령은 채점하지 않습니다.',
+      follow_up: () => '이런 후속 메시지는 앞선 대화에 기대므로 채점하지 않습니다. Claude Code 에서는 상태줄이 직전 작업의 등급을 그대로 보여 줍니다.',
+      unsupported: name => `${name || '다른 언어'} 프롬프트로 보입니다. yourprompt 는 영어와 한국어만 채점합니다.`,
+    },
+    // The engine names a language in English.
+    languages: {
+      Japanese: '일본어', Chinese: '중국어', Spanish: '스페인어', French: '프랑스어',
+      German: '독일어', Portuguese: '포르투갈어', Russian: '러시아어', Italian: '이탈리아어',
+      Vietnamese: '베트남어', Thai: '태국어', Arabic: '아랍어', Hindi: '힌디어',
+      Turkish: '튀르키예어', Dutch: '네덜란드어', Polish: '폴란드어', Ukrainian: '우크라이나어',
+      Indonesian: '인도네시아어', Greek: '그리스어', Hebrew: '히브리어',
+    },
     footer: '채점기 전체가 WebAssembly 로 컴파일되어 여기서 실행됩니다. 서버도, 모델 호출도 없습니다. 추가한 파일은 브라우저 안에서 인덱싱되며 밖으로 나가지 않습니다. 파일 몇 개가 아니라 저장소 전체로 채점하려면 로컬에서 <code>yp serve --repo .</code> 를 실행하세요.<br><a href="https://github.com/LiU-SKY/yourprompt">소스와 벤치마크</a>',
     loading: '채점기를 불러오는 중…',
     ready: v => `v${v} · 브라우저에서 실행 · 업로드 없음 · 결정론적`,
     load_failed: '채점기를 불러오지 못했습니다: ',
     not_scored: '채점 안 함',
     no_index: '저장소 인덱스가 없어 나머지 축을 1000점으로 재조정했습니다.',
-    rescaled: '비접지, 재조정됨',
     unreadable: '채점기가 입력을 읽지 못했습니다',
     too_big: (n, kb) => `${n} 은(는) ${kb} KB 로 최대 256 KB 를 넘습니다`,
     read_failed: n => `${n} 을(를) 읽지 못했습니다`,
     not_text: n => `${n} 은(는) 텍스트 파일이 아닌 것 같습니다`,
     added: n => `${n} 추가됨`,
+    added_many: n => `파일 ${n}개 추가됨`,
+    skipped_many: n => `${n}개 건너뜀: 텍스트가 아니거나 256 KB 초과`,
+    sample_added: n => `샘플 저장소를 불러왔습니다 (파일 ${n}개)`,
     saved: n => `${n} 저장됨`,
     axes: { grounding: '그라운딩', actionability: '실행가능성',
             clarity: '명료성', context: '맥락' },
@@ -473,7 +523,8 @@ function scoreNow(instruction) {
 /// repository, so the grounding axis is about their code and not about
 /// whichever project happened to ship with the page.
 function rebuildIndex() {
-  if (!files.length) { indexBytes = null; return; }
+  // Files that arrive before the scorer has loaded are indexed at boot.
+  if (!files.length || !wasm) { indexBytes = null; return; }
   const payload = files.map(f => f.name + '\u001f' + f.text).join('\u001e');
   const bytes = enc.encode(payload);
   const [p, l] = write(bytes);
@@ -516,14 +567,63 @@ function renderAxis(axis, absent) {
     ${comps}</div>`;
 }
 
+// What the page says instead of a number when the prompt is not a task: a
+// slash command, a follow-up that leans on the conversation, or a language
+// the lexicons do not cover. Null for a task, and for a scorer too old to
+// report a kind, which is graded as it always was.
+function ungradedNote(s) {
+  const say = s.kind && T().ungraded[s.kind];
+  if (!say) return null;
+  const names = T().languages || {};
+  return say(s.language && (names[s.language] || s.language));
+}
+
+const sampleButton = () =>
+  `<button type="button" data-act="sample">${T().load_sample}</button>`;
+
+// Without an index the grounding axis is skipped and the other three are
+// scaled up to 1000, so an invented file name scores exactly what a real one
+// does: both of the long examples score 740.5. A dim "ungrounded, rescaled"
+// at the far end of the row did not get that across, so the badge sits
+// against the grade and says what to do about it. The offer of the sample
+// repository moves here from the empty file list, so it is made once.
+function renderStatus(s, ungraded) {
+  const badge = $('badge'), why = $('why');
+  const offer = !!s && !ungraded && s.renormalized && !files.length;
+  badge.hidden = why.hidden = true;
+  $('atts').classList.toggle('offered-below', offer);
+  if (!s) return;
+  if (ungraded) {
+    why.className = 'why ungraded';
+    why.textContent = ungraded;
+    why.hidden = false;
+    return;
+  }
+  badge.className = s.renormalized ? 'badge warn' : 'badge good';
+  badge.textContent = s.renormalized ? T().unchecked : T().indexed(files.length);
+  badge.hidden = false;
+  if (offer) {
+    why.className = 'why';
+    why.innerHTML = '<span>' + escapeHtml(T().unchecked_why) + '</span>' + sampleButton();
+    why.hidden = false;
+  }
+}
+
 function render(s) {
-  const r = s.total / 1000;
-  $('total').textContent = s.total.toFixed(1);
-  $('grade').textContent = s.grade;
+  const ungraded = ungradedNote(s);
+  const r = ungraded ? 0 : s.total / 1000;
+  $('total').textContent = ungraded ? '—' : s.total.toFixed(1);
+  $('of').hidden = !!ungraded;
+  $('grade').textContent = ungraded ? '' : s.grade;
   $('grade').style.color = colourFor(r);
   $('fill').style.width = (r * 100).toFixed(1) + '%';
   $('fill').style.background = colourFor(r);
-  $('flag').textContent = s.renormalized ? T().rescaled : '';
+  renderStatus(s, ungraded);
+  if (ungraded) {
+    $('axes').innerHTML = '';
+    clearMarks();
+    return;
+  }
   $('axes').innerHTML =
     renderAxis(s.grounding, !s.grounding) +
     renderAxis(s.actionability) + renderAxis(s.clarity) + renderAxis(s.context);
@@ -598,30 +698,52 @@ function clearScore() {
   lastScore = null;
   $('download').disabled = true;
   $('share').disabled = true;
-  $('total').textContent = '--'; $('grade').textContent = '';
-  $('fill').style.width = '0'; $('flag').textContent = '';
+  $('total').textContent = '--'; $('of').hidden = false; $('grade').textContent = '';
+  $('fill').style.width = '0';
+  renderStatus(null);
   $('axes').innerHTML = '';
   clearMarks();
 }
 
+const kb = list => (list.reduce((n, f) => n + f.text.length, 0) / 1024).toFixed(1);
+
+// The sample repository is listed as one row, because it is loaded and
+// removed as a whole.
 function renderFiles() {
   if (!files.length) {
-    $('atts').innerHTML = '<div class="empty-att">' + T().empty + '</div>';
+    $('atts').innerHTML = '<div class="empty-att">' + T().empty + ' ' + sampleButton() + '</div>';
     return;
   }
-  $('atts').innerHTML = files.map((a, i) => `
+  const sample = files.filter(f => f.sample);
+  const rows = sample.length ? [`
+    <div class="att sample">
+      <span>${T().sample}</span>
+      <span class="sz">${kb(sample)} KB</span>
+      <button type="button" data-sample="1">${T().remove}</button>
+      <span class="nm">${sample.map(f => escapeHtml(f.name)).join(' · ')}</span>
+    </div>`] : [];
+  files.forEach((a, i) => {
+    if (a.sample) return;
+    rows.push(`
     <div class="att">
       <span class="nm">${escapeHtml(a.name)}</span>
-      <span class="sz">${(a.text.length / 1024).toFixed(1)} KB</span>
+      <span class="sz">${kb([a])} KB</span>
       <button type="button" data-i="${i}">${T().remove}</button>
-    </div>`).join('');
+    </div>`);
+  });
+  $('atts').innerHTML = rows.join('');
   $('atts').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => {
-      files.splice(Number(b.dataset.i), 1);
-      renderFiles();
-      rebuildIndex();
-      score();
+      if (b.dataset.sample) files = files.filter(f => !f.sample);
+      else files.splice(Number(b.dataset.i), 1);
+      filesChanged();
     }));
+}
+
+function filesChanged() {
+  renderFiles();
+  rebuildIndex();
+  score();
 }
 
 // --- scoring ---------------------------------------------------------------
@@ -680,23 +802,35 @@ function decodePrompt(code) {
   return dec.decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
 }
 
+// Whether the sample repository was loaded travels too, so a shared link
+// reproduces the grounded score it was shared with. The visitor's own files
+// cannot travel; a link made with them scores as if they were absent.
 $('share').addEventListener('click', async () => {
   const text = $('p').value;
   if (!text.trim()) return;
-  const url = location.origin + location.pathname + '#p=' + encodePrompt(text);
+  const sample = files.some(f => f.sample);
+  const url = location.origin + location.pathname + '#p=' + encodePrompt(text) +
+    (sample ? '&repo=sample' : '');
   history.replaceState(null, '', url);
   try {
     await navigator.clipboard.writeText(url);
-    note(T().copied);
+    note(sample ? T().copied_sample : T().copied);
   } catch (e) {
     note(T().copy_failed, true);
   }
 });
 
-function promptFromHash() {
-  const m = /^#p=([A-Za-z0-9_-]+)$/.exec(location.hash);
-  if (!m) return null;
-  try { return decodePrompt(m[1]); } catch (e) { return null; }
+function fromHash() {
+  const shared = { prompt: null, sample: false };
+  for (const part of location.hash.slice(1).split('&')) {
+    const [key, value] = part.split('=');
+    if (key === 'p' && /^[A-Za-z0-9_-]+$/.test(value || '')) {
+      try { shared.prompt = decodePrompt(value); } catch (e) { /* a mangled link */ }
+    } else if (key === 'repo' && value === 'sample') {
+      shared.sample = true;
+    }
+  }
+  return shared;
 }
 
 // The star count, when GitHub answers. Unauthenticated, so a visitor past
@@ -710,6 +844,146 @@ fetch('https://api.github.com/repos/LiU-SKY/yourprompt')
   })
   .catch(() => {});
 
+// --- the sample repository --------------------------------------------------
+// Grounding is 350 of the 1000 points, and a visitor with no code at hand
+// never sees it: with nothing indexed, the prompt about src/banana.rs scores
+// 740.5, the same as the one about src/auth/login.rs, because neither name
+// was checked. Against these six files the login prompt rises to 851.8 and
+// the invented one falls to 563.8. They are indexed exactly like dropped
+// files.
+//
+// No English prose, on purpose. In a corpus this small a README makes "the"
+// a name found in one file, and "fix the bug" scored 428.5 against it
+// instead of 278.5.
+
+const SAMPLE = [
+  ['Cargo.toml', `[package]
+name = "acme-auth"
+version = "0.3.1"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+`],
+  ['src/auth/login.rs', `use crate::auth::token::Token;
+
+#[derive(Debug, PartialEq)]
+pub enum AuthError {
+    Expired,
+    Invalid,
+    Missing,
+}
+
+pub struct Claims {
+    pub sub: String,
+    pub exp: u64,
+}
+
+pub fn verify_token(t: &Token) -> Result<Claims, AuthError> {
+    let claims = t.decode().map_err(|_| AuthError::Invalid)?;
+    if claims.exp < now() {
+        panic!("token expired");
+    }
+    Ok(claims)
+}
+
+pub fn login(user: &str, password: &str) -> Result<Token, AuthError> {
+    if password.is_empty() {
+        return Err(AuthError::Missing);
+    }
+    let token = Token::issue(user);
+    verify_token(&token)?;
+    Ok(token)
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+`],
+  ['src/auth/token.rs', `use crate::auth::login::Claims;
+use crate::session::SESSION_TIMEOUT_SECS;
+
+pub struct Token(String);
+
+impl Token {
+    pub fn issue(user: &str) -> Token {
+        Token(format!("{user}:{SESSION_TIMEOUT_SECS}"))
+    }
+
+    pub fn decode(&self) -> Result<Claims, ()> {
+        let (sub, exp) = self.0.split_once(':').ok_or(())?;
+        let exp = exp.parse().map_err(|_| ())?;
+        Ok(Claims { sub: sub.to_string(), exp })
+    }
+}
+`],
+  ['src/session.rs', `use crate::auth::login::{verify_token, AuthError};
+use crate::auth::token::Token;
+
+pub const SESSION_TIMEOUT_SECS: u64 = 300;
+
+pub struct Session {
+    pub user: String,
+    pub expires_at: u64,
+}
+
+pub fn start_session(token: &Token) -> Result<Session, AuthError> {
+    let claims = verify_token(token)?;
+    Ok(Session { user: claims.sub, expires_at: claims.exp + SESSION_TIMEOUT_SECS })
+}
+
+pub fn refresh_token(session: &Session) -> Token {
+    Token::issue(&session.user)
+}
+`],
+  ['src/routes.rs', `use crate::auth::login::{login, AuthError};
+
+pub struct Request {
+    pub user: String,
+    pub password: String,
+}
+
+pub struct Response {
+    pub status: u16,
+    pub body: String,
+}
+
+pub fn post_login(req: &Request) -> Response {
+    match login(&req.user, &req.password) {
+        Ok(_) => Response { status: 200, body: "ok".into() },
+        Err(AuthError::Missing) => Response { status: 400, body: "password required".into() },
+        Err(_) => Response { status: 401, body: "unauthorized".into() },
+    }
+}
+`],
+  ['tests/auth.rs', `use acme_auth::auth::login::{login, verify_token, AuthError};
+use acme_auth::auth::token::Token;
+
+#[test]
+fn expired_token_is_rejected() {
+    let token = Token::issue("ada");
+    assert_eq!(verify_token(&token).unwrap_err(), AuthError::Expired);
+}
+
+#[test]
+fn login_rejects_empty_password() {
+    assert_eq!(login("ada", "").unwrap_err(), AuthError::Missing);
+}
+`],
+];
+
+function loadSample() {
+  const added = addTexts(SAMPLE.map(([name, text]) => ({ name, text, sample: true })));
+  if (added.length) note(T().sample_added(SAMPLE.length));
+}
+
+document.addEventListener('click', e => {
+  if (e.target.closest && e.target.closest('[data-act="sample"]')) loadSample();
+});
+
 // --- attaching files -------------------------------------------------------
 
 function looksBinary(text) {
@@ -720,30 +994,63 @@ function looksBinary(text) {
   return replacements > 3 && replacements / Math.max(text.length, 1) > 0.001;
 }
 
-function addFile(file) {
-  if (!file) return;
-  if (file.size > MAX_BYTES) {
-    note(T().too_big(file.name, (file.size / 1024).toFixed(0)), true);
-    return;
+// Everything bound for the index comes through here: the files a visitor
+// drops or picks, and the sample repository. A file already present with the
+// same name and contents is not added again, because a second copy makes
+// every name defined in it look defined twice: loading the sample twice took
+// the showcase prompt from 851.8 to 784.3.
+function addTexts(entries) {
+  const fresh = entries.filter(e =>
+    !files.some(f => f.name === e.name && f.text === e.text));
+  if (fresh.length) {
+    files.push(...fresh);
+    filesChanged();
   }
-  const reader = new FileReader();
-  reader.onerror = () => note(T().read_failed(file.name), true);
-  reader.onload = () => {
-    const text = String(reader.result);
-    if (looksBinary(text)) { note(T().not_text(file.name), true); return; }
-    files.push({ name: file.name, text });
-    note(T().added(file.name));
-    renderFiles();
-    rebuildIndex();
-    score();
-  };
-  reader.readAsText(file, 'utf-8');
+  return fresh;
+}
+
+// Any file can be picked, so anything that is not text, or is larger than
+// MAX_BYTES, is turned away here with the reason.
+function readFile(file) {
+  return new Promise(resolve => {
+    const refuse = problem => resolve({ name: file.name, problem });
+    if (file.size > MAX_BYTES) {
+      refuse(T().too_big(file.name, (file.size / 1024).toFixed(0)));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => refuse(T().read_failed(file.name));
+    reader.onload = () => {
+      const text = String(reader.result);
+      if (looksBinary(text)) refuse(T().not_text(file.name));
+      else resolve({ name: file.name, text });
+    };
+    reader.readAsText(file, 'utf-8');
+  });
+}
+
+// Files that arrive together are read first and indexed once. Re-indexing as
+// each one finished spent 15.7 s on 300 files that index in 0.1 s together.
+async function addFiles(list) {
+  if (!list.length) return;
+  const read = await Promise.all(list.map(readFile));
+  const added = addTexts(read.filter(r => !r.problem));
+  const refused = read.filter(r => r.problem);
+  const said = [];
+  if (added.length) {
+    said.push(added.length === 1 ? T().added(added[0].name) : T().added_many(added.length));
+  }
+  if (refused.length) {
+    said.push(refused.length === 1 ? refused[0].problem : T().skipped_many(refused.length));
+  }
+  note(said.join('; '), refused.length > 0 && !added.length);
 }
 
 $('open').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', e => {
-  for (const f of e.target.files) addFile(f);
+  const picked = Array.from(e.target.files);
   e.target.value = '';
+  addFiles(picked);
 });
 
 for (const target of [$('p'), $('atts')]) {
@@ -753,7 +1060,7 @@ for (const target of [$('p'), $('atts')]) {
     target.addEventListener(k, () => target.classList.remove('dropping')));
   target.addEventListener('drop', e => {
     e.preventDefault();
-    for (const f of (e.dataTransfer.files || [])) addFile(f);
+    addFiles(Array.from(e.dataTransfer.files || []));
   });
 }
 
@@ -780,21 +1087,25 @@ function buildReport(s, prompt) {
   const longest = (prompt.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0);
   const fence = '`'.repeat(Math.max(3, longest + 1));
   const listed = files.length
-    ? files.map(a => `- ${a.name} (${(a.text.length / 1024).toFixed(1)} KB)`).join('\n')
+    ? files.map(a => `- ${a.name} (${kb([a])} KB)`).join('\n')
     : T().rpt.none;
-  return [
-    `# yourprompt`, ``,
-    `**${s.total.toFixed(1)} / 1000 (${s.grade})**`, ``,
-    `| | |`, `|---|---|`,
-    `| ${T().rpt.generated} | ${new Date().toISOString()} |`,
-    `| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`,
-    ``, `## ${T().rpt.prompt}`, ``, fence, prompt, fence,
-    ``, `## ${T().rpt.codebase}`, ``, listed,
-    ``, `## ${T().rpt.breakdown}`, ``,
+  const ungraded = ungradedNote(s);
+  const breakdown = ungraded ? [] : [
+    `## ${T().rpt.breakdown}`, ``,
     axisSection(s.grounding, 'grounding'),
     axisSection(s.actionability, 'actionability'),
     axisSection(s.clarity, 'clarity'),
     axisSection(s.context, 'context'),
+  ];
+  return [
+    `# yourprompt`, ``,
+    ungraded ? `**—** ${ungraded}` : `**${s.total.toFixed(1)} / 1000 (${s.grade})**`, ``,
+    `| | |`, `|---|---|`,
+    `| ${T().rpt.generated} | ${new Date().toISOString()} |`,
+    `| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`,
+    ``, `## ${T().rpt.prompt}`, ``, fence, prompt, fence,
+    ``, `## ${T().rpt.codebase}`, ``, listed, ``,
+    ...breakdown,
     `---`, ``,
     T().rpt.foot, ``,
   ].join('\n');
@@ -803,7 +1114,8 @@ function buildReport(s, prompt) {
 $('download').addEventListener('click', () => {
   if (!lastScore) return;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
-  const name = `yourprompt-${lastScore.total.toFixed(0)}-${stamp}.md`;
+  const label = ungradedNote(lastScore) ? lastScore.kind : lastScore.total.toFixed(0);
+  const name = `yourprompt-${label}-${stamp}.md`;
   const blob = new Blob([buildReport(lastScore, $('p').value)],
                         {type: 'text/markdown;charset=utf-8'});
   const url = URL.createObjectURL(blob);
@@ -836,8 +1148,10 @@ applyLang();
   }
   wasmVersion = readAndFree(wasm.yp_version());
   $('sub').textContent = T().ready(wasmVersion);
-  const shared = promptFromHash();
-  if (shared) { $('p').value = shared; renderTry(); }
+  const shared = fromHash();
+  if (shared.prompt) { $('p').value = shared.prompt; renderTry(); }
+  if (shared.sample) loadSample();
+  rebuildIndex();
   score();
 })();
 </script>
