@@ -255,6 +255,32 @@ mod tests {
     }
 
     #[test]
+    fn make_is_an_action_like_its_korean_twin() {
+        // A vague request is still a request: "make it work" keeps the
+        // objective and pays for its vagueness in clarity, the way "좀
+        // 봐줘" does.
+        let objective = |text: &str| {
+            score(text)
+                .unwrap()
+                .actionability
+                .components
+                .iter()
+                .find(|c| c.id == "objective")
+                .unwrap()
+                .earned
+        };
+        assert!(objective("make the status line faster") > 0.0);
+        assert!(objective("좀 더 빠르게 만들어줘") > 0.0);
+        assert!(total("make it work") < total("make the status line faster"));
+    }
+
+    #[test]
+    fn a_courtesy_adds_nothing() {
+        assert_eq!(total("fix the bug"), total("fix the bug pls"));
+        assert_eq!(total("fix the bug"), total("please fix the bug"));
+    }
+
+    #[test]
     fn scoring_is_deterministic() {
         let text =
             "refactor verify_token in src/auth/login.rs so it returns Result, tests must pass";

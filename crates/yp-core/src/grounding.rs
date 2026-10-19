@@ -178,6 +178,12 @@ fn push_referent(
         return;
     }
 
+    if !explicit && yp_lang::is_filler(token) {
+        // "please" and "thanks" appear in plenty of repositories, but a
+        // courtesy is never the thing a prompt is pointing at.
+        return;
+    }
+
     let facts = corpus.lookup(&token.text);
 
     if !explicit {

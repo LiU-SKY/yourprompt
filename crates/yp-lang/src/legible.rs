@@ -355,14 +355,28 @@ const KO_FILLERS: &[&str] = &[
     "흠",
 ];
 
-/// True for a token that is a standalone Korean interjection or filler.
+/// English courtesies and hesitation fillers. "fix the bug pls" asks for
+/// exactly what "fix the bug" asks for, and once scored 33 points higher for
+/// the extra word. Sorted, for binary search.
+const EN_FILLERS: &[&str] = &[
+    "hello", "hey", "hi", "hmm", "lol", "ok", "okay", "please", "pls", "plz", "thanks", "thx",
+    "ty", "uh", "um",
+];
+
+/// True for a token that is a standalone interjection or filler.
 ///
 /// "음... 어... 그..." is written Korean, so it must not count *against*
 /// legibility the way a mashed keyboard does -- but a prompt made of it has
 /// said nothing, so it must not count as content either. Fillers are treated
 /// the way punctuation is: neither evidence for nor against.
 pub fn is_filler(token: &Token) -> bool {
-    token.kind == TokenKind::Hangul && KO_FILLERS.binary_search(&token.text.as_str()).is_ok()
+    match token.kind {
+        TokenKind::Hangul => KO_FILLERS.binary_search(&token.text.as_str()).is_ok(),
+        TokenKind::Word => EN_FILLERS
+            .binary_search(&token.text.to_ascii_lowercase().as_str())
+            .is_ok(),
+        _ => false,
+    }
 }
 
 /// True when this token could plausibly be part of a human request.

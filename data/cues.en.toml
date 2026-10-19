@@ -7,7 +7,10 @@
 # Deliberate omissions:
 #   - Polysemous verbs ("handle", "check", "sort out") are NOT action verbs.
 #     They name an action without naming what the action is, so rewarding them
-#     would cancel out the penalty they earn as a smell.
+#     would cancel out the penalty they earn as a smell. The exceptions are
+#     the few that cues.ko.toml also counts ("look into" for 봐줘), listed at
+#     the end of the action verbs: a vague request must still outscore text
+#     that asks for nothing.
 #   - Femmer's "negative statements" smell is not ported. In a requirements
 #     document a negative requirement is hard to verify; in a prompt to a
 #     coding agent, "don't touch the migrations" is one of the most useful
@@ -32,6 +35,12 @@ terms = [
   "enable", "disable", "throw", "emit", "print", "guard", "encode",
   "decode", "normalize", "retry", "compile", "bundle", "sync", "restore",
   "downgrade", "hook up", "silence", "suppress", "dedupe", "backfill",
+  # Parity with cues.ko.toml, which counts 만들어, 최적화, 설명해, 봐줘 and
+  # 정리해: "make it better" scored 90 against 239 for "좀 더 좋게
+  # 만들어줘". A vague request is still a request; the vagueness is charged
+  # as a smell, in both languages.
+  "make", "optimize", "optimise", "speed up", "explain", "investigate",
+  "diagnose", "find", "look at", "look into", "clean up",
 ]
 
 [[cue]]
