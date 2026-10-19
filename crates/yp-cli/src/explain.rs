@@ -12,6 +12,11 @@
 //! Re-scoring the stored prompt rather than storing the whole breakdown keeps
 //! the sidecar small, and is free: scoring is deterministic, so the number
 //! here is always the number the status line showed.
+//!
+//! The hook does not record slash commands, so `/score` itself never becomes
+//! the prompt being explained. A prompt in a language the lexicons cannot
+//! read is recorded but not graded, and this says so rather than explaining a
+//! number nobody should read.
 
 use std::process::ExitCode;
 
@@ -34,6 +39,17 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
         println!("Run `yp install` if you have not already.");
         return ExitCode::SUCCESS;
     };
+
+    if let Some(why) = report::not_graded(sidecar.latest.kind, sidecar.latest.language.as_deref()) {
+        println!("Your last prompt was not graded: {why}.");
+        if let Some(previous) = sidecar.previous() {
+            println!(
+                "The last graded prompt in this session scored {:.1} / 1000 ({}).",
+                previous.total, previous.grade
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
 
     if sidecar.latest_prompt.is_empty() {
         // A sidecar written before prompt storage existed, or one whose
@@ -79,6 +95,13 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
     }
 
     print!("{}", report::full(&score, &style));
+
+    // A sidecar written before kinds existed may hold a "continue" or a
+    // "/score" as its latest task. Its report already says it is not graded,
+    // and a move from the previous score would be a move nobody made.
+    if !score.kind.is_graded() {
+        return ExitCode::SUCCESS;
+    }
 
     if let Some(previous) = sidecar.previous() {
         let delta = sidecar.latest.total - previous.total;
