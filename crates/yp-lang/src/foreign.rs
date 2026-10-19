@@ -90,8 +90,11 @@ const NAME_PARTICLES: &[&str] = &[
 /// of them made a prompt in those languages read as English.
 ///
 /// "english", "translate" and "summarize" are here because a request about
-/// text in another language says in English what to do with it. Sorted,
-/// for binary search.
+/// text in another language says in English what to do with it. "missing",
+/// "broken", "fails" and "failing" are how a terse report says what is
+/// wrong, and in "café con leche option missing" they are the only English
+/// a short phrase borrowed from another language leaves. Sorted, for
+/// binary search.
 const ENGLISH: &[&str] = &[
     "about",
     "after",
@@ -110,6 +113,7 @@ const ENGLISH: &[&str] = &[
     "before",
     "being",
     "both",
+    "broken",
     "but",
     "can",
     "can't",
@@ -132,6 +136,8 @@ const ENGLISH: &[&str] = &[
     "english",
     "every",
     "explain",
+    "failing",
+    "fails",
     "few",
     "find",
     "fix",
@@ -166,6 +172,7 @@ const ENGLISH: &[&str] = &[
     "make",
     "many",
     "might",
+    "missing",
     "more",
     "move",
     "much",
@@ -1667,6 +1674,11 @@ mod tests {
             "arregla el bug para que funcione, it's broken since the last deploy",
             "Set the title to 'ユーザー設定を変更しました。もう一度ログインしてください。'",
             "Change the label to «Paramètres de l'utilisateur» and keep the rest",
+            // A phrase borrowed from another language, in a terse report
+            // whose own words are English.
+            "café con leche option missing",
+            "coup d'état detection fails",
+            "à la carte pricing broken",
         ] {
             assert_eq!(detect(text), None, "{text}");
         }
