@@ -47,15 +47,18 @@ point at one place or forty, and whether you said what done looks like.
 - **Shows it in place.** In the web UI the prompt is coloured as you type:
   green where it earned points, yellow where it is unclear, red where it lost
   them, with a chip per word saying why.
-- **Grades tasks, not chatter.** Slash commands, replies like "yes", "looks
-  good to me", "알아서 해줘" or 👍, and the turns Claude Code sends on its own,
-  such as a background agent reporting back, are not graded. The status line
-  keeps your last task's score instead of flashing an F.
+- **Grades tasks, not chatter.** Slash commands, your own `/fix` or `/plan`
+  included, replies like "yes", "looks good to me", "알아서 해줘" or 👍, and
+  the turns Claude Code sends on its own, such as a background agent
+  reporting back, are not graded. The status line keeps your last task's
+  score instead of flashing an F. A request you wrap in tags of your own,
+  such as `<bug-report>`, is graded like any other.
 - **English and Korean.** A prompt in Spanish, Japanese, Russian or 25 other
   languages says "not graded" rather than failing, even when it borrows
-  English words such as "fix" or "update". A prompt of two or three words can
-  still slip through and be graded, and so can one that is as much English as
-  anything else.
+  English words such as "fix" or "update". An English request around a
+  pasted error or ticket in another language is still graded. A prompt of
+  two or three words can still slip through and be graded, and so can one
+  that opens or ends with a sentence of English.
 
 ## Try it
 
@@ -127,7 +130,10 @@ settings and adds the `/score` command. Before it changes your settings it
 backs them up to `settings.json.yp-backup`, once: a later install keeps that
 backup, unless an uninstall came between and you have changed the settings
 since. If you already have a status line it keeps it, runs it, and appends the
-score segment. The hooks need Claude Code 2.1.139 or newer.
+score segment. The hooks need Claude Code 2.1.139 or newer. On Windows the
+settings are the ones under `USERPROFILE`, where Claude Code reads them, even
+when `HOME` is set elsewhere; `CLAUDE_CONFIG_DIR` picks another folder for
+both.
 
 ```bash
 yp install --print-only   # show the change, write nothing
@@ -163,17 +169,18 @@ than a second, as with a working directory on a network share that has dropped
 off, it scores without one. If anything goes wrong it exits 0 silently.
 Indexing runs in the background from the session-start hook, or by hand with
 `yp index`. Clearing `~/.claude/yourprompt` costs the indexes and the session
-scores, nothing else: a status line yp wrapped is read back from
-`settings.json.yp-backup`.
+scores, nothing else: what `yp install` keeps, a status line it wrapped among
+it, is in `yp-install.json` beside `settings.json`.
 
 ## How the score is built
 
 Four axes, 1000 points total. Every count goes through a saturating function,
 and each axis has a cap, so repeating one word cannot lift a prompt out of
 an F. A cue word for the result, the finish line or the boundary counts only
-when its clause is about something: a name, a part of the result, or a
-criterion stated whole, such as "tests pass". Cue words written into
-sentences still count; see [Caveats](#caveats).
+when its clause is about something: a name, a part of the result, a value
+the cue takes, such as "returns 404", or a criterion stated whole, such as
+"tests pass". Cue words written into sentences still count; see
+[Caveats](#caveats).
 
 | Axis | Points | What it measures |
 |---|---:|---|
@@ -247,7 +254,9 @@ schema. Tests pass, assert, verify. Only, keep, unchanged." names nothing and
 scored 909.8, an S. It now scores 321.8, an F. After "Refactor verify_token."
 the same eleven words lifted the sample repo's score from 503.1 to 912.1,
 above the prompt that names the file, the function and the test; they now
-lift it to 529.9.
+lift it to 529.9. A different number after each cue word, "Returns 1, input
+2, schema 3. Tests pass 4, ...", took it to 915.3, an S; that now gets
+537.1.
 
 ## Benchmarks
 
@@ -266,13 +275,13 @@ is the baseline to beat: call whichever prompt is longer the original.
 
 | | Pairs | Original scores higher | Longer prompt wins |
 |---|---:|---:|---:|
-| Defects visible in the text | 399 | 67.4% | 72.7% |
-| All pairs | 771 | 55.1% | 59.0% |
+| Defects visible in the text | 399 | 67.7% | 72.7% |
+| All pairs | 771 | 55.3% | 59.0% |
 
 | Defect | Pairs | Correct | Longer prompt wins |
 |---|---:|---:|---:|
 | incompleteness | 164 | 81.1% | 100.0% |
-| ambiguity + incompleteness | 71 | 77.5% | 100.0% |
+| ambiguity + incompleteness | 71 | 78.9% | 100.0% |
 | ambiguity | 164 | 49.4% | 33.5% |
 | inconsistency | 163 | 25.2%, 98 ties | 35.6% |
 
@@ -305,15 +314,15 @@ number both times.
 
 | Comparison | Issues | Own repo scores higher | Mean margin |
 |---|---:|---:|---:|
-| vs the mean foreign repo | 270 | **88.9%** | +56.3 |
-| vs the best foreign repo | 270 | 70.7% | +32.9 |
+| vs the mean foreign repo | 270 | **88.9%** | +54.4 |
+| vs the best foreign repo | 270 | 70.4% | +30.6 |
 
 | Repository | Issues | Own repo higher |
 |---|---:|---:|
 | scikit-learn | 23 | 100.0% |
-| django | 114 | 93.0% |
+| sympy | 77 | 92.2% |
+| django | 114 | 92.1% |
 | matplotlib | 23 | 91.3% |
-| sympy | 77 | 90.9% |
 | pytest | 17 | 64.7% |
 | sphinx | 16 | 56.2% |
 
@@ -343,14 +352,18 @@ Against this repository's own index it is 98.7%. See
 - It grades whether an agent can act on a prompt, not whether the request is
   wise. A precise "delete every file and force-push" scores well.
 - Word-level rules can still be gamed. Cue words are counted, not
-  understood. A list of them that names nothing earns little, but written
-  into sentences they count: "Refactor verify_token so that it returns json
-  and takes the input schema, and make sure the tests pass, and assert and
-  verify, and only keep it unchanged." scores 836.5, an A, against the sample
-  repo, though none of it is true of that function. With no index, made-up
-  names count as names: "Refactor `a1` `a2` `a3` returns json schema. Tests
-  pass. Nothing else. `b1` must pass. Only `c1`." scores 886.6, an A+. An
-  index checks names, not whether the words beside them are true.
+  understood. A list of them that names nothing earns little, even with a
+  number or a word after each, but written into phrases they count:
+  "Refactor verify_token so that it returns json and takes the input schema,
+  and make sure the tests pass, and assert and verify, and only keep it
+  unchanged." scores 836.5, an A, against the sample repo, though none of it
+  is true of that function, and "Refactor verify_token. Returns of red, input
+  of blue, schema of gold. Tests pass of apple, assert of pear, verify of
+  plum. Only of north, keep of south, unchanged of east." scores 919.0, an S.
+  With no index, made-up names count as names: "Refactor `a1` `a2` `a3`
+  returns json schema. Tests pass. Nothing else. `b1` must pass. Only `c1`."
+  scores 886.6, an A+. An index checks names, not whether the words beside
+  them are true.
 - The per-component explanation sentences are English only for now.
 
 ## How this was built
