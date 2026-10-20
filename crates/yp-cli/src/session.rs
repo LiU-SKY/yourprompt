@@ -8,6 +8,7 @@
 //! the status line command (whose output never reaches the model) reads it
 //! back.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -162,23 +163,114 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// The directory Claude Code keeps its configuration in.
+/// Where yp keeps the session files and the indexes: `yourprompt` in the
+/// directory Claude Code keeps its configuration in.
 ///
-/// Honours `CLAUDE_CONFIG_DIR` the way Claude Code itself does, then falls
-/// back to `~/.claude`. `YP_STATE_DIR` overrides everything and exists so
-/// tests never touch the real home directory.
+/// `YP_STATE_DIR` overrides it, and exists so tests never touch the real
+/// home directory.
 pub fn state_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("YP_STATE_DIR") {
         return Some(PathBuf::from(dir));
     }
-    let base = if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        PathBuf::from(dir)
-    } else {
-        home_dir()?.join(".claude")
-    };
-    Some(base.join("yourprompt"))
+    Some(config_dir()?.join("yourprompt"))
 }
 
+/// The directory Claude Code keeps its configuration in, settings.json
+/// among it: `CLAUDE_CONFIG_DIR`, as Claude Code itself honours it, else
+/// `.claude` in the home directory Claude Code uses.
+///
+/// Claude Code finds that home with Node's `os.homedir()`, which on Windows
+/// reads `USERPROFILE`, else asks Windows for the profile directory, and
+/// never reads `HOME`. yp read `HOME` first, and MSYS2, Cygwin, Emacs and
+/// many dotfile setups set one elsewhere. With `HOME` in one scratch
+/// directory and `USERPROFILE` in another, Claude Code 2.1.304 read the
+/// second one's settings, and `yp install` wrote the first one's: it said
+/// the score would appear in the next session, and nothing was ever scored.
+/// On macOS and Linux both read `HOME`.
+pub fn config_dir() -> Option<PathBuf> {
+    config_dir_in(&env_var, cfg!(windows), &windows_profile)
+}
+
+/// On Windows, a `HOME` that is not the home Claude Code uses, when no
+/// `CLAUDE_CONFIG_DIR` decides for both. Builds before this one put their
+/// settings and state under it, where Claude Code never looked.
+pub fn ignored_home() -> Option<PathBuf> {
+    ignored_home_in(&env_var, cfg!(windows), &windows_profile)
+}
+
+fn env_var(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
+}
+
+/// The profile directory Windows gives this user, where Node's
+/// `os.homedir()` looks when `USERPROFILE` is not set. Since Rust 1.85, the
+/// oldest this builds with, `std::env::home_dir` asks Windows for it then
+/// and never reads `HOME`; 1.85 still marks it deprecated.
+#[allow(deprecated)]
+fn windows_profile() -> Option<PathBuf> {
+    std::env::home_dir()
+}
+
+/// [`config_dir`], in an environment `var` reads, on Windows or not, where
+/// Windows reports the profile directory `profile` does.
+fn config_dir_in(
+    var: &dyn Fn(&str) -> Option<OsString>,
+    windows: bool,
+    profile: &dyn Fn() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    match var("CLAUDE_CONFIG_DIR") {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => Some(claude_home_in(var, windows, profile)?.join(".claude")),
+    }
+}
+
+/// The home directory Claude Code keeps `.claude` in, in the same terms as
+/// [`config_dir_in`].
+fn claude_home_in(
+    var: &dyn Fn(&str) -> Option<OsString>,
+    windows: bool,
+    profile: &dyn Fn() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let set = |name: &str| {
+        var(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if windows {
+        set("USERPROFILE").or_else(profile).or_else(|| set("HOME"))
+    } else {
+        set("HOME").or_else(|| set("USERPROFILE"))
+    }
+}
+
+/// [`ignored_home`], in the same terms as [`config_dir_in`].
+fn ignored_home_in(
+    var: &dyn Fn(&str) -> Option<OsString>,
+    windows: bool,
+    profile: &dyn Fn() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    if !windows || var("CLAUDE_CONFIG_DIR").is_some() {
+        return None;
+    }
+    let home = var("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+    let used = claude_home_in(var, windows, profile)?;
+    (!same_dir(&home, &used)).then_some(home)
+}
+
+/// Two spellings of one directory: `C:/Users/me` and `c:\Users\me\` are
+/// the same home, and Windows compares names without regard to case.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let (a, b) = (crate::repo::canonical(a), crate::repo::canonical(b));
+    let (a, b) = (a.to_string_lossy(), b.to_string_lossy());
+    a == b || (cfg!(windows) && a.eq_ignore_ascii_case(&b))
+}
+
+/// The home directory as the user's shell and tools see it: `HOME`, else
+/// `USERPROFILE`. The repository walk stops here, at the directory that
+/// holds dotfiles kept in git. Where Claude Code keeps its configuration is
+/// [`config_dir`]'s to say, which on Windows can be under another directory.
 pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -642,5 +734,99 @@ mod tests {
     fn filetime_set(path: &Path, time: SystemTime) {
         let file = fs::OpenOptions::new().write(true).open(path).unwrap();
         file.set_modified(time).unwrap();
+    }
+
+    /// An environment holding exactly `vars`, so no test depends on the
+    /// variables of whoever runs it.
+    fn env_of<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |name| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(value))
+        }
+    }
+
+    fn no_profile() -> Option<PathBuf> {
+        None
+    }
+
+    #[test]
+    fn on_windows_claude_code_is_found_under_userprofile_not_home() {
+        // Claude Code 2.1.304, given HOME=A and USERPROFILE=B, read B's
+        // settings; yp install wrote A's.
+        let both = env_of(&[("HOME", "/scratch/a"), ("USERPROFILE", "/scratch/b")]);
+        assert_eq!(
+            config_dir_in(&both, true, &no_profile),
+            Some(Path::new("/scratch/b").join(".claude"))
+        );
+        // macOS and Linux read HOME, as Node does there.
+        assert_eq!(
+            config_dir_in(&both, false, &no_profile),
+            Some(Path::new("/scratch/a").join(".claude"))
+        );
+        // CLAUDE_CONFIG_DIR decides for both.
+        let chosen = env_of(&[
+            ("HOME", "/scratch/a"),
+            ("USERPROFILE", "/scratch/b"),
+            ("CLAUDE_CONFIG_DIR", "/scratch/c"),
+        ]);
+        for windows in [true, false] {
+            assert_eq!(
+                config_dir_in(&chosen, windows, &no_profile),
+                Some(PathBuf::from("/scratch/c"))
+            );
+        }
+    }
+
+    #[test]
+    fn without_userprofile_windows_is_asked_for_the_profile_directory() {
+        // Where Node's os.homedir() looks next, and never at HOME.
+        let home_only = env_of(&[("HOME", "/scratch/a")]);
+        let profile = || Some(PathBuf::from("/scratch/profile"));
+        assert_eq!(
+            claude_home_in(&home_only, true, &profile),
+            Some(PathBuf::from("/scratch/profile"))
+        );
+        // With nothing else to go on, HOME beats no home at all.
+        assert_eq!(
+            claude_home_in(&home_only, true, &no_profile),
+            Some(PathBuf::from("/scratch/a"))
+        );
+        // A variable set to nothing names no directory, and the next one
+        // is read: HOME set to nothing used to leave no home at all.
+        let blank = env_of(&[("HOME", ""), ("USERPROFILE", "/scratch/b")]);
+        assert_eq!(
+            claude_home_in(&blank, false, &no_profile),
+            Some(PathBuf::from("/scratch/b"))
+        );
+        let neither = env_of(&[("HOME", ""), ("USERPROFILE", "")]);
+        for windows in [true, false] {
+            assert_eq!(claude_home_in(&neither, windows, &no_profile), None);
+        }
+    }
+
+    #[test]
+    fn a_home_claude_code_does_not_read_is_pointed_out_on_windows_only() {
+        let differ = env_of(&[("HOME", "/scratch/a"), ("USERPROFILE", "/scratch/b")]);
+        assert_eq!(
+            ignored_home_in(&differ, true, &no_profile),
+            Some(PathBuf::from("/scratch/a"))
+        );
+        assert_eq!(ignored_home_in(&differ, false, &no_profile), None);
+        let chosen = env_of(&[
+            ("HOME", "/scratch/a"),
+            ("USERPROFILE", "/scratch/b"),
+            ("CLAUDE_CONFIG_DIR", "/scratch/c"),
+        ]);
+        assert_eq!(ignored_home_in(&chosen, true, &no_profile), None);
+        let same = env_of(&[("HOME", "/scratch/b"), ("USERPROFILE", "/scratch/b")]);
+        assert_eq!(ignored_home_in(&same, true, &no_profile), None);
+        let unset = env_of(&[("USERPROFILE", "/scratch/b")]);
+        assert_eq!(ignored_home_in(&unset, true, &no_profile), None);
+        if cfg!(windows) {
+            // One home, spelt as Git Bash passes it on and as Windows does.
+            let spelt = env_of(&[("HOME", "c:/Scratch/B/"), ("USERPROFILE", r"C:\scratch\b")]);
+            assert_eq!(ignored_home_in(&spelt, true, &no_profile), None);
+        }
     }
 }
