@@ -48,6 +48,20 @@
 //! as the verb, "returns" took the objective from both, which scored 270.3
 //! rather than 424.2.
 //!
+//! A past participle among those verbs modifies the noun after it instead:
+//! "Fix failed tests in tests/auth.rs", "Retry timed out requests once". Read
+//! as the verb, "failed" made "Fix" its subject, and the prompt asked for
+//! nothing: 109.6, an F, against 407.7 before terse reports were read. A
+//! report still says when, how often or why it happened ("deploy failed last
+//! night", "build failed several times"), or what it gave ("test returned
+//! None"); see [`attributive`]. A report whose verb takes a bare noun reads as
+//! an instruction again, as it did before: "deploy failed health checks"
+//! scores 154.9 rather than 1.0, an F either way. A hyphen makes one of those
+//! verbs part of a modifier ("made-up names", "must-have checks"), and
+//! "breaks" and "returns" before an "in" or a "from" that names a place in
+//! the code are plurals: "Fix breaks in the page layout", "Log returns from
+//! the payment API".
+//!
 //! An action word joined by a hyphen to "pre", "post" or "non" is part of a
 //! modifier: the "pre-commit" hook, a "post-install" script, "non-test"
 //! files. Once commit, push and install were actions, "Add a pre-commit hook
@@ -76,7 +90,10 @@
 //! between them ends that reading: "fix the parser and try to refactor the
 //! lexer" asks for two things. And a tool's subcommand that another action
 //! runs names the command rather than asking for more: the "install" of "run
-//! npm install"; see [`TOOLS`].
+//! npm install"; see [`TOOLS`]. So does one that "runs" runs: once "set up"
+//! was an action word, "Set up a GitHub Actions workflow that runs cargo test
+//! and cargo clippy on every push." counted "test" as a second objective, and
+//! lost 15.9 points.
 //!
 //! The lists leave out words that also open an instruction, so that a
 //! mistake leaves a noun counted, as before, rather than drops a request.
@@ -125,6 +142,18 @@
 //! empty list." A "return" inside a result-shape cue ("should return", "return
 //! value") stays that cue, and the Korean 반환해줘 becomes the action in place
 //! of its result shape, so neither language counts one word twice.
+//!
+//! Some action words say what software does as often as they ask for it:
+//! "start", "stop", "clear", "show" and the rest of [`DESCRIBERS`]. Like an
+//! opening "return", they ask only where an instruction starts: "Start the
+//! dev server on port 3000." had no action word and scored 155.3, and scores
+//! 511.1. Counted wherever it stood, "start" changed 44 of the texts in
+//! SWE-bench Lite, HumanEvalComm, the gaming corpus and the honest prompt
+//! sets, and in all but 4 it described something: "two workers start at
+//! once", "page 1 should start at index 0", "interval = (start, end)". Read
+//! this way it changes 9, and "clear", "trigger", "reset" and "skip" none of
+//! the 13 they changed before ("It became clear to me", "this will trigger
+//! the auto-reloading mechanism").
 //!
 //! Korean asks for something to be made so with -게 or -도록 and 해줘, where
 //! English says "make": 테스트 돌게 해줘, 설정할 수 있게 해줘. Neither the verb
@@ -277,6 +306,102 @@ const FINITE: &[&str] = &[
     "wouldn't",
 ];
 
+/// The [`FINITE`] verbs that are also past participles, which stand before a
+/// noun to modify it: "Fix failed tests", "Remove crashed workers", "Retry
+/// timed out requests". "made" is not one: before a noun it is the verb of a
+/// report ("test made changes to the DB"), and "made-up names" is a compound.
+/// Sorted, for binary search.
+const PARTICIPLES: &[&str] = &[
+    "crashed", "errored", "failed", "hung", "panicked", "passed", "raised", "returned", "started",
+    "stopped", "timed",
+];
+
+/// Words after which a participle is still the verb of a report: when, where,
+/// how often or why it happened ("deploy failed last night", "build failed
+/// several times", "build failed bc of the cache"), the value or the pronoun
+/// it took ("test returned None", "deploy crashed them"), and what a terse
+/// report runs on into ("build failed pls fix", "deploy failed how do I fix
+/// this"). Determiners, prepositions, the subjects and the [`BREAKS`] and
+/// [`FINITE`] words count as well. Sorted, for binary search.
+const AFTER_VERBS: &[&str] = &[
+    "afterward",
+    "afterwards",
+    "although",
+    "anyway",
+    "anyways",
+    "anywhere",
+    "bc",
+    "because",
+    "due",
+    "earlier",
+    "early",
+    "everytime",
+    "everywhere",
+    "false",
+    "few",
+    "fine",
+    "forever",
+    "halfway",
+    "hard",
+    "here",
+    "him",
+    "how",
+    "idk",
+    "if",
+    "instead",
+    "last",
+    "late",
+    "later",
+    "lol",
+    "many",
+    "me",
+    "midway",
+    "most",
+    "multiple",
+    "nan",
+    "nil",
+    "none",
+    "nowhere",
+    "null",
+    "often",
+    "ok",
+    "okay",
+    "once",
+    "overnight",
+    "please",
+    "pls",
+    "plz",
+    "several",
+    "sometimes",
+    "somewhere",
+    "soon",
+    "them",
+    "though",
+    "today",
+    "tomorrow",
+    "tonight",
+    "true",
+    "twice",
+    "undefined",
+    "unless",
+    "us",
+    "w",
+    "when",
+    "whenever",
+    "where",
+    "while",
+    "who",
+    "why",
+    "yesterday",
+    "yet",
+    "zero",
+];
+
+/// The plurals among the [`FINITE`] verbs that name things code holds, line
+/// breaks and return statements: "Fix breaks in the page layout", "Log returns
+/// from the payment API". Sorted, for binary search.
+const PLURALS: &[&str] = &["breaks", "returns"];
+
 /// Words that cannot be the first half of a compound noun, so a determiner two
 /// words back makes nothing a noun: "the user can test", "a way to build",
 /// "all of test". Sorted, for binary search.
@@ -326,6 +451,28 @@ const PREPOSITIONS: &[&str] = &[
 /// not one, because "re-deploy" and "re-enable" are verbs as often as "re-run"
 /// is. Sorted, for binary search.
 const PREFIXES: &[&str] = &["non", "post", "pre"];
+
+/// Action words for what software does as often as for what it is asked to
+/// do: "two workers start at once", "Django will show an error", "delete()
+/// doesn't clear PKs", "the server won't stop". They ask only where an
+/// instruction starts, as an opening "return" does; see [`described`]. "cap"
+/// is one for the counts a problem names: "Let CAP be the number of the
+/// uppercase letters". Sorted, for binary search.
+const DESCRIBERS: &[&str] = &[
+    "cap", "clear", "refresh", "reload", "reset", "restart", "show", "skip", "skip it", "start",
+    "stop", "trigger", "turn off", "turn on",
+];
+
+/// Words that order the steps of an instruction, and the curt "please", after
+/// which one of the [`DESCRIBERS`] still starts it when they do: "first stop
+/// the server", "now restart it", "pls restart the worker". Sorted, for binary
+/// search.
+const STEPS: &[&str] = &["finally", "first", "next", "now", "pls", "plz"];
+
+/// The forms of "run" that are not the action word, which run a tool's
+/// subcommand as "run" does: "a workflow that runs cargo test". Sorted, for
+/// binary search.
+const RUNS: &[&str] = &["ran", "running", "runs"];
 
 /// The Korean nouns the cue lexicon lists as actions, which take 하다 or
 /// 시키다 to become verbs. Sorted, for binary search.
@@ -799,7 +946,9 @@ pub(crate) fn strip(
         .into_iter()
         .filter(|h| {
             h.id != CueId::ActionVerb
-                || !(is_noun(text, h.span, &actions, &names) || clause_verb(text, h.span))
+                || !(is_noun(text, h.span, &actions, &names)
+                    || clause_verb(text, h.span)
+                    || described(text, h.span))
         })
         .collect();
     let mut kept = purposes(text, &breaks, korean(text, &breaks, kept));
@@ -959,11 +1108,42 @@ fn clause_verb(text: &str, span: Span) -> bool {
 }
 
 /// Whether the tool name starting at `start` is the object of an action word
-/// directly before it: "run npm install".
+/// directly before it, or of one of the [`RUNS`]: "run npm install", "a
+/// workflow that runs cargo test".
 fn commanded(text: &str, start: usize, actions: &[usize]) -> bool {
     let before = &text[..start];
     let joined = before.trim_end_matches([' ', '\t']);
-    joined.len() < before.len() && actions.binary_search(&joined.len()).is_ok()
+    joined.len() < before.len()
+        && (actions.binary_search(&joined.len()).is_ok()
+            || last_word(joined).is_some_and(|w| RUNS.binary_search(&fold(w).as_str()).is_ok()))
+}
+
+/// Whether the action word at `span` is one of the [`DESCRIBERS`] where no
+/// instruction starts, so that it says what something does: "page 1 should
+/// start at index 0", "Django will show an error", "fails to restart". Or an
+/// item of a list or a parameter: "interval = (start, end)",
+/// `enumerate(queryset, start=1)`. Where one starts it asks, as "fix" does:
+/// "Start the dev server on port 3000.", "and then clear the cache", "first
+/// stop the server".
+fn described(text: &str, span: Span) -> bool {
+    if DESCRIBERS
+        .binary_search(&fold(span.slice(text)).as_str())
+        .is_err()
+    {
+        return false;
+    }
+    if text[span.end..].starts_with([',', ')', ']', '=']) {
+        return true;
+    }
+    if opens_clause(text, span.start) {
+        return false;
+    }
+    let before = text[..span.start].trim_end_matches([' ', '\t']);
+    !(before.len() < span.start
+        && last_word(before).is_some_and(|lead| {
+            STEPS.binary_search(&fold(lead).as_str()).is_ok()
+                && opens_clause(text, before.len() - lead.len())
+        }))
 }
 
 /// Whether `word`, folded, makes the word after it a noun: a determiner, a
@@ -1015,26 +1195,114 @@ fn subject(text: &str, end: usize) -> bool {
 }
 
 /// Whether `word`, with `rest` after it on its line, is one of the [`FINITE`]
-/// verbs. Not when it is a plural that "of" follows, since none of those
-/// verbs takes "of" after it: "Document returns of parse_args", "Investigate
-/// causes of the leak". "is of type int" is the copula. Nor "returns" before
-/// "in", which names the returns: "Fix returns in parse_args".
+/// verbs. Not when a hyphen joins it to the next word, which makes it part of
+/// a modifier or a name ("made-up names", "must-have checks", `runs-on`), nor
+/// when it is a participle before a noun it modifies ("failed tests"; see
+/// [`attributive`]). Not when it is a plural that "of" follows, since none of
+/// those verbs takes "of" after it: "Document returns of parse_args",
+/// "Investigate causes of the leak". "is of type int" is the copula. Nor
+/// "returns" before "in", as in "Fix returns in parse_args", nor one of the
+/// [`PLURALS`] before an "in" or a "from" that names a place in the code:
+/// "Fix breaks in the page layout", "Log returns from the payment API"; see
+/// [`placed`].
 fn finite(word: &str, rest: &str) -> bool {
     let folded = fold(word);
-    if FINITE.binary_search(&folded.as_str()).is_err() {
+    if FINITE.binary_search(&folded.as_str()).is_err()
+        || rest
+            .strip_prefix('-')
+            .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphabetic()))
+        || (PARTICIPLES.binary_search(&folded.as_str()).is_ok() && attributive(rest))
+    {
         return false;
     }
-    let after = rest.trim_start_matches([' ', '\t']);
-    if after.len() == rest.len() {
+    let Some((next, tail)) = word_after(rest) else {
         return true;
-    }
-    match next_word(after).map(fold).as_deref() {
-        Some("of") => {
-            !folded.ends_with('s') || matches!(folded.as_str(), "does" | "has" | "is" | "was")
-        }
-        Some("in") => folded != "returns",
+    };
+    match fold(next).as_str() {
+        "of" => !folded.ends_with('s') || matches!(folded.as_str(), "does" | "has" | "is" | "was"),
+        "in" if folded == "returns" => false,
+        "in" | "from" => PLURALS.binary_search(&folded.as_str()).is_err() || !placed(tail),
         _ => true,
     }
+}
+
+/// Whether `rest`, the text after an "in" or a "from", names a place in the
+/// code: a determiner and its noun ("in the page layout"), a name or a path
+/// ("in parse_args", "in src/net/client.rs"), or code. A report says where it
+/// broke with a bare noun, the place it runs: "build breaks in CI", "test
+/// breaks in Firefox".
+fn placed(rest: &str) -> bool {
+    let after = rest.trim_start_matches([' ', '\t']);
+    after.len() < rest.len()
+        && (after.starts_with(['`', '"', '\''])
+            || word_after(rest).is_some_and(|(word, tail)| {
+                DETERMINERS.binary_search(&fold(word).as_str()).is_ok()
+                    || named(word, tail)
+                    || (tail.starts_with(['.', '/', '\\'])
+                        && tail[1..].starts_with(|c: char| c.is_ascii_alphanumeric()))
+            }))
+}
+
+/// Whether `rest`, the text after a participle on its line, starts with the
+/// noun the participle modifies, read past an "out" or "up" that belongs to
+/// it: "failed tests", "timed out requests". After a report's verb comes
+/// something else: when, where, how or why ("failed last night", "timed out
+/// after 30 s", "failed silently"), a verb it began ("started failing"), or a
+/// value, a class or a call it gave ("returned None", "raised ValueError").
+/// Such a name modifies a noun only when one follows it: "failed GitHub jobs".
+fn attributive(rest: &str) -> bool {
+    let Some((mut word, mut tail)) = word_after(rest) else {
+        return false;
+    };
+    if matches!(fold(word).as_str(), "out" | "up") {
+        let Some(next) = word_after(tail) else {
+            return false;
+        };
+        (word, tail) = next;
+    }
+    nominal(word)
+        && (!named(word, tail)
+            || word_after(tail).is_some_and(|(next, after)| nominal(next) && !named(next, after)))
+}
+
+/// Whether `word` can be a noun or the first word of one: not a function
+/// word, an adverb, a gerund or a value, and not a number.
+fn nominal(word: &str) -> bool {
+    let folded = fold(word);
+    word.starts_with(|c: char| c.is_ascii_alphabetic())
+        && !folded.ends_with("ly")
+        && !folded.ends_with("ing")
+        && [
+            DETERMINERS,
+            PREPOSITIONS,
+            SUBJECTS,
+            BREAKS,
+            FINITE,
+            AFTER_VERBS,
+        ]
+        .iter()
+        .all(|list| list.binary_search(&folded.as_str()).is_err())
+}
+
+/// Whether `word`, with `tail` after it, names a value, a class or a call: an
+/// identifier, a word in mixed case (ValueError, HTTPError), or one that is
+/// called or qualified (`Ok(())`, `Foo::bar`). "test(s)" is a plural.
+fn named(word: &str, tail: &str) -> bool {
+    word.contains('_')
+        || (word.contains(|c: char| c.is_ascii_lowercase())
+            && word.chars().skip(1).any(|c| c.is_ascii_uppercase()))
+        || tail.starts_with("::")
+        || (tail.starts_with('(') && !tail.starts_with("(s)"))
+}
+
+/// The word after the spaces `rest` starts with, and what follows it. None
+/// when no space comes first, or no word after it.
+fn word_after(rest: &str) -> Option<(&str, &str)> {
+    let after = rest.trim_start_matches([' ', '\t']);
+    if after.len() == rest.len() {
+        return None;
+    }
+    next_word(after).map(|w| (w, &after[w.len()..]))
 }
 
 /// Whether `span` stands in quotes on its own, as in `Output: "test"` or the
@@ -1582,12 +1850,18 @@ mod tests {
             DETERMINERS,
             MODIFIERS,
             FINITE,
+            PARTICIPLES,
+            AFTER_VERBS,
+            PLURALS,
             BREAKS,
             CAUSATIVES,
             JOINS,
             TOOLS,
             PREPOSITIONS,
             PREFIXES,
+            DESCRIBERS,
+            STEPS,
+            RUNS,
             KO_NOUN_ACTIONS,
             RETURN_LEADS,
             THAT_HEADS,
@@ -1615,6 +1889,10 @@ mod tests {
             .collect();
         for noun in KO_NOUN_ACTIONS {
             assert!(actions.contains(noun), "{noun} is not an action verb");
+        }
+        // The words read only where an instruction starts are actions too.
+        for word in DESCRIBERS {
+            assert!(actions.contains(word), "{word} is not an action verb");
         }
     }
 
@@ -1740,8 +2018,8 @@ mod tests {
 
     #[test]
     fn an_action_word_after_a_preposition_is_its_object() {
-        // "Trigger" is not an action word, and "push" was the objective.
-        assert!(verbs("Trigger the deploy on push to main.").is_empty());
+        // "push" was the objective, before "Trigger" was an action word.
+        assert_eq!(verbs("Trigger the deploy on push to main."), ["Trigger"]);
         for (text, wanted) in [
             ("Run the tests on push to main.", vec!["Run"]),
             ("Run the tests on every push to main.", vec!["Run"]),
@@ -1816,6 +2094,201 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn a_participle_before_a_noun_modifies_it() {
+        // Each had "failed", "crashed" and the rest read as the verb whose
+        // subject the action word was, and so no objective: "Fix failed
+        // tests in tests/auth.rs." scored 109.6 against 407.7.
+        for (text, wanted) in [
+            ("Fix failed tests in tests/auth.rs.", "Fix"),
+            ("Retry failed jobs.", "Retry"),
+            ("Rerun failed jobs.", "Rerun"),
+            (
+                "Retry failed HTTP calls 3 times with 200 ms backoff in src/net/client.rs.",
+                "Retry",
+            ),
+            ("Remove crashed workers from the pool.", "Remove"),
+            ("Delete started sessions older than 1 day.", "Delete"),
+            ("Log failed logins with the IP.", "Log"),
+            ("Fix passed arguments in parse_args.", "Fix"),
+            ("Retry timed out requests once.", "Retry"),
+            ("Log raised exceptions with their stack trace.", "Log"),
+            ("Update returned values to use Option.", "Update"),
+            ("Fix failed GitHub jobs.", "Fix"),
+            // A hyphen makes the verb part of a modifier.
+            ("Remove made-up names from the README.", "Remove"),
+            ("Add must-have checks to the release script.", "Add"),
+            // A plural before "in" or "from" and a place in the code.
+            ("Fix breaks in the page layout.", "Fix"),
+            ("Log returns from the payment API.", "Log"),
+        ] {
+            assert_eq!(verbs(text), [wanted], "{text}");
+        }
+    }
+
+    #[test]
+    fn a_report_keeps_its_verb_whatever_follows_it() {
+        // Round 2's terse reports, and the same verbs before what says when,
+        // how often or why, the value they gave, or the request a report
+        // runs on into.
+        for text in [
+            "build is broken",
+            "deploy failed last night",
+            "docker build fails",
+            "the build failed on CI",
+            "build failed several times",
+            "build failed bc of the cache",
+            "deploy started up fine",
+            "build hung forever",
+            "test timed out",
+            "test errored out on CI",
+            "build started failing on main",
+            "test returned None",
+            "test raised ValueError",
+            "test raised an exception",
+            "build breaks in CI",
+            "lint gets in the way",
+            "test made changes to the DB",
+        ] {
+            assert!(
+                !verbs(text)
+                    .iter()
+                    .any(|v| ["build", "deploy", "test", "lint"].contains(&v.as_str())),
+                "{text}: {:?}",
+                verbs(text)
+            );
+        }
+        for (text, wanted) in [
+            ("Test runs twice, fix the fixture.", "fix"),
+            ("build failed pls fix", "fix"),
+            ("deploy failed how do I fix this", "fix"),
+            ("Fix returns in error paths.", "Fix"),
+        ] {
+            assert_eq!(verbs(text), [wanted], "{text}");
+        }
+    }
+
+    #[test]
+    fn a_participle_before_a_noun_asks_as_the_gerund_does() {
+        let failed = crate::score("Fix failed tests in tests/auth.rs.").unwrap();
+        let failing = crate::score("Fix failing tests in tests/auth.rs.").unwrap();
+        assert_eq!(
+            component(&failed, "objective"),
+            crate::params::actionability::OBJECTIVE_MAX
+        );
+        assert_eq!(failed.total, failing.total);
+        for text in ["build is broken", "deploy failed last night"] {
+            let s = crate::score(text).unwrap();
+            assert_eq!(component(&s, "objective"), 0.0, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_common_imperatives_are_actions_in_both_languages() {
+        // Each had nothing to do in it once the noun after "on" or "after"
+        // was read as one: "Start the dev server on port 3000." scored 155.3
+        // and "Kill the process on port 3000." 132.4.
+        for (text, wanted) in [
+            ("Start the dev server on port 3000.", "Start"),
+            ("Stop the server on port 8080.", "Stop"),
+            ("Restart the worker after deploy.", "Restart"),
+            ("Kill the process on port 3000.", "Kill"),
+            ("Rebuild the index on change.", "Rebuild"),
+            ("Recompute the total on update.", "Recompute"),
+            ("Cherry-pick the fix onto release.", "Cherry-pick"),
+            ("Squash the last 3 commits.", "Squash"),
+            ("Notify the user on failure.", "Notify"),
+            ("Reload config on SIGHUP.", "Reload"),
+            ("Refresh the token on expiry.", "Refresh"),
+            ("Reset the session on logout.", "Reset"),
+            ("Clear the cache on logout.", "Clear"),
+            ("Show the error message from the server.", "Show"),
+            ("Skip the flaky tests on Windows.", "Skip"),
+            ("Trigger the deploy on push to main.", "Trigger"),
+            ("Turn off the cache in tests.", "Turn off"),
+            ("Paginate GET /users: 50 per page.", "Paginate"),
+            ("Cap the token at 256 bytes in Token::decode.", "Cap"),
+            ("Set up a GitHub Actions workflow for the tests.", "Set up"),
+            ("개발 서버 3000번 포트로 시작해줘.", "시작해"),
+            ("서버 중지해줘.", "중지해"),
+            ("워커 재시작해줘.", "재시작해"),
+            ("3000번 포트 프로세스 종료해줘.", "종료해"),
+            ("실패한 요청 다시 시도해줘.", "다시 시도해"),
+            ("실패한 업로드는 건너뛰어줘.", "건너뛰어"),
+            ("다크 모드 켜줘.", "켜줘"),
+            ("디버그 로그 꺼줘.", "꺼줘"),
+            ("타임아웃을 30초로 설정해줘.", "설정해"),
+            ("캐시 비워줘.", "비워"),
+            ("세션 초기화해줘.", "초기화해"),
+            ("페이지 새로고침해줘.", "새로고침해"),
+            ("토큰을 256바이트로 제한해줘.", "제한해"),
+        ] {
+            assert_eq!(verbs(text), [wanted], "{text}");
+        }
+        for (english, korean) in [
+            ("Stop the server.", "서버 중지해줘."),
+            ("Restart the worker.", "워커 재시작해줘."),
+        ] {
+            for text in [english, korean] {
+                let s = crate::score(text).unwrap();
+                assert_eq!(
+                    component(&s, "objective"),
+                    crate::params::actionability::OBJECTIVE_MAX,
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_word_for_what_software_does_asks_only_where_an_instruction_starts() {
+        // Each of these read the word as a request: "start" alone changed 44
+        // of the texts in the benchmarks and the honest prompt sets, and in
+        // all but 4 it described something.
+        for text in [
+            "Expected: no duplicate jobs when two workers start at once.",
+            "page 1 should start at index 0",
+            "You can start from any cell.",
+            "interval = (start, end) = (1, 2)",
+            "for count, obj in enumerate(queryset, start=1):",
+            "Django will show an error with the following hint",
+            "It became clear to me when using another example",
+            "this will trigger the auto-reloading mechanism",
+            "Dev Server fails to restart after adding BASE_DIR",
+            "Let CAP be the number of the uppercase letters",
+            "the server won't stop",
+        ] {
+            assert!(verbs(text).is_empty(), "{text}: {:?}", verbs(text));
+        }
+        // Where an instruction starts they ask.
+        for (text, wanted) in [
+            (
+                "Run npm install and then start the dev server.",
+                vec!["Run", "start"],
+            ),
+            (
+                "first stop the server, then restart it",
+                vec!["stop", "restart"],
+            ),
+            ("pls restart the worker", vec!["restart"]),
+            ("Fix the parser. Now clear the cache.", vec!["Fix", "clear"]),
+            ("- start the dev server", vec!["start"]),
+            ("Wait 2 s between polls; stop after 60 s.", vec!["stop"]),
+        ] {
+            assert_eq!(verbs(text), wanted, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_subcommand_runs_runs_names_the_command() {
+        // "test" was a second objective beside "Set up".
+        assert_eq!(
+            verbs("Set up a GitHub Actions workflow that runs cargo test and cargo clippy on every push."),
+            ["Set up"]
+        );
+        assert_eq!(verbs("the hook ran npm install, fix the lockfile"), ["fix"]);
     }
 
     #[test]

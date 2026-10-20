@@ -18,6 +18,14 @@
 #     constraint here, and never penalised. The verb under it is part of the
 #     constraint, not the objective: "change" in "don't change the schema"
 #     names the one thing not to do, and yp-core reads it that way.
+#   - "use", "open", "save" and "try" are not action verbs. "use" names how
+#     to do the work more often than more work: added, it changed 52 of the
+#     benchmark, corpus and honest-set prompts, and lowered 31 of them as an
+#     objective beside the one they had ("Fix the race ... Use SELECT ... FOR
+#     UPDATE"). "open" and "save" are mostly the steps of a reproduction
+#     ("Open settings.py", "Clicking Save twice"): 9 of the 10 prompts they
+#     changed went down. "try" asks for what follows it: "Try to fix the
+#     flaky test" asks for one thing.
 
 lang = "en"
 
@@ -55,6 +63,22 @@ terms = [
   # "look into" does, so "review the PR" asks for something and still pays
   # for not saying what to look for; cues.ko.toml's 리뷰해 pays the same.
   "review",
+  # Parity with 종료해 and 죽여, 재계산해, 체리픽해, 스쿼시해, 알려줘 and 설정해,
+  # and with 빌드해 after 다시. Once "port" in "Kill the process on port
+  # 3000." was read as the noun it is, nothing was left to do in it, and it
+  # scored 132.4.
+  "kill", "rebuild", "recompute", "cherry-pick", "squash", "notify",
+  "paginate", "set up",
+  # Parity with 시작해, 중지해, 재시작해, 새로고침해, 초기화해, 비워, 건너뛰어,
+  # 켜줘, 꺼줘, 제한해 and 트리거해; "show" has no twin there (see
+  # cues.ko.toml). Software does these as often as it is asked to: "two
+  # workers start at once", "delete() doesn't clear PKs". yp-core counts them
+  # only where an instruction starts; see its nouns.
+  "start", "stop", "restart", "reload", "refresh", "reset", "clear", "show",
+  "trigger", "turn on", "turn off", "skip", "cap",
+  # "skip it" is also a reply on its own (followups.en.toml); held whole, the
+  # verb is never part of a longer reply.
+  "skip it",
 ]
 
 [[cue]]
