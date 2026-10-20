@@ -7,24 +7,29 @@
 //! supplied themselves. "Refactor `x`. Returns json, input schema. Tests
 //! pass, assert, verify. Only, keep, unchanged." scored 909.8, an S, and a
 //! 48-word list of cue words 995.4. With the demo's sample loaded, the same
-//! twelve words after "Refactor verify_token." took it from 503.1 to 912.1,
+//! eleven words after "Refactor verify_token." took it from 503.1 to 912.1,
 //! above the 860.3 of the prompt that names the file, the function and the
 //! test: an index checks names, not cue words.
 //!
 //! So a result-shape, finish-line or boundary cue counts only when its clause
 //! is about something:
 //!
-//! - **A name.** A word that is not a cue, a function word or a single
-//!   letter, such as a path, an identifier, code, a number or a noun, vouches
-//!   for one cue in its clause, and for one only in the whole prompt: a name
+//! - **A name.** A word that is not a cue, a function word, a single letter
+//!   or a value, such as a path, an identifier, code or a noun, vouches for
+//!   one cue in its clause, and for one only in the whole prompt: a name
 //!   repeated in every clause backs one of them. The clause may then complete
 //!   the frame around it with one more cue, "Keep `foo` unchanged", "Don't
 //!   change the response". The verb a prohibition forbids is a name.
+//! - **A value.** A number, a number word or a quoted letter is what a cue
+//!   that takes a value takes, "returns 404", "exit code 1", 404 를 반환해,
+//!   and vouches for that cue alone; see [`VALUE_CUES`].
 //! - **A part of the result.** An I/O noun, the response, the schema, JSON,
 //!   입력, can be what a boundary or a check is about. In a clause that
 //!   grammar holds together it vouches for one acceptance or scope cue and
 //!   counts itself: "Keep the response schema unchanged", 입력과 출력은
-//!   그대로 유지하고.
+//!   그대로 유지하고. So it does for a boundary when the two stand alone,
+//!   "Return type unchanged", and a format beside the I/O cue it describes
+//!   counts with it, "JSON output", JSON 반환; see [`FORMATS`].
 //! - **A statement about the result.** An I/O cue counts in a sentence, or as
 //!   the value of a label such as "Output:"; see [`names_its_own`]. A word
 //!   alone between commas after such a sentence is the next item of its
@@ -38,11 +43,13 @@
 //!   "Acceptance criteria:", or a topic, 나머지는.
 //!
 //! None of this holds for cue words in a list: a clause with more than
-//! [`LIST_CUES`] of them beyond its names, or a run of clauses that are each
-//! one cue and nothing else, two of them a single word, as in "Tests pass,
-//! assert, verify." A sentence is a clause of more than one word held
-//! together by a function word other than an article, by a Korean particle,
-//! or by the objective and the article of its object; see [`ARTICLES`].
+//! [`LIST_CUES`] of them beyond its names, or a run of short clauses, each a
+//! cue with at most one more word beside it and any letters and values, two
+//! of them a single cue word or three of them keywords, as in "Tests pass,
+//! assert, verify." and "Returns 1, input 2, schema 3." A sentence is a
+//! clause of more than one word held together by a function word other than
+//! an article, by a Korean particle, or by the objective and the article of
+//! its object; see [`ARTICLES`].
 //!
 //! The cue words left over are padding. They earn nothing, and count for
 //! nothing toward the substance of clarity's absence credit, which counts the
@@ -58,15 +65,16 @@
 //!
 //! Measured through the WebAssembly build, as the demo page calls it: the
 //! thirteen-word list above and its Korean twin both score 321.8 without an
-//! index, the 48-word one 378.4, and the twelve words after "Refactor
-//! verify_token." take it from 503.1 to 529.9 with the sample. None of the
-//! showcase's 32 prompts moves, with or without the sample, nor any of the 32
-//! in the Korean fixture or the 300 SWE-bench Lite issues. Of 1,803 honest
-//! prompts gathered from every source at hand, three move: two HumanEvalComm
-//! variants made incomplete by ending on a dangling "then", which now earns
-//! nothing, and the boilerplate "Add tests. Expected output must equal actual
-//! output. Only in the test folder; keep everything else unchanged.", from
-//! 817.0 to 791.0.
+//! index, the 48-word one 500.5, and the eleven words after "Refactor
+//! verify_token." take it from 503.1 to 529.9 with the sample. With a
+//! different number after each cue word they took it to 915.3, an S, and
+//! take it to 537.1. None of the showcase's 32 prompts moves, with or
+//! without the sample, nor any of the 32 in the Korean fixture or the 300
+//! SWE-bench Lite issues. Of 1,803 honest prompts gathered from every source
+//! at hand, three move: two HumanEvalComm variants made incomplete by ending
+//! on a dangling "then", which now earns nothing, and the boilerplate "Add
+//! tests. Expected output must equal actual output. Only in the test folder;
+//! keep everything else unchanged.", from 817.0 to 791.0.
 //!
 //! Cue words written into sentences still count, because the rules read
 //! words and not claims: "Refactor verify_token so that it returns json and
@@ -150,6 +158,111 @@ const IO_NOUNS: &[&str] = &[
     "출력",
     "파라미터",
     "표준 출력",
+];
+
+/// I/O cue words that name a format or a stream. Beside the I/O cue it
+/// describes, a format says what the result looks like: "JSON output",
+/// "Returns JSON", "YAML input", JSON 반환. Sorted, for binary search.
+const FORMATS: &[&str] = &["json", "stderr", "stdout", "yaml", "표준 출력"];
+
+/// Cue words that take a value: "returns 404", "exit code 1", "expected 5",
+/// "limit to 100", 404 반환. A number beside one of them is what it returns,
+/// expects or allows. Sorted, for binary search.
+const VALUE_CUES: &[&str] = &[
+    "->",
+    "=>",
+    "accepts",
+    "coverage",
+    "exit code",
+    "expect",
+    "expected",
+    "expects",
+    "fails with",
+    "for input",
+    "given",
+    "input",
+    "inputs",
+    "limit to",
+    "limited to",
+    "must equal",
+    "must return",
+    "output",
+    "outputs",
+    "produces",
+    "response",
+    "restricted to",
+    "return value",
+    "return values",
+    "returns",
+    "should equal",
+    "should return",
+    "status code",
+    "takes",
+    "yields",
+    "결과는",
+    "결과로",
+    "기대값",
+    "돌려주",
+    "돌려줘야",
+    "리턴",
+    "리턴값",
+    "리턴해",
+    "반환",
+    "반환값",
+    "반환해",
+    "상태 코드",
+    "예상 결과",
+    "예상값",
+    "응답",
+    "입력",
+    "종료 코드",
+    "출력",
+    "커버리지",
+];
+
+/// Numbers written as words. "one" is a function word already, and 열 names a
+/// column as often as ten. Sorted, for binary search.
+const NUMBER_WORDS: &[&str] = &[
+    "billion",
+    "eight",
+    "eighteen",
+    "eighty",
+    "eleven",
+    "fifteen",
+    "fifty",
+    "five",
+    "forty",
+    "four",
+    "fourteen",
+    "hundred",
+    "million",
+    "nine",
+    "nineteen",
+    "ninety",
+    "seven",
+    "seventeen",
+    "seventy",
+    "six",
+    "sixteen",
+    "sixty",
+    "ten",
+    "thirteen",
+    "thirty",
+    "thousand",
+    "three",
+    "twelve",
+    "twenty",
+    "two",
+    "zero",
+    "넷",
+    "다섯",
+    "둘",
+    "셋",
+    "아홉",
+    "여덟",
+    "여섯",
+    "일곱",
+    "하나",
 ];
 
 /// Cue words that state a whole criterion, a check or a boundary with its
@@ -552,7 +665,12 @@ enum Role {
     /// cue.
     Cue { particle: bool, io: bool },
     /// A word that names something the cues in its clause can be about.
-    Content,
+    /// `bare` when it is a plain word, rather than a name written as code or
+    /// a verb that a prohibition forbids.
+    Content { bare: bool },
+    /// A number, a number word or a quoted letter: what a cue that takes a
+    /// value takes, "returns 404", 404 반환, and a name of nothing else.
+    Value,
 }
 
 /// The cue categories whose words must be about something.
@@ -605,14 +723,17 @@ pub(crate) fn strip(
 ///
 /// Clarity rewards the absence of vague words, and none of these can be
 /// vague. A cue word that is padding is about nothing and counts for nothing:
-/// counted as other cue words are, the twelve words after "Refactor
+/// counted as other cue words are, the eleven words after "Refactor
 /// verify_token." took it to 592.4 with the sample, and they take it to
 /// 529.9. An article that opens padding counts for nothing either, and so do
 /// the function words of a clause of nothing but padding: "Refactor `x`. Only
 /// all, keep all, unchanged all, assert all, verify all." scored 560.4 with
 /// its five "all"s backing five cue words, and scores 320.0. So does the
 /// number of a list item of nothing but padding: counted, eight such numbers
-/// held a numbered list of cue words at 644.1, and it scores 355.6.
+/// held a numbered list of cue words at 644.1, and it scores 355.6. And so
+/// does the word or value beside each cue of a list: counted, the numbers in
+/// "Refactor verify_token. Returns 1, input 2, schema 3. Tests pass 4, ..."
+/// held it at 724.6 with the sample, and it scores 537.1.
 ///
 /// A cue word that stays counts only as far as the words that could have
 /// been back it: each name, the objective, each I/O word that stays and each
@@ -630,7 +751,10 @@ fn unbacked(tokens: &[Token], verdict: &Verdict) -> usize {
             // Only what the other measures count as content can back it.
             _ if token.kind == TokenKind::Punct => {}
             Role::Objective => backing += 1,
-            Role::Content => backing += 1 + usize::from(has_particle(token)),
+            // The word beside a cue in a clause of nothing but padding, the
+            // way the number of such a list item is.
+            Role::Content { .. } | Role::Value if verdict.idle[i] => idle += 1,
+            Role::Content { .. } | Role::Value => backing += 1 + usize::from(has_particle(token)),
             // An I/O cue word that stays names a part of the result.
             Role::Cue { io: true, particle } if !verdict.covered[i] => {
                 backing += 1 + usize::from(*particle)
@@ -693,8 +817,8 @@ struct Clause {
     kinds: u8,
     /// How many example markers it holds.
     markers: usize,
-    /// How many words it holds, and how many of them are cue words, articles
-    /// and other function words.
+    /// How many words it holds, values aside, and how many of them are cue
+    /// words, articles and other function words.
     words: usize,
     cue_words: usize,
     articles: usize,
@@ -712,8 +836,15 @@ struct Clause {
     /// Whether it holds a cue that states a whole criterion; see
     /// [`STATEMENTS`].
     states: bool,
-    /// Whether it holds a name or the objective, which no padding can be.
-    says: bool,
+    /// Whether it holds a word of a heading, which no padding can be.
+    headed: bool,
+    /// Whether it holds a name that is more than a plain word: a path, an
+    /// identifier, code, a verb a prohibition forbids.
+    solid: bool,
+    /// How many single letters and how many values it holds, which name
+    /// nothing; see [`Role::Value`].
+    letters: usize,
+    values: usize,
     /// Whether one of its names vouched for one of its cues.
     vouched: bool,
     /// Whether the cue that completes the frame around that name is taken.
@@ -721,6 +852,69 @@ struct Clause {
 }
 
 impl Clause {
+    /// Whether it holds a name or the objective, which no padding can be.
+    fn says(&self) -> bool {
+        self.objective || self.headed || !self.names.is_empty()
+    }
+
+    /// How many things it holds that say something: cues and plain names.
+    /// Letters and values name nothing.
+    fn units(&self) -> usize {
+        self.cues.len() + self.markers + self.names.len()
+    }
+
+    /// Whether it is short enough to be an entry of a list: a cue and at
+    /// most one more word, a plain one or another cue, beside letters and
+    /// values, with nothing to hold them together but an article. "returns
+    /// 1", "verify red", "JSON output", "the assert".
+    fn short(&self) -> bool {
+        !self.objective
+            && !self.function
+            && !self.solid
+            && !self.labelled
+            && self.cues.len() + self.markers >= 1
+            && self.units() <= 2
+    }
+
+    /// Whether it can stand in a list of cue words: one cue alone, or a
+    /// short clause that is not a criterion stated whole with the cue that
+    /// marks it. Read as an entry, "Make sure the tests pass." lost its finish
+    /// line beside the list after it, and "Fix login. Make sure the tests
+    /// pass. Verify it. Assert it." scored 223.4, against 412.8.
+    fn entry(&self) -> bool {
+        self.alone() || (self.short() && !self.criterion())
+    }
+
+    /// Whether it is a criterion stated whole and the cue that marks it,
+    /// both of one category: "Make sure the tests pass".
+    fn criterion(&self) -> bool {
+        self.cues.len() + self.markers == GENERIC_CUES
+            && self.states
+            && self.kinds.count_ones() == 1
+    }
+
+    /// Whether it holds nothing that could end a list: no cue, no name and no
+    /// objective, only punctuation, letters, values or function words, as
+    /// between "e.g." and a line break. Read as the end of one, that blank
+    /// split the entries of the 48-word list, which scored 758.4 for it and
+    /// scores 500.5.
+    fn blank(&self) -> bool {
+        !self.says() && self.cues.is_empty() && self.markers == 0
+    }
+
+    /// Whether it is a single cue word with nothing beside it but articles
+    /// and function words: "assert", "the verify", "Only all".
+    fn single(&self) -> bool {
+        self.alone() && self.cue_words == 1 && self.letters + self.values == 0
+    }
+
+    /// Whether it is an entry that reads as a keyword: a single cue word, or
+    /// a cue and one more thing, "verify 7", "only red", "JSON output". A
+    /// cue of several words alone states a criterion, "tests pass".
+    fn keyword(&self) -> bool {
+        self.entry() && (self.single() || self.units() == 2 || self.letters + self.values > 0)
+    }
+
     /// Whether it is a list of cue words, whatever holds it together: more
     /// than [`LIST_CUES`] of them beyond the names it holds.
     fn list(&self) -> bool {
@@ -742,15 +936,23 @@ impl Clause {
         self.sentence() || (self.labelled && !self.list())
     }
 
-    /// Whether an I/O noun in it can be what an acceptance or scope cue is
-    /// about: grammar holds the two together, as in "Keep the response schema
-    /// unchanged" and 입력과 출력은 그대로 유지하고.
-    fn holds_nouns(&self) -> bool {
-        (self.function || self.articles > 0 || self.labelled) && self.words > 1 && !self.list()
+    /// Whether an I/O noun in it can be what a cue of category `id` is about:
+    /// grammar holds the two together, as in "Keep the response schema
+    /// unchanged" and 입력과 출력은 그대로 유지하고, or the noun and a
+    /// boundary are all there is, as in "Return type unchanged". Read as
+    /// padding, that took "Fix the expired-token panic in verify_token.
+    /// Return type unchanged." from 678.9 to 468.5.
+    fn holds_nouns(&self, id: CueId) -> bool {
+        (self.function
+            || self.articles > 0
+            || self.labelled
+            || (id == CueId::ScopeConstraint && self.short()))
+            && self.words > 1
+            && !self.list()
     }
 
-    /// Whether it is one cue and nothing else, but articles and function
-    /// words: "assert", "the verify", "Only all".
+    /// Whether it is one cue and nothing else, but articles, function words
+    /// and values: "assert", "the verify", "Only all", "returns 1 and 2".
     fn alone(&self) -> bool {
         self.cues.len() + self.markers == 1
             && self.words - self.articles - self.function_words == self.cue_words
@@ -763,10 +965,10 @@ impl Clause {
     /// 나머지는 그대로 유지해, and so can a phrase of no more than
     /// [`GENERIC_CUES`] cues of one category around a criterion stated
     /// whole, "Keep backwards compatible". Example markers count among them:
-    /// "Refactor must pass tests pass for example e.g. 1 schema `x`" scored
-    /// 776.6 with its first four words read as one statement, and scores
-    /// 638.7. Read as a phrase, "tests pass only" took "Refactor must pass
-    /// `fn` 1 returns. tests pass only" to 807.3, where it scores 638.7 too.
+    /// "Refactor `x`. Must pass tests pass for example e.g." scored 464.9
+    /// with its second sentence read as one statement, and scores 314.7. Read
+    /// as a phrase, "tests pass only" took "Refactor must pass `fn` 1
+    /// returns. tests pass only" to 653.4, where it scores 484.8.
     fn generic(&self, label: usize, statement: usize) -> bool {
         let phrase = self.sentence()
             || (self.topic && !self.list())
@@ -841,8 +1043,8 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
     let code = code_regions(text);
     let labels: Vec<usize> = spans.iter().map(|s| label_end(text, &code, *s)).collect();
     // A label of one plain word is a heading, "Scope:" or "Requirements:",
-    // and names nothing the cues after it are about: "Scope:\n- only" made
-    // a list of cue words under headings score 662.9, where it scores 568.3.
+    // and names nothing the cues after it are about: read as a name, "Scope"
+    // took "Refactor `x`.\nScope:\n- only" to 450.4, where it scores 355.9.
     let mut heading = vec![0usize; spans.len()];
     for t in tokens.iter().filter(|t| t.kind != TokenKind::Punct) {
         let c = clause_of(t.span.start);
@@ -850,16 +1052,59 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
             heading[c] += 1;
         }
     }
+    // A value is what the cue beside it takes, when that cue takes one: the
+    // word after the cue, or the one before it, past any function words,
+    // "returns 404", "f(2) => 4", 404 를 반환해. A cue takes one value, and a
+    // value names nothing else, so "verify 7" says no more than "verify".
+    // Read as names, a different number after each cue word took "Refactor
+    // verify_token." to 915.3 with the sample, and two of them to 922.7.
+    let word = |j: usize| !matches!(roles[j], Role::Nothing | Role::Function);
+    let mut next = vec![tokens.len(); tokens.len() + 1];
+    for j in (0..tokens.len()).rev() {
+        next[j] = if word(j) { j } else { next[j + 1] };
+    }
+    let mut prev: Vec<Option<usize>> = vec![None; tokens.len() + 1];
+    for j in 0..tokens.len() {
+        prev[j + 1] = if word(j) { Some(j) } else { prev[j] };
+    }
+    let mut takes: Vec<Option<String>> = vec![None; settled.len()];
+    let mut taken = vec![false; tokens.len()];
+    for &h in &order {
+        let hit = &settled[h];
+        if !is_bound(hit.id)
+            || VALUE_CUES
+                .binary_search(&hit.term.to_lowercase().trim())
+                .is_err()
+        {
+            continue;
+        }
+        let c = clause_of(hit.span.start);
+        let after = next[tokens.partition_point(|t| t.span.start < hit.span.end)];
+        let before = prev[tokens.partition_point(|t| t.span.end <= hit.span.start)];
+        let value = [Some(after), before].into_iter().flatten().find(|&j| {
+            j < tokens.len()
+                && roles[j] == Role::Value
+                && !taken[j]
+                && clause_of(tokens[j].span.start) == c
+        });
+        if let Some(j) = value {
+            taken[j] = true;
+            takes[h] = Some(name(&tokens[j]));
+        }
+    }
+
     let mut clauses: Vec<Clause> = spans.iter().map(|_| Clause::default()).collect();
     let mut seen: HashSet<(usize, String)> = HashSet::new();
     for (token, &role) in tokens.iter().zip(&roles) {
         let c = clause_of(token.span.start);
         let clause = &mut clauses[c];
-        if role != Role::Nothing {
+        if !matches!(role, Role::Nothing | Role::Value) {
             clause.words += 1;
         }
         match role {
-            Role::Nothing | Role::Letter => {}
+            Role::Nothing => {}
+            Role::Value => clause.values += 1,
+            Role::Letter => clause.letters += 1,
             Role::Cue { particle, .. } => {
                 clause.cue_words += 1;
                 clause.function |= particle;
@@ -869,15 +1114,15 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
                 clause.function = true;
                 clause.function_words += 1;
             }
-            Role::Objective => {
-                clause.says = true;
-                clause.objective = true;
-            }
-            Role::Content => {
-                clause.says = true;
-                let label = token.span.end <= labels[c] && heading[c] == 1;
+            Role::Objective => clause.objective = true,
+            Role::Content { bare } => {
+                if token.span.end <= labels[c] && heading[c] == 1 && token.kind == TokenKind::Word {
+                    clause.headed = true;
+                    continue;
+                }
+                clause.solid |= !bare;
                 let name = name(token);
-                if !(label && token.kind == TokenKind::Word) && seen.insert((c, name.clone())) {
+                if seen.insert((c, name.clone())) {
                     clause.names.push(name);
                 }
             }
@@ -899,7 +1144,7 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         // 나머지는 그대로 유지해: a topic, and what is said of it. The topic
         // makes its clause a phrase and counts as its label; without either,
         // "디버그 출력을 지워줘. 나머지는 그대로 유지해." lost its boundary,
-        // 366.9 against 592.1.
+        // 382.8 against 608.1.
         clause.topic |= topic(text, hit);
         let term = hit.term.to_lowercase();
         clause.states |= STATEMENTS.binary_search(&term.trim()).is_ok();
@@ -917,14 +1162,91 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         };
     }
 
+    // A run of entries is a list of cue words when two of them are a single
+    // cue word alone, "Tests pass, assert, verify.", or three of them are
+    // keywords, "Returns 1, input 2, schema 3." Its entries state nothing,
+    // and the word beside each cue names nothing either: read as a name
+    // beside a cue, a plain word after each one took "Refactor
+    // verify_token." to 825.1 with the sample. Two keywords make no list,
+    // as one or two terse requirements after the task are what they say:
+    // read as one, "Add a `yp export` command. JSON output. Return type
+    // unchanged. Tests pass." would score 414.4, not 829.0. And only an
+    // entry that brings a cue word new to the run counts toward it, as a
+    // list of cue words collects them: "Add login tests.\n- verify login\n-
+    // verify logout\n- verify refresh" is a checklist, and as a list it
+    // scored 251.9, against 422.6.
+    let mut listed = vec![false; clauses.len()];
+    let mut run = 0usize;
+    while run < clauses.len() {
+        let end = (run..clauses.len())
+            .find(|&c| !clauses[c].entry() && !clauses[c].blank())
+            .unwrap_or(clauses.len());
+        let (mut singles, mut keywords) = (0usize, 0usize);
+        let mut terms: HashSet<&str> = HashSet::new();
+        for clause in clauses[run..end].iter().filter(|c| c.keyword()) {
+            let new = clause
+                .cues
+                .iter()
+                .fold(clause.cues.is_empty(), |new, t| terms.insert(t) || new);
+            if new {
+                keywords += 1;
+                singles += usize::from(clause.single());
+            }
+        }
+        if singles >= 2 || keywords >= 3 {
+            listed[run..end].fill(true);
+            for clause in &mut clauses[run..end] {
+                clause.names.clear();
+                clause.headed = false;
+            }
+        }
+        run = end + 1;
+    }
+
+    // A format says what the result looks like beside the I/O cue it
+    // describes, "JSON output", "Returns JSON", JSON 반환, and the two count
+    // together. Neither names the other, and "Add a `yp export` command.
+    // JSON output. Tests pass." scored 569.2 with both as padding, against
+    // 763.6.
+    let mut counted: HashSet<(CueId, String)> = HashSet::new();
+    for (c, clause) in clauses.iter().enumerate() {
+        if !listed[c]
+            && clause.short()
+            && clause.kinds == 1
+            && clause.cues.len() == 2
+            && clause
+                .cues
+                .iter()
+                .filter(|t| FORMATS.binary_search(&t.trim()).is_ok())
+                .count()
+                == 1
+        {
+            counted.extend(clause.cues.iter().map(|t| (CueId::IoSpec, t.clone())));
+        }
+    }
+
+    // A value vouches for the cue that takes it, and each value does so once.
+    // The clause may frame one more cue around the two: without it, "When
+    // the token is expired, the endpoint should return 401." lost its
+    // "endpoint", 510.8 against 524.5.
+    let mut vouched: HashSet<String> = HashSet::new();
+    for &i in &order {
+        let c = clause_of(settled[i].span.start);
+        if !listed[c]
+            && !counted.contains(&key(&settled[i]))
+            && takes[i].as_ref().is_some_and(|v| vouched.insert(v.clone()))
+        {
+            counted.insert(key(&settled[i]));
+            clauses[c].vouched = true;
+        }
+    }
+
     // Each name vouches for one cue in its clause, in text order, and so may
     // a part of the result for a boundary or a check. The clause may then
     // complete the frame around it with one more: "Keep `foo` unchanged",
     // "Don't change the response". Without the frame the second scored
     // 204.2, against 368.1.
-    let mut vouched: HashSet<String> = HashSet::new();
     let mut nouns: HashSet<String> = HashSet::new();
-    let mut counted: HashSet<(CueId, String)> = HashSet::new();
     let mut left: Vec<usize> = Vec::new();
     for &i in &order {
         let hit = &settled[i];
@@ -932,13 +1254,17 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         if !is_bound(hit.id) || counted.contains(&key(hit)) {
             continue;
         }
-        let clause = &mut clauses[clause_of(hit.span.start)];
+        let c = clause_of(hit.span.start);
+        if listed[c] {
+            continue;
+        }
+        let clause = &mut clauses[c];
         let mut backed = false;
         while clause.used < clause.names.len() && !backed {
             backed = vouched.insert(clause.names[clause.used].clone());
             clause.used += 1;
         }
-        if !backed && hit.id != CueId::IoSpec && clause.holds_nouns() {
+        if !backed && hit.id != CueId::IoSpec && clause.holds_nouns(hit.id) {
             if let Some(noun) = clause.io_nouns.iter().find(|n| !nouns.contains(*n)) {
                 counted.insert((CueId::IoSpec, noun.clone()));
                 nouns.insert(noun.clone());
@@ -960,23 +1286,6 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         .filter(|&i| !counted.contains(&key(&settled[i])))
         .collect();
 
-    // A run of clauses that are each one cue and nothing else, two of them a
-    // single word, is a list of cue words, "Tests pass, assert, verify." or
-    // "tests pass; assert; verify", and its entries state nothing. Read as a
-    // finish line, that "Tests pass" took the twelve words after "Refactor
-    // verify_token." to 633.9 with the sample; they take it to 529.9.
-    let mut keywords = vec![false; clauses.len()];
-    let mut run = 0usize;
-    while run < clauses.len() {
-        let end = (run..clauses.len())
-            .find(|&c| !clauses[c].alone())
-            .unwrap_or(clauses.len());
-        if (run..end).filter(|&c| clauses[c].cue_words == 1).count() >= 2 {
-            keywords[run..end].fill(true);
-        }
-        run = end + 1;
-    }
-
     // An I/O cue says what the result looks like in a sentence, and so does
     // a word alone between commas after one: "the input, output, and
     // schema" is a list the sentence opened, and "output" alone cost
@@ -985,6 +1294,7 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
     for &i in &order {
         let c = clause_of(settled[i].span.start);
         if settled[i].id == CueId::IoSpec
+            && !listed[c]
             && counted.contains(&key(&settled[i]))
             && clauses[c].states_io()
         {
@@ -1024,7 +1334,7 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         // statement of its category, "no warnings" in "Fix the import cycle
         // between api.py and models.py. Tests pass, no warnings." would have
         // counted for nothing, 633.9 against 659.9.
-        for &c in first.iter().filter(|&&c| !keywords[c]) {
+        for &c in &first {
             let set = &terms[&c];
             if clauses[c].cues.len() == 1
                 && set.len() == 1
@@ -1039,8 +1349,7 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         let chosen = first.into_iter().find(|&c| {
             let set = &terms[&c];
             let label = set.values().filter(|&&l| l).count();
-            !keywords[c]
-                && clauses[c].generic(label, set.len() - label)
+            clauses[c].generic(label, set.len() - label)
                 && !set.keys().all(|t| counted.contains(&(id, t.clone())))
         });
         if let Some(c) = chosen {
@@ -1061,7 +1370,7 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         if is_bound(settled[i].id) {
             let c = clause_of(settled[i].span.start);
             let all = empty[c].unwrap_or(true);
-            empty[c] = Some(all && hits[i] && !clauses[c].says);
+            empty[c] = Some(all && hits[i] && !clauses[c].says());
         }
     }
     for &i in &order {
@@ -1206,9 +1515,9 @@ fn role(
 ) -> Role {
     if token.kind == TokenKind::Punct {
         // A number the tokenizer cannot read as one, -1 or 3.5, is still a
-        // value a cue can be about: "should return -1".
+        // value a cue can take: "should return -1".
         return if token.text.chars().any(|c| c.is_ascii_digit()) {
-            Role::Content
+            Role::Value
         } else {
             Role::Nothing
         };
@@ -1227,7 +1536,7 @@ fn role(
         if is_evidence(hit.id) {
             if is_bound(hit.id) && verbs.binary_search(&hit.span).is_ok() {
                 // A forbidden verb, read as the boundary it states.
-                return Role::Content;
+                return Role::Content { bare: false };
             }
             let before = &text[token.span.start..hit.span.start.max(token.span.start)];
             let after = &text[hit.span.end.min(token.span.end)..token.span.end];
@@ -1238,7 +1547,7 @@ fn role(
             {
                 // The cue is part of a longer word or name: "except" in
                 // "try-except", "response" in `response.content`.
-                return Role::Content;
+                return Role::Content { bare: false };
             }
             return Role::Cue {
                 particle: after.chars().any(yp_lang::legible::is_any_hangul),
@@ -1256,8 +1565,26 @@ fn role(
         Role::Function
     } else if is_letter(text, token) {
         Role::Letter
+    } else if is_value(text, token) {
+        Role::Value
     } else {
-        Role::Content
+        Role::Content {
+            bare: matches!(token.kind, TokenKind::Word | TokenKind::Hangul),
+        }
+    }
+}
+
+/// Whether `token` is a value rather than a name: a number, written in
+/// digits, with a unit, "30s", or as a word, or a quoted letter, `== 'A'`.
+fn is_value(text: &str, token: &Token) -> bool {
+    match token.kind {
+        TokenKind::Number => true,
+        TokenKind::Word | TokenKind::Hangul => {
+            token.text.starts_with(|c: char| c.is_ascii_digit())
+                || NUMBER_WORDS.binary_search(&token.text.as_str()).is_ok()
+                || (token.text.chars().count() == 1 && quoted(text, token.span))
+        }
+        _ => false,
     }
 }
 
@@ -1411,7 +1738,15 @@ mod tests {
 
     #[test]
     fn the_word_lists_are_sorted_so_the_search_works() {
-        for list in [EN_FUNCTION_WORDS, KO_FUNCTION_WORDS, IO_NOUNS, STATEMENTS] {
+        for list in [
+            EN_FUNCTION_WORDS,
+            KO_FUNCTION_WORDS,
+            IO_NOUNS,
+            FORMATS,
+            VALUE_CUES,
+            NUMBER_WORDS,
+            STATEMENTS,
+        ] {
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             assert_eq!(list, sorted.as_slice());
@@ -1497,18 +1832,44 @@ mod tests {
             "출력은 JSON 형식으로 해줘.",
             "엔드포인트 응답을 JSON 으로 바꿔줘.",
         ]);
+        // Two of them with nothing named are not about anything, unless one
+        // is a format, which says what the other looks like.
         assert_eq!(
             padded("Refactor. Returns json, input schema."),
-            ["Returns", "json", "input", "schema"]
+            ["input", "schema"]
         );
-        // An article only opens the noun phrase.
+        // In a list they say nothing, format or not, and an article only
+        // opens the noun phrase.
         assert_eq!(
-            padded("Refactor. Returns the json, the input schema."),
-            ["Returns", "json", "input", "schema"]
+            padded("Refactor. Returns the json, the input schema, the output yaml."),
+            ["Returns", "json", "input", "schema", "output", "yaml"]
         );
         assert_eq!(
             padded("리팩터링해줘. 반환, 입력, 출력."),
             ["반환", "입력", "출력"]
+        );
+    }
+
+    #[test]
+    fn a_format_says_what_the_io_cue_beside_it_says() {
+        assert_kept(&[
+            "Add a `yp export` command. JSON output. Tests pass.",
+            "Add a `yp export` command. Returns JSON. Tests pass.",
+            "Add a `yp export` command, JSON output, tests pass.",
+            "Add a config loader. YAML input. Tests pass.",
+            "Add a /stats endpoint. JSON response. Tests pass.",
+            "Add a `yp export` command.\nRequirements:\n- JSON output\n- tests pass",
+            "`yp export` 명령 추가해줘. JSON 출력. 테스트 통과.",
+            "`yp export` 명령 추가해줘. JSON 반환. 테스트 통과.",
+        ]);
+        // Two formats, or no format, say nothing of each other.
+        assert_eq!(
+            padded("Add a `yp export` command. JSON YAML."),
+            ["JSON", "YAML"]
+        );
+        assert_eq!(
+            padded("Add a `yp export` command. Input schema."),
+            ["Input", "schema"]
         );
     }
 
@@ -1521,7 +1882,16 @@ mod tests {
             "Keep the return types unchanged.",
             "Don't change the response.",
             "입력과 출력은 그대로 유지해.",
+            // With nothing else beside them, a part of the result and a
+            // boundary are about each other.
+            "Fix the expired-token panic in verify_token. Return type unchanged.",
+            "Fix the parser. Signature unchanged.",
         ]);
+        // A check is not about a part of the result for being beside it.
+        assert_eq!(
+            padded("Fix the parser. Tests pass input."),
+            ["Tests pass", "input"]
+        );
     }
 
     #[test]
@@ -1588,6 +1958,20 @@ mod tests {
                 "{noun:?} is no I/O cue word"
             );
         }
+        for format in FORMATS {
+            assert!(IO_NOUNS.contains(format), "{format:?} is no I/O noun");
+        }
+        // The other lists name cue words of the categories judged here.
+        let bound: Vec<String> = table
+            .terms
+            .iter()
+            .zip(&table.categories)
+            .filter(|(_, &id)| is_bound(id))
+            .map(|(t, _)| t.to_lowercase())
+            .collect();
+        for term in VALUE_CUES.iter().chain(STATEMENTS) {
+            assert!(bound.contains(&term.to_string()), "{term:?} is no cue word");
+        }
     }
 
     #[test]
@@ -1609,6 +1993,71 @@ mod tests {
         // holds it together.
         let text = "리팩터링해줘 모든 테스트가 건드리지 마 다른 건 반환 `x` 리턴 테스트 통과";
         assert_eq!(padded(text).len(), 6, "{:?}", padded(text));
+    }
+
+    #[test]
+    fn a_value_names_only_the_cue_that_takes_it() {
+        // A cue that takes a value is about it, written after the cue or, as
+        // Korean writes it, before.
+        assert_kept(&[
+            "Add a /health endpoint. Returns 200.",
+            "Fix the CLI. Exit code 1.",
+            "When the token is expired, the endpoint should return 401.",
+            "Write square(x). Input 5, output 25.",
+            "Write add(a, b). add(2, 3) => 5.",
+            "/health 엔드포인트 추가해줘. 200 을 반환해.",
+        ]);
+        // Another cue is not about a number, a number word or a quoted letter
+        // beside it, nor about a number with a unit.
+        for text in [
+            "Fix login. Verify 7.",
+            "Fix login. Verify seven.",
+            "Fix login. Verify 'g'.",
+            "Fix login. Verify 7ms.",
+            "Fix login. Verify -7.",
+        ] {
+            assert_eq!(padded(text), ["Verify"], "{text}");
+        }
+    }
+
+    #[test]
+    fn a_run_of_cues_each_beside_one_bare_word_or_value_is_a_list() {
+        // A different number, number word, quoted letter or plain word after
+        // each cue word made the entries of a list look like statements about
+        // something: after "Refactor verify_token." the list took the sample
+        // to 915.3, an S, written in digits, words or Korean, 930.2 as
+        // bullets, 899.1 with quoted letters and 825.1 with plain words. Two
+        // values after each cue, or an "and" between them, are no different.
+        let all = |text: &str| {
+            let (_, settled, verdict) = judged(text);
+            let bound = settled.iter().filter(|h| is_bound(h.id)).count();
+            assert!(bound >= 9, "{text}");
+            assert_eq!(
+                verdict.hits.iter().filter(|&&p| p).count(),
+                bound,
+                "{text}: {:?}",
+                padded(text)
+            );
+        };
+        for text in [
+            "Refactor `x`. Returns 1, input 2, schema 3. Tests pass 4, assert 5, verify 6. Only 7, keep 8, unchanged 9.",
+            "Refactor `x`. Returns one, input two, schema three. Tests pass four, assert five, verify six. Only seven, keep eight, unchanged nine.",
+            "Refactor `x`.\n- returns 1\n- input 2\n- schema 3\n- tests pass 4\n- assert 5\n- verify 6\n- only 7\n- keep 8\n- unchanged 9",
+            "Refactor `x`. Returns 'a', input 'b', schema 'c'. Tests pass 'd', assert 'e', verify 'f'. Only 'g', keep 'h', unchanged 'i'.",
+            "Refactor `x`. Returns red, input blue, schema green. Tests pass apple, assert pear, verify plum. Only north, keep south, unchanged east.",
+            "Refactor `x`. Returns 1 2, input 3 4, schema 5 6. Tests pass 7 8, assert 9 10, verify 11 12. Only 13 14, keep 15 16, unchanged 17 18.",
+            "Refactor `x`. Returns 1 and 2, input 3 and 4, schema 5 and 6. Tests pass 7 and 8, assert 9 and 10, verify 11 and 12. Only 13 and 14, keep 15 and 16, unchanged 17 and 18.",
+            "리팩터링해줘 `x`. 반환 1, 입력 2, 스키마 3. 테스트 통과 4, 커버리지 5, 기대값 6. 에서만 7, 그대로 8, 유지해 9.",
+            "리팩터링해줘 `x`. 반환 하나, 입력 둘, 스키마 셋. 테스트 통과 넷, 커버리지 다섯, 기대값 여섯. 에서만 일곱, 그대로 여덟, 유지해 아홉.",
+        ] {
+            all(text);
+        }
+        // One or two of them after the task are what they say, and so is a
+        // checklist that names one cue word again and again.
+        assert_kept(&[
+            "Add a `yp export` command. JSON output. Return type unchanged. Tests pass.",
+            "Add login tests.\n- verify login\n- verify logout\n- verify refresh",
+        ]);
     }
 
     #[test]
