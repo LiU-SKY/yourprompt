@@ -169,11 +169,11 @@ scores, nothing else: a status line yp wrapped is read back from
 ## How the score is built
 
 Four axes, 1000 points total. Every count goes through a saturating function,
-and each axis has a cap, so repeating one word does not pay. A cue word for
-the result, the finish line or the boundary counts only when its clause is
-about something: a name, a part of the result, or a criterion stated whole,
-such as "tests pass". Cue words written into sentences still count; see
-[Caveats](#caveats).
+and each axis has a cap, so repeating one word cannot lift a prompt out of
+an F. A cue word for the result, the finish line or the boundary counts only
+when its clause is about something: a name, a part of the result, or a
+criterion stated whole, such as "tests pass". Cue words written into
+sentences still count; see [Caveats](#caveats).
 
 | Axis | Points | What it measures |
 |---|---:|---|
@@ -245,7 +245,7 @@ of a list" was charged for a vague pronoun and scored 486.4; it now scores
 A list of cue words used to reach the top. "Refactor `x`. Returns json, input
 schema. Tests pass, assert, verify. Only, keep, unchanged." names nothing and
 scored 909.8, an S. It now scores 321.8, an F. After "Refactor verify_token."
-the same twelve words lifted the sample repo's score from 503.1 to 912.1,
+the same eleven words lifted the sample repo's score from 503.1 to 912.1,
 above the prompt that names the file, the function and the test; they now
 lift it to 529.9.
 
