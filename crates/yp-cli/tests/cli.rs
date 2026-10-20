@@ -100,12 +100,20 @@ fn json_output_is_valid_and_carries_every_axis() {
 const SPANISH: &str = "arregla el bug en src/auth/login.rs para que verify_token devuelva \
                        Err(AuthError::Expired). Los tests deben pasar.";
 
+/// What a background agent's report back looks like when Claude Code runs
+/// the prompt hook on it.
+const TASK_NOTIFICATION: &str = "<task-notification>\n<task-id>agent-a1b</task-id>\n\
+                                 <status>completed</status>\n<summary>Agent \"Investigate \
+                                 auth bug\" finished</summary>\n<result>Found null pointer in \
+                                 src/auth/validate.ts:42.</result>\n</task-notification>";
+
 #[test]
 fn score_says_why_a_prompt_is_not_graded() {
     for (prompt, why, kind) in [
         ("yes", "follow-up", "follow_up"),
         ("/compact keep the API notes", "slash command", "command"),
         (SPANISH, "looks like Spanish", "unsupported"),
+        (TASK_NOTIFICATION, "Claude Code sent this turn", "automated"),
     ] {
         let out = run(&["score", prompt]);
         assert!(out.status.success(), "stderr: {:?}", out.stderr);
@@ -406,6 +414,10 @@ fn commands_and_follow_ups_leave_the_last_task_in_place() {
         "ok do it",
         "응 계속해줘",
         "/compact keep the API notes",
+        "looks good to me",
+        "알아서 해줘",
+        "/review is this safe to merge",
+        TASK_NOTIFICATION,
     ] {
         let out = run_isolated(scratch.path(), &["hook"], &hook_payload(prompt, session));
         assert_eq!(out.status.code(), Some(0), "{prompt}");

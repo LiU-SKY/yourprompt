@@ -50,11 +50,11 @@ pub use stats::PromptStats;
 /// once pasted material is cut out, to its first
 /// [`prompt::MAX_INSTRUCTION_BYTES`].
 ///
-/// The hook asks this before deciding whether to score at all, so it is
-/// bounded by the same cap as the score, and the two always agree. Classified
-/// from the raw prompt, a megabyte of short fenced blocks took the hook 9.2 s
-/// against django's index after scoring itself had been capped; read like
-/// this, 103 ms.
+/// The hook asks this before deciding whether to score at all, so it reads
+/// the text the score reads, and the two always agree. [`kind::kind_of`] reads
+/// the raw prompt, and past the cap it can answer differently. The cap is not
+/// what keeps this fast any more: a megabyte of short fenced blocks is
+/// classified in about 10 ms read raw and 3 ms read like this.
 pub fn kind_of(text: &str) -> (Kind, Option<&'static str>) {
     let parts = prompt::split(text);
     let capped = parts.capped();

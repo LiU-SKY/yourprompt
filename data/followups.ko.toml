@@ -2,41 +2,56 @@
 #
 # Same groups as followups.en.toml, and the same rule: a prompt is a follow-up
 # only when every word in it is covered by these terms, fillers ("음", "제발"),
-# punctuation and emoji aside. One word from outside the list and it is a task
-# again, graded exactly as before.
+# punctuation and unlisted emoji aside. One word from outside the list and it
+# is a task again, graded exactly as before. The emoji that are replies are
+# listed in followups.en.toml and serve both languages.
 #
 # Korean is matched a character at a time, with spaces ignored, so that
 # "계속해줘", "계속 해줘" and "계속해 줘" are one reply -- casual spacing is
 # not something a follow-up should depend on. It also means stems and endings
-# combine: "계속" + "해줘", "진행" + "해주세요", "다시" + "해줘". Endings are
-# listed once, under the group they most often close.
+# combine: "계속" + "해줘", "진행" + "해주세요", "다시" + "해줘", and the
+# endings "요", "야", "자" and "다" close any listed stem: "잠깐만요",
+# "최고야", "넘어가자". A run of "ㅇ", "ㄱ" or "ㄴ" is matched one jamo at a
+# time, so "ㄱㄱㄱ" is a reply however many there are. Endings are listed
+# once, under the group they most often close.
 #
 # No term may name work on its own or point at something: "그거 다시 해줘"
-# has to stay a task, so "그거", "이거" and "그렇게" are absent, and so are
-# verbs like "고쳐" and "추가해". "재시도" is also an action verb in
-# cues.ko.toml; alone it can only mean the last thing again.
+# has to stay a task, so "그거" and "이거" are absent, and so are verbs like
+# "고쳐" and "추가해". "재시도" is also an action verb in cues.ko.toml; alone
+# it can only mean the last thing again. "그거야" and "그거예요" are listed
+# whole: they mean "that's it", and neither is a prefix of "그거 다시 해줘".
+#
+# A group marked `lead` opens a reply and is not one on its own. "그렇게"
+# points at a manner, not at a thing the way "그거" does, and "그렇게 해줘" is
+# the everyday way to approve a plan Claude proposed; but "그렇게" alone says
+# nothing, and is graded. The same goes for "이대로", "알아서" and the rest.
 #
 # Because stems and endings combine, a stem is only listed when every ending
 # it can meet still makes a reply. Bare "확인" fails that: with "해줘" it is
 # "확인해줘", a request to check something, so only "확인했어" and its polite
-# forms are here, and "확인" on its own is graded.
+# forms are here, and "확인" on its own is graded. "시작" fails it too:
+# "다시 시작해줘" restarts something.
 #
 # Laughter, "ㅋㅋ" and "ㅎㅎ", is a filler and is skipped wherever it is
 # typed, including onto a reply: "넵ㅎㅎ".
 #
 # "#" stands for a choice: a number of one or two digits, or a letter from a
-# to d: "2", "2번", "b".
+# to d: "2", "2번", "b", "b로".
 
 lang = "ko"
 
 [[reply]]
 id = "affirm"
 terms = [
-  "응", "웅", "엉", "ㅇ", "ㅇㅇ", "네", "넵", "넹", "예", "옙", "ㅇㅋ",
-  "오케이", "오키", "콜", "굿", "그래", "그래요", "좋아", "좋아요",
-  "좋습니다", "좋네", "좋네요", "좋다", "알겠어", "알겠어요", "알겠습니다",
-  "알았어", "알았어요", "맞아", "맞아요", "맞습니다", "괜찮아", "괜찮아요",
-  "완벽해", "최고",
+  "응", "웅", "엉", "ㅇ", "네", "넵", "넹", "예", "옙", "ㅇㅋ", "오케이", "오키",
+  "오키도키", "콜", "굿", "나이스", "퍼펙트", "그래", "그래요", "좋아", "좋아요",
+  "좋습니다", "좋네", "좋네요", "좋다", "좋겠어", "좋겠다", "좋겠네", "알겠어",
+  "알겠어요", "알겠습니다", "알았어", "알았어요", "맞아", "맞아요", "맞습니다",
+  "괜찮아", "괜찮아요", "괜찮습니다", "괜찮네", "완벽해", "최고", "대박",
+  "오오", "와우", "멋져", "멋지다", "훌륭해", "훌륭합니다", "깔끔해",
+  "깔끔하네", "물론", "물론이지", "물론이죠", "물론입니다", "당연하지",
+  "당연하죠", "당연합니다", "당연히", "그렇습니다", "그렇지", "그렇죠",
+  "그렇네", "그거야", "그거예요", "바로 그거", "요", "야",
 ]
 
 # What the user reports back. Asked, a report asks for one -- "확인했어?"
@@ -45,45 +60,70 @@ terms = [
 [[reply]]
 id = "report"
 statement = true
-terms = ["확인했어", "확인했어요", "확인했습니다"]
+terms = [
+  "확인했어", "확인했어요", "확인했습니다", "완료", "완료했어", "완료했습니다",
+  "완료됐어", "완료됐습니다", "끝", "끝났어", "끝났다", "끝났습니다",
+  "해결됐어", "해결됐다", "해결됐네", "해결됐습니다", "됐다", "됐네",
+  "됐습니다", "돼", "된다", "되네", "됩니다", "작동해", "작동한다",
+  "작동하네", "작동합니다",
+]
 
 [[reply]]
 id = "decline"
-terms = ["아니", "아니야", "아니요", "아뇨", "노", "놉", "ㄴㄴ", "아직", "나중에", "됐어", "됐어요"]
+terms = [
+  "아니", "아니야", "아냐", "아니요", "아니오", "아뇨", "노", "놉", "ㄴ", "아직",
+  "나중에", "됐어", "됐어요", "필요없어", "필요 없습니다", "안 해도 돼",
+  "안 해도 됩니다",
+]
 
 [[reply]]
 id = "proceed"
 terms = [
-  "계속", "진행", "고", "고고", "ㄱㄱ", "가자", "다음", "다음으로", "넘어가",
-  "해", "해줘", "해요", "해줘요", "해주세요", "하자", "하세요", "해봐", "해보자",
-  "하시죠", "시켜", "시켜줘", "부탁해", "부탁해요", "부탁드려요", "부탁드립니다",
+  "계속", "진행", "고", "고고", "고고씽", "ㄱ", "가자", "가즈아", "레츠고",
+  "렛츠고", "다음", "다음으로", "다음 단계", "다음꺼", "다음은", "그다음",
+  "넘어가", "해", "해줘", "해요", "해줘요", "해주세요", "해도 돼", "하자", "자",
+  "하세요", "해봐", "해보자", "하시죠", "하겠습니다", "할게", "시켜", "시켜줘",
+  "시켜주세요", "부탁해", "부탁해요", "부탁드려요", "부탁드립니다",
 ]
 
 [[reply]]
 id = "halt"
 terms = [
-  "멈춰", "그만", "그만둬", "잠깐", "잠깐만", "잠시만", "취소", "중지", "중단", "스톱",
-  "하지 마",
+  "멈춰", "멈춰줘", "멈춰주세요", "멈춰봐", "그만", "그만둬", "잠깐", "잠깐만",
+  "잠시만", "기다려", "기다려줘", "기다려주세요", "취소", "중지", "중단",
+  "스톱", "스탑", "하지 마",
 ]
 
 [[reply]]
 id = "retry"
-terms = ["다시", "재시도", "다시 시도", "한 번 더", "또"]
+terms = ["다시", "재시도", "다시 시도", "한번", "한 번 더", "한 번만", "한 번만 더", "또"]
 
 [[reply]]
 id = "thank"
 terms = [
   "고마워", "고마워요", "고맙습니다", "감사", "감사합니다", "땡큐", "ㄳ", "ㄱㅅ",
-  "수고했어", "수고했어요", "수고하셨습니다", "잘했어", "잘했어요",
+  "수고했어", "수고했어요", "수고하셨습니다", "잘했어", "잘했어요", "잘했네",
+  "굿잡",
 ]
 
 [[reply]]
 id = "choose"
 terms = [
-  "#", "#번", "#번째", "#번으로", "#번이요", "둘 다", "첫 번째", "두 번째",
-  "세 번째", "마지막", "아무거나",
+  "#", "#번", "#번째", "#번으로", "#번이", "#번이요", "#안", "#가", "로", "으로",
+  "거", "것", "걸로", "방식으로", "방법으로", "둘 다", "첫 번째", "두 번째",
+  "세 번째", "마지막", "다", "전부", "모두", "아무거나",
 ]
 
 [[reply]]
 id = "join"
 terms = ["그리고", "그럼", "그냥", "이제", "일단"]
+
+# Each of these opens a reply: "그렇게 해줘", "이대로 진행해", "알아서 해".
+# On its own it asks nothing, and is graded.
+[[reply]]
+id = "lead"
+lead = true
+terms = [
+  "그렇게", "이대로", "그대로", "계획대로", "말한 대로", "말씀하신 대로",
+  "끝까지", "쭉", "알아서", "잘",
+]

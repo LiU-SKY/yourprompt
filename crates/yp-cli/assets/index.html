@@ -269,6 +269,7 @@ const STR = {
       command: () => 'Slash commands aren\'t graded.',
       follow_up: () => 'A follow-up like this leans on the conversation, so it isn\'t graded. In Claude Code the status line keeps your last task\'s grade.',
       unsupported: name => `This looks like ${name || 'another language'}. yourprompt grades English and Korean only.`,
+      automated: () => 'Claude Code sends a turn like this on its own, so it isn\'t graded. The status line keeps your last task\'s grade.',
     },
     unreadable: 'the scorer could not read that',
     server_err: s => 'server returned ' + s,
@@ -344,6 +345,7 @@ const STR = {
       command: () => '슬래시 명령은 채점하지 않습니다.',
       follow_up: () => '이런 후속 메시지는 앞선 대화에 기대므로 채점하지 않습니다. Claude Code 에서는 상태줄이 직전 작업의 등급을 그대로 보여 줍니다.',
       unsupported: name => `${name || '다른 언어'} 프롬프트로 보입니다. yourprompt 는 영어와 한국어만 채점합니다.`,
+      automated: () => '이런 턴은 Claude Code 가 스스로 보낸 것이라 채점하지 않습니다. 상태줄은 직전 작업의 등급을 그대로 보여 줍니다.',
     },
     // The engine names a language in English, one of the names in
     // crates/yp-lang/src/foreign.rs; a name missing here shows in English.
