@@ -213,8 +213,8 @@ const VALUE_WRAPPERS: &[&str] = &["box", "err", "none", "ok", "some", "string", 
 /// empty parentheses only, and against the demo's sample "Fix decode(raw) so
 /// it returns an error for an empty string." named nothing, with its "it"
 /// pointing at nothing in the code: 458.5, against 759.1 for `decode()`. A
-/// value wrapper is not a call, nor is a plural: prose writes "file(s)" and
-/// "match(es)".
+/// value wrapper is not a call, nor is a plural or an aside: prose writes
+/// "file(s)", "match(es)" and "the hardest(?) part".
 ///
 /// Nor is anything the index could never hold. A method chained onto a call,
 /// `.values` in `filter(x).values('id')`, is a word with nothing before its
@@ -232,16 +232,16 @@ fn called(tokens: &[Token], i: usize) -> bool {
     if word.text.len() < 2 || !word.text.starts_with(|c: char| c.is_ascii_alphabetic()) {
         return false;
     }
-    let plural = match (tokens.get(i + 2), tokens.get(i + 3)) {
-        (Some(ending), Some(close)) => {
-            matches!(ending.text.as_str(), "s" | "es")
+    let prose = match (tokens.get(i + 2), tokens.get(i + 3)) {
+        (Some(inside), Some(close)) => {
+            matches!(inside.text.as_str(), "s" | "es" | "?" | "!")
                 && close.text == ")"
-                && open.span.end == ending.span.start
-                && ending.span.end == close.span.start
+                && open.span.end == inside.span.start
+                && inside.span.end == close.span.start
         }
         _ => false,
     };
-    !plural && !VALUE_WRAPPERS.contains(&word.text.as_str())
+    !prose && !VALUE_WRAPPERS.contains(&word.text.as_str())
 }
 
 /// The token indices of a name qualified with `::`, if one starts at `i`.
@@ -1133,11 +1133,13 @@ mod tests {
         assert!(login.explicit);
         assert_eq!(login.candidates(), Some(37));
 
-        // Without the parentheses, or as a plural, it is prose.
+        // Without the parentheses, or as a plural or an aside, it is prose.
         for text in [
             "keep login (and logout) as it is",
             "keep the login(s) working",
             "keep the login(es) working",
+            "keep the login(?) working",
+            "the login(!) still works",
         ] {
             let found = found_in(text, &corpus);
             assert!(found.iter().all(|r| !r.explicit), "{text}");
