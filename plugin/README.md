@@ -1,7 +1,8 @@
 # yourprompt plugin for Claude Code
 
-Registers the `UserPromptSubmit` hook that scores each prompt, and the
-`/score` command that explains the last one.
+Registers the `UserPromptSubmit` hook that scores each prompt, the
+`SessionStart` hook that indexes the repository in the background, and the
+`/score` command that explains the last score.
 
 ## Requirements
 
@@ -29,6 +30,32 @@ Or from source, with Rust 1.85 or newer:
 ```bash
 cargo install --git https://github.com/LiU-SKY/yourprompt yp-cli
 ```
+
+## Install the plugin
+
+The repository is its own plugin marketplace, called `yourprompt`. In Claude
+Code:
+
+```
+/plugin marketplace add LiU-SKY/yourprompt
+/plugin install yourprompt@yourprompt
+```
+
+Or from your shell:
+
+```bash
+claude plugin marketplace add LiU-SKY/yourprompt
+claude plugin install yourprompt@yourprompt
+```
+
+On Claude Code 2.1.275 or later, one line does both:
+
+```
+/plugin install yourprompt --marketplace LiU-SKY/yourprompt
+```
+
+Start a new session afterwards. Without `yp` on your `PATH` the hooks fail to
+run, and nothing is scored.
 
 ## The plugin or `yp install`, not both
 
@@ -67,3 +94,13 @@ score in a file, and `yp statusline` reads it back. Status line output never
 reaches the model, so the whole thing costs zero tokens. `/score` is set so
 that Claude does not invoke it on its own, which keeps its description out of
 the context too.
+
+## Why the index is built in the background
+
+Claude Code holds a session's first prompt until its `SessionStart` hooks
+have finished, and the first index of a large repository takes a few seconds
+to build: 3.8 s for 7,030 files nobody had opened before, on Windows, where
+the antivirus scans each file the first time it is read. Nothing needs the
+index straight away: until it exists, prompts are scored without the
+grounding axis, and the status line marks the score with `~`. So the hook
+runs with `"async": true`, and your first prompt goes straight through.

@@ -6,6 +6,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use yp_core::{Corpus, TermFacts};
 use yp_index::RepoIndex;
@@ -13,11 +14,24 @@ use yp_index::RepoIndex;
 use crate::session;
 
 /// A loaded index, presented to the scorer.
-pub struct IndexCorpus(RepoIndex);
+pub struct IndexCorpus {
+    index: RepoIndex,
+    /// When the index file was written, if the filesystem says.
+    written: Option<SystemTime>,
+}
+
+impl IndexCorpus {
+    /// When the index file was written. `yp explain` compares it with when
+    /// the prompt was scored, to tell whether the status line's number came
+    /// from an older index.
+    pub fn written(&self) -> Option<SystemTime> {
+        self.written
+    }
+}
 
 impl Corpus for IndexCorpus {
     fn lookup(&self, term: &str) -> Option<TermFacts> {
-        self.0.lookup(term).map(|s| TermFacts {
+        self.index.lookup(term).map(|s| TermFacts {
             df: s.df,
             cf: s.cf,
             def: s.def,
@@ -25,11 +39,11 @@ impl Corpus for IndexCorpus {
     }
 
     fn documents(&self) -> usize {
-        self.0.files()
+        self.index.files()
     }
 
     fn total_terms(&self) -> u64 {
-        self.0.total_terms()
+        self.index.total_terms()
     }
 }
 
@@ -172,7 +186,8 @@ pub fn load_index_at(path: &Path) -> Option<IndexCorpus> {
     if index.is_empty() {
         return None;
     }
-    Some(IndexCorpus(index))
+    let written = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    Some(IndexCorpus { index, written })
 }
 
 /// Load the index for the repository containing `cwd`, if one has been built.
@@ -182,6 +197,57 @@ pub fn load_index_at(path: &Path) -> Option<IndexCorpus> {
 /// A missing index costs the grounding axis, not the user's time.
 pub fn load_for(cwd: &Path) -> Option<IndexCorpus> {
     load_index_at(&existing_index(cwd)?)
+}
+
+/// How long the hook waits to find out which index serves its directory.
+///
+/// Finding out reads the directory and each of its parents. On a network
+/// share whose host does not answer, the first of those reads waited out
+/// the connection timeout: a cwd of `\\192.0.2.1\share\repo` held the hook
+/// for 21 s, past the 5 s Claude Code gives it, so the prompt waited and the
+/// status line went stale.
+///
+/// On a local disk the lookup took at most 5 ms in 560 hooks run 28 at a
+/// time, and at most 118 ms in 1,120 more with every core and the disk kept
+/// busy besides. A lookup cut short scores the prompt without the index it
+/// has, lower for no reason anyone can see, so the deadline is set well clear
+/// of that, and still well inside the 5 s.
+pub const LOOKUP_DEADLINE: Duration = Duration::from_secs(1);
+
+/// [`load_for`], unless finding the index takes longer than `deadline`.
+///
+/// `None` when it did, and `Some` of what [`load_for`] would return when it
+/// did not. The lookup runs on a thread of its own, which is left behind
+/// when it is too slow: a thread blocked on an unreachable share does not
+/// hold up the end of the process, and with its cwd on a host that does not
+/// answer the hook now ends 1,024 to 1,089 ms after it starts, the prompt
+/// scored without an index. The index itself is read on the calling thread
+/// once found: it is in the state directory on this machine, and a large
+/// one takes the longest to read.
+pub fn load_for_within(cwd: &Path, deadline: Duration) -> Option<Option<IndexCorpus>> {
+    let cwd = cwd.to_path_buf();
+    let found = within(deadline, move || existing_index(&cwd))?;
+    Some(found.and_then(|path| load_index_at(&path)))
+}
+
+/// What `work` returns, if it returns within `deadline`.
+///
+/// It runs on a thread of its own, which is abandoned, still running, when
+/// it is too slow. `None` too if no thread can be started, since the caller
+/// is one that must not wait.
+fn within<T: Send + 'static>(
+    deadline: Duration,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("index lookup".into())
+        .spawn(move || {
+            // Nobody may be listening any more; that is fine.
+            let _ = sender.send(work());
+        })
+        .ok()?;
+    receiver.recv_timeout(deadline).ok()
 }
 
 /// Build and save the index for the repository containing `cwd`.
@@ -251,6 +317,37 @@ mod tests {
             start.display()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lookup_that_does_not_answer_in_time_is_given_up_on() {
+        // Stands in for a working directory on a share whose host does not
+        // answer, where the first read waited 21 s.
+        let started = std::time::Instant::now();
+        let stalled = within(Duration::from_millis(50), || {
+            std::thread::sleep(Duration::from_secs(30));
+            PathBuf::from("never")
+        });
+        assert_eq!(stalled, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(within(Duration::from_secs(10), || 7), Some(7));
+    }
+
+    #[test]
+    fn a_lookup_in_time_finds_what_an_unbounded_one_finds() {
+        let dir = std::env::temp_dir().join(format!("yp-within-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let root = canonical(&dir);
+        let found = {
+            let dir = dir.clone();
+            within(LOOKUP_DEADLINE, move || repo_root(&dir))
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(found, Some(root));
     }
 
     #[test]

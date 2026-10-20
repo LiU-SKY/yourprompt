@@ -113,6 +113,17 @@ pub struct Sidecar {
     /// True when `latest_prompt` was cut short by `PROMPT_LIMIT`.
     #[serde(default)]
     pub prompt_truncated: bool,
+    /// True when what was typed ran past what the scorer reads of it, so
+    /// `latest` describes only its start: see
+    /// [`yp_core::prompt::MAX_INSTRUCTION_BYTES`]. False in a sidecar written
+    /// before the scorer had a limit, which read every prompt whole.
+    #[serde(default)]
+    pub prompt_capped: bool,
+    /// The same for what was pasted into the prompt, of which the scorer
+    /// reads [`yp_core::prompt::MAX_ATTACHED_BYTES`]. A long paste is the
+    /// common case: everything typed around it is still read.
+    #[serde(default)]
+    pub paste_capped: bool,
     /// Most recent first.
     #[serde(default)]
     pub history: Vec<Entry>,
@@ -235,6 +246,7 @@ pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Re
     }
 
     let (stored_prompt, truncated) = truncate_on_char_boundary(prompt, PROMPT_LIMIT);
+    let (prompt_capped, paste_capped) = capped(prompt);
     let sidecar = Sidecar {
         version: SIDECAR_VERSION,
         session_id: session_id.to_string(),
@@ -243,6 +255,8 @@ pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Re
         latest: entry,
         latest_prompt: stored_prompt.to_string(),
         prompt_truncated: truncated,
+        prompt_capped,
+        paste_capped,
         history,
     };
 
@@ -256,6 +270,24 @@ pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Re
         let _ = prune_expired(&dir);
     }
     Ok(())
+}
+
+/// Whether the scorer read only the start of what was typed in `prompt`, and
+/// whether it read only the start of what was pasted into it, as
+/// [`yp_core::prompt::Parts::capped`] decides.
+fn capped(prompt: &str) -> (bool, bool) {
+    use yp_core::prompt::{split, MAX_ATTACHED_BYTES, MAX_INSTRUCTION_BYTES};
+    // Neither part is longer than the whole, so a prompt within both limits
+    // is never split to find out, which costs a pass over the text.
+    if prompt.len() <= MAX_INSTRUCTION_BYTES.min(MAX_ATTACHED_BYTES) {
+        return (false, false);
+    }
+    let parts = split(prompt);
+    let pasted: usize = parts.attachments.iter().map(|a| a.len()).sum();
+    (
+        parts.instruction().len() > MAX_INSTRUCTION_BYTES,
+        pasted > MAX_ATTACHED_BYTES,
+    )
 }
 
 /// Cut a string to at most `limit` bytes without splitting a character.
@@ -488,6 +520,42 @@ mod tests {
         assert_eq!(loaded.session_id, "abc123");
         assert_eq!(loaded.cwd, "/tmp/project");
         assert!(loaded.history.is_empty());
+    }
+
+    #[test]
+    fn a_prompt_longer_than_the_scorer_reads_is_marked() {
+        // `yp explain` said a 204,828-character prompt's score "was computed
+        // on the whole prompt", but the scorer reads 64 KB of it.
+        let _s = Scratch::new("capped");
+        let capped = |id: &str| {
+            let loaded = load(id).unwrap();
+            (loaded.prompt_capped, loaded.paste_capped)
+        };
+        let head = "fix verify_token in src/auth/login.rs ";
+        let long = head.to_string() + &"x ".repeat(110_000);
+        record("long", "", &long, entry(221.6)).unwrap();
+        assert!(load("long").unwrap().prompt_truncated);
+        assert_eq!(capped("long"), (true, false));
+
+        // Longer than 64 KB, but most of it pasted, which is cut out and
+        // read up to a limit of its own: all of it was scored.
+        let fence = |lines: usize| format!("```\n{}\n```", "let x = 1;\n".repeat(lines));
+        let pasted = format!("{head}{}\n{}", "y ".repeat(25_000), fence(2_000));
+        assert!(pasted.len() > yp_core::prompt::MAX_INSTRUCTION_BYTES);
+        record("pasted", "", &pasted, entry(500.0)).unwrap();
+        assert_eq!(capped("pasted"), (false, false));
+
+        // A paste past its own limit, with the request typed after it: the
+        // request was read whole.
+        let log = format!("{}\n{head}", fence(8_000));
+        record("log", "", &log, entry(400.0)).unwrap();
+        assert_eq!(capped("log"), (false, true));
+        let both = format!("{log}{}", "z ".repeat(40_000));
+        record("both", "", &both, entry(200.0)).unwrap();
+        assert_eq!(capped("both"), (true, true));
+
+        record("short", "", head, entry(300.0)).unwrap();
+        assert_eq!(capped("short"), (false, false));
     }
 
     #[test]

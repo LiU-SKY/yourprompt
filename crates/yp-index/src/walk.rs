@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Directories never worth indexing, used only in the non-git fallback.
 const SKIP_DIRS: &[&str] = &[
@@ -142,6 +143,71 @@ pub fn source_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Most threads [`read_sources`] reads on.
+///
+/// Measured on files nobody had read before, whose first read cost 3.9 to
+/// 4.9 ms apiece on one thread. Of 3,076 such files, 2 threads read their
+/// share 1.9 times as fast as one, 4 threads 3.1 times, 8 threads 4.8, 16
+/// threads 9.6 and 28 threads 12. Of small XML files, 16 threads read 8.1 to
+/// 9.2 times as fast as one, and 28 threads hardly faster than 16.
+const MAX_READERS: usize = 16;
+
+/// The contents of every file in `paths` that is UTF-8, each named by its
+/// path below `root` with forward slashes, in the order of `paths`.
+///
+/// Read on several threads, because the first read of a file can cost far
+/// more than its size. Where an antivirus scans each file as it is opened, as
+/// Windows Defender does by default, that scan is most of the cost: indexing
+/// a folder of 990 to 1,231 small files nobody had opened took 4.5 to 4.9 s
+/// with one thread reading and 0.48 to 0.54 s like this, and 61 to 102 ms
+/// either way once they had been read. Read one at a time, the first index
+/// of a 5,934-file repository took 40 to 71 s, and 3.2 to 8.5 s once its
+/// files had been read, 3.0 s of it extracting and sorting 647,056 terms.
+/// The order, and so the index, is the same however the reads are shared
+/// out.
+pub fn read_sources(root: &Path, paths: &[PathBuf]) -> Vec<(String, String)> {
+    let readers = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, MAX_READERS)
+        .min(paths.len().max(1));
+    let next = AtomicUsize::new(0);
+    let read = || {
+        let mut got = Vec::new();
+        loop {
+            let i = next.fetch_add(1, Ordering::Relaxed);
+            let Some(path) = paths.get(i) else {
+                return got;
+            };
+            // Non-UTF-8 files are skipped rather than lossily decoded: a
+            // mis-decoded binary would inject thousands of junk terms.
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                got.push((i, name, text));
+            }
+        }
+    };
+    let mut found = std::thread::scope(|scope| {
+        let workers: Vec<_> = (1..readers).map(|_| scope.spawn(read)).collect();
+        let mut found = read();
+        for worker in workers {
+            match worker.join() {
+                Ok(got) => found.extend(got),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+        found
+    });
+    found.sort_unstable_by_key(|&(i, ..)| i);
+    found
+        .into_iter()
+        .map(|(_, name, text)| (name, text))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +246,39 @@ mod tests {
             !files.iter().any(|p| p.to_string_lossy().contains("target")),
             "build output must be excluded"
         );
+    }
+
+    #[test]
+    fn files_read_on_several_threads_come_back_in_order() {
+        let root = std::env::temp_dir().join(format!("yp-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        let mut paths = Vec::new();
+        let mut expected = Vec::new();
+        for i in 0..200 {
+            let name = if i % 3 == 0 {
+                format!("src/deep/f{i}.rs")
+            } else {
+                format!("f{i}.rs")
+            };
+            let path = root.join(&name);
+            if i % 7 == 0 {
+                // Not UTF-8, so skipped, wherever it falls.
+                std::fs::write(&path, [0xff, 0xfe, 0x00, i as u8]).unwrap();
+            } else {
+                let text = format!("fn f{i}() {{}}\n");
+                std::fs::write(&path, &text).unwrap();
+                expected.push((name, text));
+            }
+            paths.push(path);
+        }
+        // One that disappeared between the walk and the read.
+        paths.insert(50, root.join("gone.rs"));
+
+        let read = read_sources(&root, &paths);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(read, expected);
+        assert!(read_sources(&root, &[]).is_empty());
     }
 
     #[test]

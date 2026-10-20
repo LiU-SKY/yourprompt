@@ -115,13 +115,32 @@ pub fn run() -> ExitCode {
     }
 
     // Load the index if one exists; never build it. Indexing a large
-    // repository takes seconds, and nothing here may delay a prompt.
+    // repository takes seconds, and nothing here may delay a prompt. Nor
+    // may finding out where the index is, which reads the working directory:
+    // past the deadline the prompt is scored without one.
     let cwd = if input.cwd.is_empty() {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     } else {
         std::path::PathBuf::from(&input.cwd)
     };
-    let corpus = crate::repo::load_for(&cwd);
+    let deadline = crate::repo::LOOKUP_DEADLINE;
+    let started = std::time::Instant::now();
+    let corpus = match crate::repo::load_for_within(&cwd, deadline) {
+        Some(found) => {
+            debug(&format!(
+                "looked for the repository index in {} ms",
+                started.elapsed().as_millis()
+            ));
+            found
+        }
+        None => {
+            debug(&format!(
+                "gave up looking for the repository index after {} ms",
+                deadline.as_millis()
+            ));
+            None
+        }
+    };
     if corpus.is_none() {
         debug("no repository index; scoring without the grounding axis");
     }
@@ -135,16 +154,26 @@ pub fn run() -> ExitCode {
     };
 
     let entry = session::Entry::from_score(&score, &input.prompt);
-    debug(&format!(
-        "session={} kind={:?} total={} grade={}",
-        input.session_id, entry.kind, entry.total, entry.grade
-    ));
+    debug(&scored_line(&input.session_id, score.kind, &entry));
 
     if let Err(e) = session::record(&input.session_id, &input.cwd, &input.prompt, entry) {
         debug(&format!("could not write sidecar: {e}"));
     }
 
     ExitCode::SUCCESS
+}
+
+/// The debug line for a prompt that was scored and recorded.
+///
+/// The kind is written as the line for a skipped prompt writes it,
+/// `kind=Task`. The entry's own field is an `Option`, for sidecars written
+/// before kinds existed, and logging it printed `kind=Some(Task)` beside
+/// `kind=FollowUp`.
+fn scored_line(session_id: &str, kind: Kind, entry: &session::Entry) -> String {
+    format!(
+        "session={session_id} kind={kind:?} total={} grade={}",
+        entry.total, entry.grade
+    )
 }
 
 /// Parse the payload, with any lone surrogate in it read as U+FFFD.
@@ -253,6 +282,17 @@ mod tests {
         assert_eq!(replace_lone_surrogates("\"\\\\ud800\""), None);
         assert_eq!(read("\"\\\\ud800\""), "\\ud800");
         assert_eq!(read("\"\\\\\\ud800\""), "\\\u{FFFD}");
+    }
+
+    #[test]
+    fn a_scored_prompt_is_logged_with_its_kind_as_a_skipped_one_is() {
+        let score = yp_core::score("fix the parser in src/cli.rs").unwrap();
+        let entry = session::Entry::from_score(&score, "fix the parser in src/cli.rs");
+        let line = scored_line("dbg1", score.kind, &entry);
+        assert!(line.starts_with("session=dbg1 kind=Task total="), "{line}");
+        assert!(!line.contains("Some("), "{line}");
+        // The line for a skipped prompt, which reads `kind={kind:?}`.
+        assert_eq!(format!("kind={:?}", Kind::FollowUp), "kind=FollowUp");
     }
 
     #[test]

@@ -1,0 +1,22 @@
+{
+  "name": "yourprompt",
+  "description": "The yourprompt plugin: a deterministic 0 to 1000 score for every prompt, kept out of the model's context",
+  "owner": {
+    "name": "LiU-SKY",
+    "url": "https://github.com/LiU-SKY"
+  },
+  "plugins": [
+    {
+      "name": "yourprompt",
+      "source": "./plugin",
+      "description": "Scores how well Claude can understand your prompt, for zero context tokens. Needs the yp binary on your PATH.",
+      "category": "productivity",
+      "tags": [
+        "prompt",
+        "score",
+        "statusline",
+        "hook"
+      ]
+    }
+  ]
+}

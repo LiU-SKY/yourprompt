@@ -162,21 +162,7 @@ impl RepoIndex {
     /// Build an index by walking `root`.
     pub fn build(root: &Path) -> RepoIndex {
         let paths = walk::source_files(root);
-        let mut files: Vec<(String, String)> = Vec::with_capacity(paths.len());
-
-        for path in &paths {
-            // Non-UTF-8 files are skipped rather than lossily decoded: a
-            // mis-decoded binary would inject thousands of junk terms.
-            let Ok(text) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            let name = path
-                .strip_prefix(root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            files.push((name, text));
-        }
+        let files = walk::read_sources(root, &paths);
 
         // A walk yields real paths. A file at the root of the repository is
         // named by its bare name because that is its path.

@@ -101,8 +101,9 @@ enum Command {
     /// Build the repository index the grounding axis needs.
     ///
     /// Never run by the hook: indexing a large repository takes seconds and
-    /// the hook must not delay a prompt. Run it once per session (the plugin
-    /// does this at session start) or after large changes.
+    /// the hook must not delay a prompt. Run it once per session (the hooks
+    /// `yp install` and the plugin register do this at session start, in
+    /// the background) or after large changes.
     Index {
         /// Repository to index. Defaults to the current directory.
         #[arg(long, value_name = "PATH")]
