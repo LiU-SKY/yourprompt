@@ -8,19 +8,19 @@ Axis A claims to read your repository. This checks that claim the only way that 
 
 | Comparison | Issues | Own repository scores higher | Mean margin |
 |---|---:|---:|---:|
-| versus the mean foreign repository | 270 | **88.9%** | 54.4 |
-| versus the *best* foreign repository | 270 | **70.4%** | 30.6 |
+| versus the mean foreign repository | 270 | **89.3%** | 57.2 |
+| versus the *best* foreign repository | 270 | **70.4%** | 33.4 |
 
 No length baseline is shown, because none can beat chance here: both sides of every comparison are the same text, scored against different repositories, so "longer wins" ties every one.
 
 | Repository | Issues | Own scores higher | Mean margin |
 |---|---:|---:|---:|
-| django/django | 114 | 92.1% | 73.2 |
-| matplotlib/matplotlib | 23 | 91.3% | 46.8 |
-| pytest-dev/pytest | 17 | 64.7% | 13.5 |
-| scikit-learn/scikit-learn | 23 | 100.0% | 74.7 |
+| django/django | 114 | 93.0% | 79.5 |
+| matplotlib/matplotlib | 23 | 91.3% | 47.3 |
+| pytest-dev/pytest | 17 | 64.7% | 13.4 |
+| scikit-learn/scikit-learn | 23 | 100.0% | 75.2 |
 | sphinx-doc/sphinx | 16 | 56.2% | 8.7 |
-| sympy/sympy | 77 | 92.2% | 41.2 |
+| sympy/sympy | 77 | 92.2% | 41.6 |
 
 ## Gold-patch test (a negative result)
 
@@ -28,10 +28,10 @@ The patch names the files that actually had to change. The idea was that an issu
 
 | Issue names a file the fix touched | Issues | Mean resolution | Has a name resolving to exactly one thing |
 |---|---:|---:|---:|
-| yes | 60 | 69.7 | 95.0% |
-| no | 210 | 58.0 | 92.9% |
+| yes | 60 | 73.7 | 95.0% |
+| no | 210 | 58.8 | 92.9% |
 
-Separation: **+11.7** points, which is nothing.
+Separation: **+14.9** points, which is nothing.
 
 The last column explains why, and it is a flaw in the test rather than a finding about the score. Essentially every issue in the dataset -- 93% of them -- already contains at least one name that resolves to exactly one thing in its repository. Both groups are saturated, so there is no headroom for the label to discriminate.
 

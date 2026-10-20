@@ -315,14 +315,14 @@ number both times.
 
 | Comparison | Issues | Own repo scores higher | Mean margin |
 |---|---:|---:|---:|
-| vs the mean foreign repo | 270 | **88.9%** | +54.4 |
-| vs the best foreign repo | 270 | 70.4% | +30.6 |
+| vs the mean foreign repo | 270 | **89.3%** | +57.2 |
+| vs the best foreign repo | 270 | 70.4% | +33.4 |
 
 | Repository | Issues | Own repo higher |
 |---|---:|---:|
 | scikit-learn | 23 | 100.0% |
+| django | 114 | 93.0% |
 | sympy | 77 | 92.2% |
-| django | 114 | 92.1% |
 | matplotlib | 23 | 91.3% |
 | pytest | 17 | 64.7% |
 | sphinx | 16 | 56.2% |
@@ -361,10 +361,10 @@ Against this repository's own index it is 98.7%. See
   is true of that function, and "Refactor verify_token. Returns of red, input
   of blue, schema of gold. Tests pass of apple, assert of pear, verify of
   plum. Only of north, keep of south, unchanged of east." scores 919.0, an S.
-  With no index, made-up names count as names: "Refactor `a1` `a2` `a3`
-  returns json schema. Tests pass. Nothing else. `b1` must pass. Only `c1`."
-  scores 886.6, an A+. An index checks names, not whether the words beside
-  them are true.
+  With no index, made-up names count as names, and so does any word shaped
+  like code: "Refactor `a1` `a2` `a3` returns json schema. Tests pass.
+  Nothing else. `b1` must pass. Only `c1`." scores 886.6, an A+. An index
+  checks names, not whether the words beside them are true.
 - The per-component explanation sentences are English only for now.
 
 ## How this was built
