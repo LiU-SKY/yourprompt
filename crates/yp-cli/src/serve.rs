@@ -136,13 +136,14 @@ fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]
 /// An absolute, readable form of a path, for showing the user which
 /// repository is being scored against.
 ///
-/// `--repo .` should not report itself as ".". Windows canonicalisation
-/// returns a verbatim `\?\` prefix, which is correct and unreadable, so it
-/// is trimmed for display only.
+/// `--repo .` should not report itself as ".". Windows canonicalisation adds
+/// a verbatim `\\?\` prefix, which is correct and unreadable, and the page
+/// showed it: this used to canonicalise again and strip a `\?\` one
+/// backslash short, so the subtitle read `\\?\C:\Projects\yourprompt`.
+/// [`crate::repo::canonical`] is the one spelling the index is named after,
+/// and carries no prefix.
 fn display_path(path: &Path) -> String {
-    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let shown = resolved.display().to_string();
-    shown.strip_prefix(r"\?\").unwrap_or(&shown).to_string()
+    crate::repo::canonical(path).display().to_string()
 }
 
 /// JSON string escaping, for the two short strings the info route returns.
@@ -385,11 +386,27 @@ mod tests {
     fn a_relative_repo_path_is_shown_absolutely() {
         let shown = display_path(Path::new("."));
         assert_ne!(shown, ".");
-        assert!(
-            !shown.starts_with(r"\?\"),
-            "verbatim prefix leaked: {shown}"
-        );
+        assert!(Path::new(&shown).is_absolute(), "not absolute: {shown}");
         assert!(!shown.is_empty());
+    }
+
+    #[test]
+    fn a_repo_path_is_shown_without_the_verbatim_prefix() {
+        // `run` hands over the root `build_for` found, which is already
+        // canonical. Canonicalised again with std, it came back as
+        // `\\?\C:\...` on Windows, and the strip looked for `\?\`. The
+        // prefix is checked here with and without that slip.
+        let root = crate::repo::canonical(Path::new("."));
+        for start in [Path::new("."), root.as_path()] {
+            let shown = display_path(start);
+            for prefix in [r"\\?\", r"\?\"] {
+                assert!(
+                    !shown.starts_with(prefix),
+                    "verbatim prefix leaked: {shown}"
+                );
+            }
+            assert_eq!(shown, crate::repo::canonical(start).display().to_string());
+        }
     }
 
     #[test]

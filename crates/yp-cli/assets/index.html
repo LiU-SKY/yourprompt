@@ -225,11 +225,14 @@ const STR = {
         'name:ambiguous': n => `could be any of ${n}`,
         'name:missing': 'not in your code',
         // pronoun:dangling comes only from a prompt checked against an index,
-        // when no name before the pronoun is in it. smell:vague_pronoun is a
-        // pronoun the scorer could not settle either way, so its label claims
-        // no more than that. It used to say "with nothing to point at", of
-        // the "it" right after verify_token in the showcase prompt.
-        'pronoun:dangling': 'points at nothing named before it',
+        // when no name before the pronoun is in it. It said "points at
+        // nothing named before it" of the "it" right after gravity() in the
+        // made-up-names example, where a name does come first; what is
+        // missing is that name in the code. smell:vague_pronoun is a pronoun
+        // the scorer could not settle either way, so its label claims no
+        // more than that. It used to say "with nothing to point at", of the
+        // "it" right after verify_token in the showcase prompt.
+        'pronoun:dangling': 'points at nothing in your code',
         'pronoun:anchored': 'pronoun; probably the name before it',
         'pronoun:pasted': 'points at the pasted material',
         'attachment': 'attachment, judged as evidence',
@@ -277,6 +280,7 @@ const STR = {
     read_failed: n => `could not read ${n}`,
     not_text: n => `${n} does not look like text`,
     attached: n => `attached ${n}`,
+    removed: n => `removed ${n}`,
     saved: n => `saved ${n}`,
     axes: { grounding: 'grounding', actionability: 'actionability',
             clarity: 'clarity', context: 'context' },
@@ -289,7 +293,10 @@ const STR = {
            attached_h: 'Attached context', breakdown: 'Breakdown', none: '- none',
            head: '| component | score | out of | why |',
            no_index: 'No repository index was loaded.',
-           foot: 'Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt), in the browser. Deterministic; no model was called.' },
+           // This page posts the prompt and the server scores it. The line
+           // said "in the browser", copied from the hosted page, where the
+           // scorer does run in the browser.
+           foot: 'Scored by [yourprompt](https://github.com/LiU-SKY/yourprompt) on the machine running `yp serve`. Deterministic; no model was called.' },
   },
   ko: {
     marks: {
@@ -305,7 +312,7 @@ const STR = {
         'name:unique': '코드에 한 번 정의됨',
         'name:ambiguous': n => `${n}개 중 무엇인지 불분명`,
         'name:missing': '코드에 없음',
-        'pronoun:dangling': '앞에 가리킬 대상이 없음',
+        'pronoun:dangling': '가리킬 대상이 코드에 없음',
         'pronoun:anchored': '지시어, 앞의 이름을 가리키는 듯',
         'pronoun:pasted': '붙여 넣은 내용을 가리킴',
         'attachment': '첨부, 근거로 판단함',
@@ -365,6 +372,7 @@ const STR = {
     read_failed: n => `${n} 을(를) 읽지 못했습니다`,
     not_text: n => `${n} 은(는) 텍스트 파일이 아닌 것 같습니다`,
     attached: n => `${n} 첨부됨`,
+    removed: n => `${n} 제거됨`,
     saved: n => `${n} 저장됨`,
     axes: { grounding: '그라운딩', actionability: '실행가능성',
             clarity: '명료성', context: '맥락' },
@@ -377,7 +385,7 @@ const STR = {
            attached_h: '첨부 컨텍스트', breakdown: '세부 내역', none: '- 없음',
            head: '| 항목 | 점수 | 만점 | 사유 |',
            no_index: '저장소 인덱스가 없었습니다.',
-           foot: '[yourprompt](https://github.com/LiU-SKY/yourprompt) 가 브라우저에서 채점했습니다. 결정론적이며 모델 호출은 없습니다.' },
+           foot: '[yourprompt](https://github.com/LiU-SKY/yourprompt) 가 `yp serve` 를 실행한 컴퓨터에서 채점했습니다. 결정론적이며 모델 호출은 없습니다.' },
   },
 };
 
@@ -576,6 +584,11 @@ function syncMarks() {
   hl.style.paddingRight = (12 + bar) + 'px';
 }
 $('p').addEventListener('scroll', syncMarks);
+// The box also changes size without a keystroke: a window resize or its own
+// resize handle. Narrowed from 1280 px with the showcase prompt scored, the
+// box grew a 15 px scrollbar the marks did not allow for, and until the next
+// keystroke they sat a word off at eight widths from 420 to 550 px.
+if (typeof ResizeObserver === 'function') new ResizeObserver(syncMarks).observe($('p'));
 
 function clearScore() {
   lastScore = null;
@@ -598,11 +611,14 @@ function renderAttachments() {
       <span class="sz">${(a.text.length / 1024).toFixed(1)} KB</span>
       <button type="button" data-i="${i}">${T().remove}</button>
     </div>`).join('');
+  // The note says what went, or it went on saying "attached" a file that was
+  // no longer there.
   $('atts').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => {
-      attachments.splice(Number(b.dataset.i), 1);
+      const [gone] = attachments.splice(Number(b.dataset.i), 1);
       renderAttachments();
       score();
+      note(T().removed(gone.name));
     }));
 }
 
@@ -664,12 +680,26 @@ $('file').addEventListener('change', e => {
   e.target.value = '';
 });
 
+// The prompt box takes a drag only when it carries files. Text dragged onto
+// it is the textarea's, which puts it where it is dropped; taken along with
+// the files, it was thrown away without a word. The attachment list takes
+// every drag, as before: only files belong there, and a browser left to
+// handle a dropped link may open it in place of the page.
+const carriesFiles = e =>
+  !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+
 for (const target of [$('p'), $('atts')]) {
+  const takes = e => target !== $('p') || carriesFiles(e);
   ['dragenter', 'dragover'].forEach(k =>
-    target.addEventListener(k, e => { e.preventDefault(); target.classList.add('dropping'); }));
+    target.addEventListener(k, e => {
+      if (!takes(e)) return;
+      e.preventDefault();
+      target.classList.toggle('dropping', carriesFiles(e));
+    }));
   ['dragleave', 'drop'].forEach(k =>
     target.addEventListener(k, () => target.classList.remove('dropping')));
   target.addEventListener('drop', e => {
+    if (!takes(e)) return;
     e.preventDefault();
     for (const f of (e.dataTransfer.files || [])) attach(f);
   });
@@ -707,12 +737,17 @@ function buildReport(s, prompt) {
     axisSection(s.clarity, 'clarity'),
     axisSection(s.context, 'context'),
   ];
+  // A prompt that is not graded has no score, so it has no Grounded row
+  // either; "continue" was reported as grounded, or as rescaled from three
+  // axes when no repository was indexed.
+  const grounded = ungraded ? [] :
+    [`| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`];
   return [
     `# yourprompt`, ``,
     ungraded ? `**—** ${ungraded}` : `**${s.total.toFixed(1)} / 1000 (${s.grade})**`, ``,
     `| | |`, `|---|---|`,
     `| ${T().rpt.generated} | ${new Date().toISOString()} |`,
-    `| ${T().rpt.grounded} | ${s.renormalized ? T().rpt.no : T().rpt.yes} |`,
+    ...grounded,
     ``, `## ${T().rpt.prompt}`, ``, fence, prompt, fence,
     ``, `## ${T().rpt.attached_h}`, ``, attached, ``,
     ...breakdown,
