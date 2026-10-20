@@ -207,11 +207,10 @@ fn names_a_command_file(
 }
 
 /// The directory Claude Code keeps its configuration and the user's own
-/// commands in: `CLAUDE_CONFIG_DIR`, or `.claude` in the home directory.
+/// commands in, found the way Claude Code finds it: on Windows that is under
+/// `USERPROFILE` even when `HOME` is set elsewhere.
 fn claude_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| session::home_dir().map(|home| home.join(".claude")))
+    session::config_dir()
 }
 
 /// The debug line for a prompt that was scored and recorded.

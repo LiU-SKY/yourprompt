@@ -1379,6 +1379,7 @@ fn install_twice_then_uninstall_gives_back_the_settings_and_the_backup() {
     assert_eq!(setup.settings(), original);
     assert!(!score.exists(), "/score was left behind");
     assert!(!setup.state.join("install.json").exists());
+    assert!(!setup.config.join("yp-install.json").exists());
     // Uninstall neither writes the backup nor removes it.
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original_text);
     assert!(stdout(&out).contains("yp-backup"), "{out:?}");

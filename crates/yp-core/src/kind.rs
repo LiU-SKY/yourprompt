@@ -478,7 +478,7 @@ const HARNESS_TAGS: &[&str] = &[
 /// `</tag>`, with only whitespace around and between them. What an element
 /// holds is not read, so a report may carry markup of any kind.
 ///
-/// The close tag has to end the prompt. "<my-button> doesn't render, fix
+/// The close tag has to end the prompt. "`<my-button>` doesn't render, fix
 /// it", markup pasted ahead of a question, and a prompt that opens with
 /// `<div>` are the user's own, and graded. So is pasted text that Claude
 /// Code marks as `<pasted_content id="1">`, and a request wrapped in a tag of
