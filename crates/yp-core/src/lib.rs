@@ -32,6 +32,7 @@ pub mod kind;
 pub mod marks;
 mod negation;
 mod nouns;
+mod padding;
 pub mod params;
 pub mod pasted;
 pub mod prompt;
@@ -150,6 +151,12 @@ pub fn score_with(text: &str, corpus: Option<&dyn Corpus>) -> Option<Score> {
 /// present: an objective (an action verb or a direct question), a result
 /// shape, an acceptance criterion, or a scope boundary. Requirements smells
 /// presuppose a requirement.
+///
+/// The cues it is given are the ones that are about something; see
+/// [`padding`]. A list of cue words with nothing named used to open the
+/// whole credit by itself: "Returns json, input schema. Tests pass, assert,
+/// verify. Only, keep, unchanged." asks for nothing and scored 713.9. It
+/// scores 29.8.
 pub(crate) fn request_factor(
     cues: &std::collections::BTreeMap<yp_lang::CueId, Vec<String>>,
 ) -> f64 {
@@ -213,6 +220,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
         None => antecedents::anchor(text, &tokens, smell_hits),
     };
 
+    let (settled, stats) = padding::strip(text, &tokens, &cue_hits, settled, stats);
     let cues = axes::distinct_by_category(&settled);
     let smells = axes::total_by_category(&smell_hits);
     let request = request_factor(&cues);
@@ -484,14 +492,159 @@ mod tests {
     }
 
     #[test]
-    fn keyword_stuffing_does_not_reach_the_top() {
-        // Repeating every cue word we know should saturate, not max out.
+    fn one_phrase_repeated_does_not_reach_the_top() {
+        // Repeating a phrase of cue words saturates rather than maxing out.
+        // This checks repetition only; different cue words are the next
+        // test's.
         let stuffed = total(
             &"refactor implement add test verify assert returns input output \
               only don't for example "
                 .repeat(40),
         );
         assert!(stuffed < 950.0, "stuffed prompt scored {stuffed}");
+    }
+
+    #[test]
+    fn cue_words_that_name_nothing_do_not_reach_the_top() {
+        // Different cue words, each saying nothing about anything. The two
+        // thirteen-word lists scored 909.8, an S, the 48-word one 995.4, and
+        // the eight-word one 859.1. With an article for every entry, or with
+        // the entries split by other marks, it is the same list.
+        for salad in [
+            "Refactor `x`. Returns json, input schema. Tests pass, assert, verify. Only, keep, unchanged.",
+            "리팩터링해줘. `x` 반환, 입력, 출력, 스키마. 테스트 통과, 커버리지, 기대값. 에서만, 그대로, 유지해.",
+            "Refactor must pass returns for example tests pass only `x` input keep output \
+             unchanged verify\n- a json untouched\n- b assert e.g.\n- c never schema\n- d \
+             ensure sample without signature confirm as-is payload avoid green stdout except \
+             expected yaml leave parameters coverage arguments criteria endpoint",
+            "Refactor. returns. input. verify. assert. only. keep. `x`",
+            "Refactor the x. Returns the json, the input schema. The tests pass, the assert, \
+             the verify. Only the, keep the, unchanged the.",
+            "Refactor `x`. Returns json; input schema; tests pass; assert; verify; only; keep; unchanged.",
+            "Refactor `x`.\n- returns json\n- input schema\n- tests pass\n- assert\n- verify\n- only\n- keep\n- unchanged",
+            "Refactor `x`. Only all, keep all, unchanged all, assert all, verify all.",
+            "Refactor `x`.\n1. returns json\n2. input schema\n3. tests pass\n4. assert\n\
+             5. verify\n6. only\n7. keep\n8. unchanged",
+        ] {
+            let t = total(salad);
+            assert!(t < 400.0, "{salad:.48} scored {t}");
+        }
+    }
+
+    #[test]
+    fn cue_words_after_a_real_name_add_little() {
+        // An index checks names, not cue words. "Refactor verify_token."
+        // scored 503.1 against the demo's sample and 912.1 with these twelve
+        // words after it, all of them false for that function, above the
+        // 860.3 of the prompt that names the file, the function and the test.
+        // With them it now scores 529.9, the same C as without. This corpus
+        // stands in for the sample's six files.
+        let corpus = MapCorpus::new(
+            6,
+            &[
+                ("verify_token", 1, 3, 1),
+                ("src/auth/login.rs", 1, 1, 0),
+                ("tests/auth.rs", 1, 1, 0),
+                ("AuthError", 2, 6, 1),
+                ("Expired", 2, 3, 1),
+                ("login", 2, 4, 1),
+            ],
+        );
+        let grounded = |text: &str| score_with(text, Some(&corpus)).unwrap();
+        let bare = grounded("Refactor verify_token.");
+        let specific = grounded(
+            "In src/auth/login.rs, change verify_token so it returns Err(AuthError::Expired) \
+             instead of panicking on an expired token. Don't change the public signature of \
+             login(). tests/auth.rs must still pass.",
+        );
+        let cues = |s: &Score| -> Vec<f64> {
+            [&s.actionability, &s.context]
+                .iter()
+                .flat_map(|axis| &axis.components)
+                .filter(|c| ["io_spec", "acceptance", "scope"].contains(&c.id))
+                .map(|c| c.earned)
+                .collect()
+        };
+        for tail in [
+            " Returns json, input schema. Tests pass, assert, verify. Only, keep, unchanged.",
+            " Returns the json, the input schema. The tests pass, the assert, the verify. \
+             Only the, keep the, unchanged the.",
+        ] {
+            let tailed = grounded(&format!("Refactor verify_token.{tail}"));
+            // The tail earns no result shape, finish line or boundary.
+            assert_eq!(cues(&tailed), cues(&bare), "{tail}");
+            assert!(
+                tailed.total < bare.total + 50.0,
+                "bare {}, with {tail:?} {}",
+                bare.total,
+                tailed.total
+            );
+            assert!(
+                tailed.total < specific.total - 200.0,
+                "{tail:?} {}, specific {}",
+                tailed.total,
+                specific.total
+            );
+        }
+    }
+
+    #[test]
+    fn requirements_said_in_so_many_words_keep_their_credit() {
+        // The filter must not cost the prompts that state these things
+        // plainly, in either language. Each scores exactly what it did
+        // before it.
+        for (text, at) in [
+            (
+                "Fix the flaky retry in src/net/client.rs. Done means: the test suite passes.",
+                659.9,
+            ),
+            (
+                "Refactor parse_args in src/cli.rs to use clap. Make sure all tests pass.",
+                659.9,
+            ),
+            ("Add a config loader. Acceptance criteria: all tests pass.", 552.5),
+            ("Remove the debug prints. Keep everything else unchanged.", 632.6),
+            (
+                "Fix the parser. Make sure all tests pass. No new warnings. Don't touch the migrations.",
+                662.5,
+            ),
+            (
+                "Fix the import cycle between api.py and models.py. Tests pass, no warnings.",
+                659.9,
+            ),
+            ("Fix login. Tests pass, no warnings.", 549.2),
+            ("Change the endpoint so the response is JSON.", 674.9),
+            ("Document the input, output, and schema of each endpoint.", 682.8),
+            (
+                "Write the handler.\nInput: the request body\nOutput: the response",
+                566.5,
+            ),
+            (
+                "Make the endpoint return 404 instead of 500 when the user does not exist. \
+                 Keep the response schema unchanged.",
+                768.8,
+            ),
+            ("Keep the output unchanged.", 339.9),
+            (
+                "status 명령에 --json 플래그 추가해줘. 나머지는 건드리지 마.",
+                700.3,
+            ),
+            (
+                "버그 고쳐줘. 모든 테스트가 통과해야 하고 다른 건 건드리지 마.",
+                725.9,
+            ),
+            ("디버그 출력을 지워줘. 나머지는 그대로 유지해.", 592.1),
+            ("parser.py 버그 고쳐줘. 테스트 통과, 경고 없이.", 601.0),
+            ("출력은 JSON 형식으로 해줘.", 314.5),
+            ("출력은 그대로 유지해.", 288.9),
+        ] {
+            let s = score(text).unwrap();
+            assert!(
+                (s.display_total() - at).abs() < 0.05,
+                "{text} scored {}",
+                s.display_total()
+            );
+        }
     }
 
     #[test]

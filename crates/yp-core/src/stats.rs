@@ -27,6 +27,10 @@ pub struct PromptStats {
     /// [`Self::substance`] and toward nothing measured over the typed words;
     /// see [`crate::pasted`].
     pub pasted: usize,
+    /// Typed tokens that are cue words, or single letters standing in for a
+    /// name, beyond what the prompt's other words back. They do not count
+    /// toward [`Self::substance`]; see [`Self::judged_tokens`].
+    pub unbacked: usize,
 }
 
 impl PromptStats {
@@ -38,11 +42,31 @@ impl PromptStats {
         }
     }
 
-    /// How far there is enough here to judge at all: typed content tokens
-    /// and pasted material together, against the floor in
-    /// [`crate::params::substance`].
+    /// The same facts, with `count` of the typed tokens cue words that
+    /// nothing backs.
+    pub fn with_unbacked(self, count: usize) -> Self {
+        Self {
+            unbacked: count,
+            ..self
+        }
+    }
+
+    /// The typed tokens there are to judge: every content token but the cue
+    /// words nothing backs.
+    ///
+    /// Clarity rewards the absence of vague words, and a cue word is never
+    /// one. Counted in full, cue words were the eight tokens that opened all
+    /// 250 points to "Refactor `x`. Returns json, input schema. Tests pass,
+    /// assert, verify. Only, keep, unchanged.", which scored 909.8.
+    pub fn judged_tokens(&self) -> usize {
+        self.content_tokens.saturating_sub(self.unbacked)
+    }
+
+    /// How far there is enough here to judge at all: the typed tokens in
+    /// [`Self::judged_tokens`] and pasted material together, against the
+    /// floor in [`crate::params::substance`].
     pub fn substance(&self) -> f64 {
-        crate::params::substance(self.content_tokens + self.pasted)
+        crate::params::substance(self.judged_tokens() + self.pasted)
     }
 
     /// How far this text should be credited for containing no defects.
@@ -88,25 +112,89 @@ impl PromptStats {
 }
 
 /// True for a line that opens a bullet or numbered list item.
-fn is_list_line(line: &str) -> bool {
-    let t = line.trim_start();
-    if let Some(rest) = t
-        .strip_prefix("- ")
-        .or_else(|| t.strip_prefix("* "))
-        .or_else(|| t.strip_prefix("+ "))
-    {
-        return !rest.trim().is_empty();
+pub(crate) fn is_list_line(line: &str) -> bool {
+    item_start(line).is_some()
+}
+
+/// Where the item of a bullet or numbered list line starts, just past its
+/// marker, or `None` for a line that is not one.
+fn item_start(line: &str) -> Option<usize> {
+    let lead = line.len() - line.trim_start().len();
+    let t = &line[lead..];
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = t.strip_prefix(marker) {
+            return (!rest.trim().is_empty()).then_some(lead + marker.len());
+        }
     }
     // "1. ", "2) ", "10. "
-    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() || digits.len() > 3 {
-        return false;
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || digits > 3 {
+        return None;
     }
-    let rest = &t[digits.len()..];
-    matches!(rest.chars().next(), Some('.') | Some(')'))
+    let rest = &t[digits..];
+    (matches!(rest.chars().next(), Some('.') | Some(')'))
         && rest.len() > 1
         && rest[1..].starts_with(' ')
-        && !rest[1..].trim().is_empty()
+        && !rest[1..].trim().is_empty())
+    .then_some(lead + digits + 1)
+}
+
+/// One bullet or numbered list item: where its marker starts, where its
+/// first word starts, and where its line ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ListItem {
+    pub marker: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The list items of `text`, in order.
+pub(crate) fn list_items(text: &str) -> Vec<ListItem> {
+    let mut items = Vec::new();
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        if let Some(start) = item_start(body) {
+            let lead = body.len() - body.trim_start().len();
+            let first = body[start..].len() - body[start..].trim_start().len();
+            items.push(ListItem {
+                marker: offset + lead,
+                start: offset + start + first,
+                end: offset + body.len(),
+            });
+        }
+        offset += line.len();
+    }
+    items
+}
+
+/// A single letter or syllable typed as a word, the way list items are
+/// labelled: a, b, c or 가, 나, 다.
+pub(crate) fn is_label(token: &Token) -> bool {
+    let mut chars = token.text.chars();
+    matches!(token.kind, TokenKind::Word | TokenKind::Hangul)
+        && matches!((chars.next(), chars.next()), (Some(c), None) if c.is_alphabetic())
+}
+
+/// The lines that open a list item with something in it.
+///
+/// An item that is only a label, "- a" or "- 나", is not one: the greedy
+/// search that found eight cue words worth an A+ went on to add "\n- a",
+/// "\n- b" and "\n- c" for the list structure they earned. An item of
+/// punctuation alone still counts, as it always has.
+fn list_lines(text: &str, tokens: &[Token]) -> usize {
+    list_items(text)
+        .into_iter()
+        .filter(|item| {
+            let first = tokens.partition_point(|t| t.span.start < item.start);
+            let mut words = tokens[first..]
+                .iter()
+                .take_while(|t| t.span.start < item.end)
+                .filter(|t| t.kind != TokenKind::Punct)
+                .peekable();
+            words.peek().is_none() || words.any(|t| !is_label(t))
+        })
+        .count()
 }
 
 pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
@@ -134,7 +222,7 @@ pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
         }
     }
 
-    let list_lines = text.lines().filter(|l| is_list_line(l)).count();
+    let list_lines = list_lines(text, tokens);
     let has_number = tokens.iter().any(|t| t.kind == TokenKind::Number);
     let has_quote = text.contains('"') || text.contains('\'');
     let has_concrete = has_code || list_lines > 0 || has_number || has_quote;
@@ -149,6 +237,7 @@ pub fn analyze(text: &str, tokens: &[Token]) -> PromptStats {
         legible_share,
         referents,
         pasted: 0,
+        unbacked: 0,
     }
 }
 
@@ -222,5 +311,37 @@ mod tests {
         assert!(s.referents.iter().any(|r| r == "verify_token"));
         assert!(s.referents.iter().any(|r| r == "src/auth/login.rs"));
         assert!(!s.referents.iter().any(|r| r == "fix"));
+    }
+
+    #[test]
+    fn a_list_item_that_is_only_a_label_is_not_a_list_line() {
+        // "\n- a", "\n- b" were list structure to the greedy search, a few
+        // points each.
+        assert_eq!(stats("fix it\n- a\n- b\n- 가\n- 나\n1. c").list_lines, 0);
+        assert_eq!(
+            stats("fix it\n- a test\n- 나머지\n- `x`\n- ->").list_lines,
+            4
+        );
+    }
+
+    #[test]
+    fn list_items_know_their_marker_and_their_first_word() {
+        let text = "fix it\n  - first\n12. second";
+        let items = list_items(text);
+        assert_eq!(items.len(), 2);
+        assert_eq!(&text[items[0].marker..items[0].start], "- ");
+        assert_eq!(&text[items[0].start..items[0].end], "first");
+        assert_eq!(&text[items[1].marker..items[1].start], "12. ");
+        assert_eq!(&text[items[1].start..items[1].end], "second");
+    }
+
+    #[test]
+    fn cue_words_nothing_backs_are_not_judged() {
+        let s = stats("Refactor `x`. Tests pass.");
+        assert_eq!(s.judged_tokens(), 4);
+        assert_eq!(s.clone().with_unbacked(2).judged_tokens(), 2);
+        assert!(s.clone().with_unbacked(2).substance() < s.substance());
+        // Pasted material still counts in full.
+        assert_eq!(s.with_unbacked(9).with_pasted(4).substance(), 0.5);
     }
 }
