@@ -45,6 +45,14 @@ impl Corpus for IndexCorpus {
     fn total_terms(&self) -> u64 {
         self.index.total_terms()
     }
+
+    fn paths_ending_in(&self, tail: &str) -> Option<TermFacts> {
+        self.index.paths_ending_in(tail).map(|s| TermFacts {
+            df: s.df,
+            cf: s.cf,
+            def: s.def,
+        })
+    }
 }
 
 /// One spelling for one directory: absolute, with symlinks resolved, and on

@@ -123,6 +123,14 @@ impl Corpus for WasmCorpus {
     fn bare_file(&self, name: &str) -> bool {
         self.0.is_bare(name)
     }
+
+    fn paths_ending_in(&self, tail: &str) -> Option<TermFacts> {
+        self.0.paths_ending_in(tail).map(|s| TermFacts {
+            df: s.df,
+            cf: s.cf,
+            def: s.def,
+        })
+    }
 }
 
 /// Score a prompt, optionally against an index.
@@ -493,6 +501,40 @@ mod tests {
             let text = format!("Fix the crash in {path} when run() is called.");
             assert_eq!(mark_on(&scored(&text, &index), &text, path), kind);
         }
+    }
+
+    #[test]
+    fn a_path_is_found_in_the_sample_however_it_is_written() {
+        // "./Cargo.toml" was not in your code under a file list showing
+        // Cargo.toml: "Bump serde to 1.0.200 in ./Cargo.toml." scored 345.0
+        // against 610.7, and each spelling of src/auth/login.rs here 378.5
+        // against 644.3.
+        let index = index_of(&sample());
+        for path in [
+            "./Cargo.toml",
+            ".\\Cargo.toml",
+            "Cargo.toml#L7",
+            "./src/auth/login.rs",
+            ".\\src\\auth\\login.rs",
+            "src\\auth\\login.rs",
+            "src/auth/login.rs#L18",
+            "auth/login.rs",
+            "/home/ada/acme-auth/src/auth/login.rs",
+        ] {
+            let text = format!("Fix the expired-token panic in {path}.");
+            let score = scored(&text, &index);
+            assert_eq!(mark_on(&score, &text, path), "name:unique", "{path}");
+            assert_eq!(page(&text, &index), status_line(&text, &index), "{path}");
+        }
+
+        // The showcase loses nothing to a shell's way of writing its paths.
+        let dotted = PROMPT
+            .replace("src/auth/login.rs", "./src/auth/login.rs")
+            .replace("tests/auth.rs", "./tests/auth.rs");
+        assert_eq!(
+            scored(&dotted, &index)["total"],
+            scored(PROMPT, &index)["total"]
+        );
     }
 
     #[test]

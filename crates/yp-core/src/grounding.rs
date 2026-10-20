@@ -429,14 +429,11 @@ fn push_referent(
 
     let mut text = token.text.clone();
     let mut facts = corpus.lookup(&token.text);
-    if facts.is_none() && token.kind == TokenKind::Path {
-        // A file handed over under its bare name: `src/auth/login.rs` is the
-        // `login.rs` the corpus holds, as far as anything here can tell.
-        if let Some(name) = token.text.rsplit(['/', '\\']).next() {
-            if !name.is_empty() && corpus.bare_file(name) {
-                facts = corpus.lookup(name);
-            }
-        }
+    // A file at the root has no `/` to make it a path, so `Cargo.toml#L7`
+    // reaches here as a dotted identifier, anchor and all.
+    let anchored = without_line_anchor(&token.text).len() < token.text.len();
+    if facts.is_none() && (token.kind == TokenKind::Path || anchored) {
+        facts = path_facts(&token.text, corpus);
     }
 
     if !explicit {
@@ -474,6 +471,164 @@ fn push_referent(
         explicit,
         facts,
     });
+}
+
+/// What the repository knows of a path that the index does not hold as it
+/// was written.
+///
+/// A path is written in more ways than the index spells one, and each of
+/// these was "not in this repository" against the demo's sample. "Fix the
+/// expired-token panic in src/auth/login.rs." scores 644.3 there, and 378.5
+/// with the path written any of these ways, on the page and in the hook
+/// alike.
+///
+/// - `./src/auth/login.rs` and `.\src\auth\login.rs`, as a shell completes
+///   them. Written so, the showcase prompt scored 806.9 against 865.6, and
+///   "Bump serde to 1.0.200 in ./Cargo.toml." 345.0 against 610.7 for
+///   `Cargo.toml`, under a file list that shows `Cargo.toml`.
+/// - `src\auth\login.rs`, as Windows writes it.
+/// - `src/auth/login.rs#L18`, from a link to some of its lines.
+/// - `/home/ada/acme-auth/src/auth/login.rs`, from a terminal, a traceback or
+///   a file dragged into the prompt, and `C:\Users\…`, whose drive the
+///   tokenizer splits off.
+/// - `auth/login.rs`, as much of the path as its writer thought enough.
+///
+/// So the path is read as the index spells one: `/` between its parts, and
+/// no `./` in front or line anchor behind. An absolute path is then the
+/// longest tail of it that is a path here, see [`absolute_tail`], and a
+/// partial one is whatever paths end in it, see
+/// [`Corpus::paths_ending_in`]. A relative path with more in front than any
+/// path here stays missing: `crates/api/Cargo.toml` is not the sample's root
+/// `Cargo.toml`.
+///
+/// Read so, 25 SWE-bench Lite issues name files of their own repository that
+/// they did not before: 21 through the absolute paths of their tracebacks, 3
+/// through `./manage.py` and one through `quantum/tensorproduct.py`. The
+/// margin of an issue's own repository over the mean of the others rose from
+/// 54.4 to 57.2 points, and over the best of them from 30.6 to 33.4.
+///
+/// Last, a file handed over under its bare name: `src/auth/login.rs` is the
+/// `login.rs` the page was given, as far as anything here can tell.
+fn path_facts(written: &str, corpus: &dyn Corpus) -> Option<TermFacts> {
+    let (path, absolute) = index_spelling(written);
+    let found = if absolute {
+        absolute_tail(&path, corpus)
+    } else {
+        let respelled = (path != written).then(|| corpus.lookup(&path)).flatten();
+        respelled.or_else(|| {
+            (path.contains('/') && path.len() <= MAX_INDEXED_PATH)
+                .then(|| corpus.paths_ending_in(&path))
+                .flatten()
+        })
+    };
+    found.or_else(|| {
+        let name = path.rsplit('/').next()?;
+        (!name.is_empty() && corpus.bare_file(name))
+            .then(|| corpus.lookup(name))
+            .flatten()
+    })
+}
+
+/// A path as the index spells one, and whether it was written absolute.
+///
+/// `\` becomes `/`; a `./` in front, a line anchor behind, and the leading
+/// `/` or `~/` of an absolute path are dropped.
+fn index_spelling(written: &str) -> (String, bool) {
+    let path = without_line_anchor(written).replace('\\', "/");
+    let mut rest = path.as_str();
+    while let Some(after) = rest.strip_prefix("./") {
+        rest = after;
+    }
+    let home = rest.strip_prefix("~/");
+    let absolute = home.is_some() || rest.starts_with('/');
+    let rest = home.unwrap_or(rest).trim_start_matches('/');
+    (rest.to_string(), absolute)
+}
+
+/// `path` without the anchor a link to some of its lines ends in: `#L18`,
+/// GitHub's `#L18-L30` or GitLab's `#L18-30`. Any other `#` is part of the
+/// path.
+fn without_line_anchor(path: &str) -> &str {
+    let Some((file, anchor)) = path.rsplit_once('#') else {
+        return path;
+    };
+    let number = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    let line = |part: &str| part.strip_prefix('L').is_some_and(number);
+    let lines = match anchor.split_once('-') {
+        Some((from, to)) => line(from) && (line(to) || number(to)),
+        None => line(anchor),
+    };
+    if lines {
+        file
+    } else {
+        path
+    }
+}
+
+/// The longest path the index keeps as one term, `MAX_PATH_TERM` in
+/// `yp-index`. No longer tail of a path could be found, so none is looked up,
+/// and a 64 KB path costs a few lookups rather than one per `/` in it.
+const MAX_INDEXED_PATH: usize = 256;
+
+/// The longest tail of an absolute path that is a path here, `path` given
+/// without its leading `/`.
+///
+/// Where a repository sits on someone's disk is no part of it:
+/// `/home/ada/acme-auth/src/auth/login.rs` is the `src/auth/login.rs` here,
+/// and a traceback's `/usr/lib/python3/site-packages/django/db/models/query.py`
+/// is django's own `django/db/models/query.py`.
+///
+/// A tail must be a whole path here, not just the end of one as a partial
+/// path may be. Matched by their ends as well, SWE-bench Lite's tracebacks
+/// named files in three more issues of their own repository, for 0.2 points
+/// of margin: two matplotlib ones, whose files sit under `lib/`, and a django
+/// one whose user's `app/migrations/0001_initial.py` became any of django's
+/// own 23.
+///
+/// A tail of one part, a file name and nothing else, is only the file of
+/// that name at the root, which has no longer path to be found by:
+/// `/home/ada/acme-auth/Cargo.toml` is the sample's root `Cargo.toml`, while
+/// `/usr/lib/python3.8/unittest/case.py` is not whichever `case.py` a
+/// repository holds. That much is still a guess: matplotlib keeps a
+/// `tests.py` at its root, so two django issues whose tracebacks end in an
+/// app's `tests.py` gain up to 19.6 points against it.
+fn absolute_tail(path: &str, corpus: &dyn Corpus) -> Option<TermFacts> {
+    let starts = std::iter::once(0).chain(path.match_indices('/').map(|(at, _)| at + 1));
+    for start in starts {
+        let tail = &path[start..];
+        if tail.len() > MAX_INDEXED_PATH {
+            continue;
+        }
+        if !tail.contains('/') {
+            return root_file(tail, corpus);
+        }
+        if let Some(found) = corpus.lookup(tail) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The file called `name` at the root of the repository, or handed over with
+/// no directory at all, if there is one.
+///
+/// The index counts a file's name once for every file of that name, and a
+/// root file's path is its name, so what is left once each `<dir>/name` is
+/// counted out sits at the root. Only a name with a dot in it is taken for a
+/// file's: no identifier has one, and the `query` at the end of a link is not
+/// a file called that.
+fn root_file(name: &str, corpus: &dyn Corpus) -> Option<TermFacts> {
+    if !name.contains('.') {
+        return None;
+    }
+    let every = corpus.lookup(name)?;
+    let below = corpus.paths_ending_in(name).map_or(0, |found| found.def);
+    let root = every.def.saturating_sub(below);
+    (root > 0).then_some(TermFacts {
+        df: root,
+        cf: root,
+        def: root,
+    })
 }
 
 /// Extensions of the languages in which a module is a file that nothing
@@ -1400,6 +1555,142 @@ mod tests {
         // The only auth.rs here is in tests/.
         assert_eq!(named(&found, "src/auth.rs").facts, None);
         assert_eq!(named(&found, "tests/auth.rs").candidates(), Some(1));
+    }
+
+    /// The paths of the demo's six-file sample as `yp index` records them:
+    /// each file under its path and under its name, and the one nested
+    /// directory.
+    fn sample_paths() -> MapCorpus {
+        MapCorpus::new(
+            6,
+            &[
+                ("cargo.toml", 1, 1, 1),
+                ("src/auth/login.rs", 1, 1, 1),
+                ("login.rs", 1, 1, 1),
+                ("src/auth/token.rs", 1, 1, 1),
+                ("token.rs", 1, 1, 1),
+                ("src/session.rs", 1, 1, 1),
+                ("session.rs", 1, 1, 1),
+                ("src/routes.rs", 1, 1, 1),
+                ("routes.rs", 1, 1, 1),
+                ("tests/auth.rs", 1, 1, 1),
+                ("auth.rs", 1, 1, 1),
+                ("src/auth", 2, 2, 1),
+            ],
+        )
+    }
+
+    /// The one referent of `Fix the expired-token panic in {path}.` that
+    /// the path became.
+    fn path_in(path: &str, corpus: &dyn Corpus) -> Referent {
+        let text = format!("Fix the expired-token panic in {path}.");
+        let found = found_in(&text, corpus);
+        let paths: Vec<&Referent> = found.iter().filter(|r| r.explicit).collect();
+        assert_eq!(paths.len(), 1, "{path}: {:?}", texts(&found));
+        paths[0].clone()
+    }
+
+    #[test]
+    fn a_path_is_found_however_it_is_written() {
+        // Each of these was "not in this repository" against the demo's
+        // sample: in this sentence, 378.5 where the path as the index spells
+        // it scores 644.3, or 412.2 against 677.9 with a `C:` or `https:` in
+        // front.
+        let corpus = sample_paths();
+        for path in [
+            "./src/auth/login.rs",
+            "././src/auth/login.rs",
+            ".\\src\\auth\\login.rs",
+            "src\\auth\\login.rs",
+            "src/auth/login.rs#L18",
+            "src/auth/login.rs#L18-L30",
+            "src/auth/login.rs#L18-30",
+            "/home/ada/acme-auth/src/auth/login.rs",
+            "/home/ada/acme-auth/src/auth/login.rs#L18",
+            "~/acme-auth/src/auth/login.rs",
+            "C:\\Users\\ada\\acme-auth\\src\\auth\\login.rs",
+            "\\\\fileserver\\share\\acme-auth\\src\\auth\\login.rs",
+            "https://github.com/acme/acme-auth/blob/main/src/auth/login.rs#L18",
+            "auth/login.rs",
+            "auth\\login.rs",
+            "./Cargo.toml",
+            ".\\Cargo.toml",
+            "Cargo.toml#L7",
+            "/home/ada/acme-auth/Cargo.toml",
+            "~/acme-auth/Cargo.toml",
+            "./src/auth",
+            "/home/ada/acme-auth/src/auth",
+        ] {
+            assert_eq!(path_in(path, &corpus).candidates(), Some(1), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_partial_path_several_paths_end_in_could_be_any_of_them() {
+        let corpus = MapCorpus::new(
+            5,
+            &[
+                ("crates/api/src/lib.rs", 1, 1, 1),
+                ("crates/core/src/lib.rs", 1, 1, 1),
+                ("lib.rs", 2, 2, 2),
+                ("crates/core/src/main.rs", 1, 1, 1),
+                ("main.rs", 1, 1, 1),
+                ("src/oauth/login.rs", 1, 1, 1),
+                ("login.rs", 1, 1, 1),
+            ],
+        );
+        // Ambiguous, as the bare name `lib.rs` is.
+        for path in ["src/lib.rs", "./src/lib.rs", "src\\lib.rs"] {
+            let found = path_in(path, &corpus);
+            assert_eq!(found.candidates(), Some(2), "{path}");
+            assert!(found.resolution() < 1.0, "{path}");
+        }
+        for path in ["core/src/lib.rs", "src/main.rs", "api\\src\\lib.rs"] {
+            assert_eq!(path_in(path, &corpus).candidates(), Some(1), "{path}");
+        }
+        // The end of a path is where a `/` starts it: `auth/login.rs` is
+        // not the end of `src/oauth/login.rs`.
+        assert_eq!(path_in("auth/login.rs", &corpus).facts, None);
+    }
+
+    #[test]
+    fn a_path_that_is_not_here_stays_missing_however_it_is_written() {
+        let corpus = sample_paths();
+        for path in [
+            // More in front than any path here: a relative path is read from
+            // the root or by its end, never by dropping its first parts.
+            "crates/api/Cargo.toml",
+            "./crates/api/Cargo.toml",
+            "acme-auth/src/auth/login.rs",
+            "src/auth/banana.rs",
+            "./src/auth/banana.rs",
+            "lib/auth/login.rs",
+            "/usr/lib/rust/lib/auth/login.rs",
+            "/home/ada/acme-auth/src/auth/banana.rs",
+            // A file of that name below the root is not the one at the end of
+            // an absolute path: that may sit anywhere.
+            "/usr/lib/python3.8/unittest/session.rs",
+            // Only a line anchor is dropped.
+            "src/auth/login.rs#readme",
+            "src/auth/login.rs#L18-L",
+            "src/auth/login.rs#18",
+        ] {
+            assert_eq!(path_in(path, &corpus).facts, None, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_path_written_any_way_still_finds_a_file_handed_over_bare() {
+        let corpus = MapCorpus::new(1, &[("login.rs", 1, 1, 1)]).with_bare_names();
+        for path in [
+            "./src/auth/login.rs",
+            "src\\auth\\login.rs",
+            "src/auth/login.rs#L18",
+            "auth/login.rs",
+            "/home/ada/acme-auth/src/auth/login.rs",
+        ] {
+            assert_eq!(path_in(path, &corpus).candidates(), Some(1), "{path}");
+        }
     }
 
     /// The demo's six-file sample, as far as these tests need it: each word
