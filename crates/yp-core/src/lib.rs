@@ -533,6 +533,24 @@ mod tests {
             "Refactor `x`. Only all, keep all, unchanged all, assert all, verify all.",
             "Refactor `x`.\n1. returns json\n2. input schema\n3. tests pass\n4. assert\n\
              5. verify\n6. only\n7. keep\n8. unchanged",
+            // A different number, number word, quoted letter or plain word
+            // after each cue word took the same list to 914.8, 914.8, 895.6
+            // and 805.3, and as bullets to 937.6. The Korean twins scored as
+            // the English ones did.
+            "Refactor `x`. Returns 1, input 2, schema 3. Tests pass 4, assert 5, verify 6. \
+             Only 7, keep 8, unchanged 9.",
+            "Refactor `x`. Returns one, input two, schema three. Tests pass four, assert five, \
+             verify six. Only seven, keep eight, unchanged nine.",
+            "Refactor `x`. Returns 'a', input 'b', schema 'c'. Tests pass 'd', assert 'e', \
+             verify 'f'. Only 'g', keep 'h', unchanged 'i'.",
+            "Refactor `x`. Returns red, input blue, schema green. Tests pass apple, assert \
+             pear, verify plum. Only north, keep south, unchanged east.",
+            "Refactor `x`.\n- returns 1\n- input 2\n- schema 3\n- tests pass 4\n- assert 5\n\
+             - verify 6\n- only 7\n- keep 8\n- unchanged 9",
+            "리팩터링해줘 `x`. 반환 1, 입력 2, 스키마 3. 테스트 통과 4, 커버리지 5, 기대값 6. \
+             에서만 7, 그대로 8, 유지해 9.",
+            "리팩터링해줘 `x`. 반환 하나, 입력 둘, 스키마 셋. 테스트 통과 넷, 커버리지 다섯, \
+             기대값 여섯. 에서만 일곱, 그대로 여덟, 유지해 아홉.",
         ] {
             let t = total(salad);
             assert!(t < 400.0, "{salad:.48} scored {t}");
@@ -553,7 +571,7 @@ mod tests {
     #[test]
     fn cue_words_after_a_real_name_add_little() {
         // An index checks names, not cue words. "Refactor verify_token."
-        // scored 503.1 against the demo's sample and 912.1 with these twelve
+        // scored 503.1 against the demo's sample and 912.1 with these eleven
         // words after it, all of them false for that function, above the
         // 860.3 of the prompt that names the file, the function and the test.
         // With them it now scores 529.9, the same C as without. This corpus
@@ -584,10 +602,26 @@ mod tests {
                 .map(|c| c.earned)
                 .collect()
         };
+        // A different number, number word, quoted letter or plain word after
+        // each cue word took it to 915.3, 915.3, 899.1 and 825.1 against the
+        // sample, and to 930.2 as bullets. Grounding reads none of them as a
+        // name, and the index cannot tell that they are not about anything.
         for tail in [
             " Returns json, input schema. Tests pass, assert, verify. Only, keep, unchanged.",
             " Returns the json, the input schema. The tests pass, the assert, the verify. \
              Only the, keep the, unchanged the.",
+            " Returns 1, input 2, schema 3. Tests pass 4, assert 5, verify 6. Only 7, keep 8, \
+             unchanged 9.",
+            " Returns one, input two, schema three. Tests pass four, assert five, verify six. \
+             Only seven, keep eight, unchanged nine.",
+            " Returns 'a', input 'b', schema 'c'. Tests pass 'd', assert 'e', verify 'f'. \
+             Only 'g', keep 'h', unchanged 'i'.",
+            " Returns red, input blue, schema green. Tests pass apple, assert pear, verify \
+             plum. Only north, keep south, unchanged east.",
+            "\n- returns 1\n- input 2\n- schema 3\n- tests pass 4\n- assert 5\n- verify 6\n\
+             - only 7\n- keep 8\n- unchanged 9",
+            " 반환 1, 입력 2, 스키마 3. 테스트 통과 4, 커버리지 5, 기대값 6. 에서만 7, 그대로 8, \
+             유지해 9.",
         ] {
             let tailed = grounded(&format!("Refactor verify_token.{tail}"));
             // The tail earns no result shape, finish line or boundary.
@@ -658,6 +692,29 @@ mod tests {
             ("parser.py 버그 고쳐줘. 테스트 통과, 경고 없이.", 601.0),
             ("출력은 JSON 형식으로 해줘.", 314.5),
             ("출력은 그대로 유지해.", 288.9),
+            // A format beside the I/O cue it describes, and a part of the
+            // result beside its boundary, with nothing else in the sentence.
+            // As padding they lost 126 to 258 points: the first scored 569.2.
+            ("Add a `yp export` command. JSON output. Tests pass.", 763.6),
+            ("Add a `yp export` command. Returns JSON. Tests pass.", 763.6),
+            ("Add a `yp export` command, JSON output, tests pass.", 763.6),
+            ("Add a config loader. YAML input. Tests pass.", 601.0),
+            ("Add a /stats endpoint. JSON response. Tests pass.", 738.8),
+            (
+                "Add a `yp export` command.\nRequirements:\n- JSON output\n- keep backward \
+                 compatibility\n- tests pass",
+                835.0,
+            ),
+            ("`yp export` 명령 추가해줘. JSON 출력. 테스트 통과.", 711.7),
+            ("`yp export` 명령 추가해줘. JSON 반환. 테스트 통과.", 711.7),
+            (
+                "Fix the expired-token panic in verify_token. Return type unchanged.",
+                678.9,
+            ),
+            // What the singular scores. The plurals are I/O cue words too,
+            // and as neither a name nor an I/O noun they scored 322.6.
+            ("Fix the parser. Keep the return values unchanged.", 700.3),
+            ("Fix the parser. Keep the return types unchanged.", 700.3),
         ] {
             let s = score(text).unwrap();
             assert!(
