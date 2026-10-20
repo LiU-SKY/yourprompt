@@ -467,7 +467,21 @@ mod tests {
             assert_eq!(mark_on(&scored(text, &index), text, path), kind, "{text}");
         }
 
-        // So are a dropped folder's: proj/ arrives as main.py and app/views.py.
+        // It is the index `yp index` writes for the same six files.
+        let root = std::env::temp_dir().join(format!("yp-wasm-sample-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (name, text) in sample() {
+            let path = root.join(name.trim_start_matches("./"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let walked = yp_index::RepoIndex::build(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(walked.files(), 6);
+        assert_eq!(index, walked.as_str());
+
+        // So are a dropped folder's: proj/ arrives as ./main.py and
+        // app/views.py.
         let index = index_of(&[
             (
                 "./main.py",
