@@ -41,7 +41,25 @@
 //! Lite's 300 issues these two readings take 20 action words for nouns, and
 //! every one is a noun ("the proposed fix", "When DEBUG is True"). In
 //! HumanEvalComm they take one, the "move" of "All cars move in the same
-//! speed", which asks for nothing either way.
+//! speed", which asks for nothing either way. A plural that "of" follows is
+//! not one of those verbs, since none of them takes "of": "Document returns
+//! of parse_args" and "Investigate causes of the leak" ask for what they say.
+//! Neither is "returns" before "in", as in "Fix returns in parse_args". Read
+//! as the verb, "returns" took the objective from both, which scored 270.3
+//! rather than 424.2.
+//!
+//! An action word joined by a hyphen to "pre", "post" or "non" is part of a
+//! modifier: the "pre-commit" hook, a "post-install" script, "non-test"
+//! files. Once commit, push and install were actions, "Add a pre-commit hook
+//! that runs prettier on staged files" was read as two objectives. Any other
+//! compound is read as one word where it starts, so "the re-deploy step" is a
+//! noun and "Re-deploy staging" a verb, and a flag such as "--dry-run" is a
+//! name. The object of a preposition is a noun as well: "on push", "before
+//! commit", "during build". "Trigger the deploy on push to main" took "push"
+//! as its objective, and "use SELECT ... FOR UPDATE" took "UPDATE". In
+//! SWE-bench Lite's 300 issues an action word follows a preposition 42 times
+//! outside code, 34 of them in the frames of a traceback ("in execute"), and
+//! every one is a noun. HumanEvalComm has none.
 //!
 //! A word inside a name is part of the name, by the test the passes share,
 //! [`crate::antecedents::is_name`]: "test" in `src/test/foo.rs`, "build" in
@@ -89,6 +107,15 @@
 //! purpose, as "to" and a verb is in English: "마이그레이션을 실행하도록 배포
 //! 스크립트를 수정해줘" asks for one change, and was read as three.
 //!
+//! A Korean clause that says when something happens, rather than asks for
+//! it, is the twin of "on push": push 할 때마다, 리팩터링할 때, merge 되면,
+//! 커밋하기 전에, 업데이트 시. "push 할 때마다 cargo test 랑 cargo clippy
+//! 돌리는 GitHub Actions 워크플로 만들어줘" was read as three objectives, push
+//! among them. A request after 하면 still asks for what it names: 리팩터링하면
+//! 좋겠어. And a tool's subcommand that the Korean verb after it runs names
+//! the command, as it does after "run": "cargo test 돌려줘" counted test and
+//! 돌려 as two objectives, where "run cargo test" counts one.
+//!
 //! "Return" opens an instruction as "fix" does, but it is not an action verb,
 //! because "Make verify_token return Err(...)" would then ask for two things.
 //! So "Return Err(AuthError::Expired) from verify_token instead of
@@ -98,6 +125,14 @@
 //! empty list." A "return" inside a result-shape cue ("should return", "return
 //! value") stays that cue, and the Korean 반환해줘 becomes the action in place
 //! of its result shape, so neither language counts one word twice.
+//!
+//! Korean asks for something to be made so with -게 or -도록 and 해줘, where
+//! English says "make": 테스트 돌게 해줘, 설정할 수 있게 해줘. Neither the verb
+//! nor 해 is an action word, so "SESSION_TIMEOUT_SECS 를 환경 변수
+//! YP_SESSION_TIMEOUT 으로 설정할 수 있게 해줘." asked for nothing and scored
+//! 150.2. When nothing else is the action, the verb and the 해 that asks for
+//! it are, and it scores 482.0. 반환하게 해줘 is 반환 asked for, as 반환해줘 is.
+//! 이렇게 해줘 says how, as "do it like this" does, and names no action either.
 //!
 //! The same reading keeps a vague verb's charge off a noun. The polysemous
 //! verbs are charged as smells, and "check" in "fix the type check errors"
@@ -275,6 +310,23 @@ const TOOLS: &[&str] = &[
     "kubectl", "mvn", "npm", "npx", "pip", "pip3", "pipx", "pnpm", "poetry", "uv", "yarn",
 ];
 
+/// Prepositions, whose object an action word after them is: "on push",
+/// "before commit", "for commit messages", the "in execute" of a pasted
+/// traceback. "to" is not one, because "to run" is a verb, and neither are
+/// "but", "except" and "than", which a verb can follow: "do nothing but fix
+/// the parser". Sorted, for binary search.
+const PREPOSITIONS: &[&str] = &[
+    "about", "after", "at", "before", "by", "during", "for", "from", "in", "into", "of", "on",
+    "onto", "over", "per", "since", "through", "under", "until", "upon", "via", "with", "within",
+    "without",
+];
+
+/// Prefixes that make a word a hyphen joins to them a modifier, never a verb:
+/// the "pre-commit" hook, a "post-install" script, "non-test" files. "re" is
+/// not one, because "re-deploy" and "re-enable" are verbs as often as "re-run"
+/// is. Sorted, for binary search.
+const PREFIXES: &[&str] = &["non", "post", "pre"];
+
 /// The Korean nouns the cue lexicon lists as actions, which take 하다 or
 /// 시키다 to become verbs. Sorted, for binary search.
 const KO_NOUN_ACTIONS: &[&str] = &[
@@ -318,6 +370,44 @@ const KO_JOINED: &[&str] = &["과", "와", "랑", "이랑"];
 /// Words between which a Korean noun stands in a list: 업데이트 그리고 배포.
 const KO_JOINS: &[&str] = &["그리고", "또는", "및"];
 
+/// What after a Korean action word makes it the verb of a clause that says
+/// when something happens rather than asks for it: push 할 때마다, 리팩터링할
+/// 때, merge 될 경우, 커밋하기 전에. [`KO_IF`] holds the conditions, which a
+/// request can follow.
+const KO_WHEN: &[&str] = &[
+    "될 경우",
+    "될 시",
+    "될 때",
+    "될때",
+    "되는 경우",
+    "하기 전",
+    "하는 경우",
+    "할 경우",
+    "할 시",
+    "할 때",
+    "할때",
+];
+
+/// The conditional endings, "if it is done".
+const KO_IF: &[&str] = &["되면", "하면"];
+
+/// What after 하면 or 되면 makes the whole a request rather than a condition:
+/// 리팩터링하면 좋겠어 asks for a refactor, push 하면 돼 for a push, and 하면
+/// 안 될까 as politely. 하면 안 돼 forbids it, and asks for nothing.
+const KO_IF_ASKS: &[&str] = &[
+    "감사",
+    "고마",
+    "돼",
+    "되",
+    "될",
+    "안 될까",
+    "어때",
+    "어떨",
+    "좋겠",
+    "좋아",
+    "좋을",
+];
+
 /// The endings after 반환해 and 리턴해 that make them a request rather than a
 /// result shape: 반환해줘, 리턴해 주세요. 반환해야 is what something must do,
 /// as "must return" is, and stays the result it names.
@@ -325,6 +415,14 @@ const KO_ASKING: &[&str] = &[" 주세요", " 줘", "라", "주세요", "줘"];
 
 /// The same after 반환 and 리턴 when 하다 follows them: 반환하세요.
 const KO_ASKING_HA: &[&str] = &["하라", "하세요"];
+
+/// The endings of a Korean verb that 해줘 after it asks to be made so, as
+/// "make" does in English: 돌게 해줘, 공유하도록 해주세요.
+const KO_CAUSED: &[&str] = &["게", "도록"];
+
+/// Words ending in 게 that say how rather than what: 이렇게 해줘 asks for
+/// what "do it like this" asks for, which names no action either.
+const KO_MANNER: &[&str] = &["그렇게", "어떻게", "이렇게", "저렇게"];
 
 /// Words before a "return" that leave it opening its clause: "and return
 /// early", "just return None". Sorted, for binary search.
@@ -678,14 +776,16 @@ const COPULAS: &[&str] = &[
 /// Question words that open a question around a copula: "what is that error?".
 const QUESTION_WORDS: &[&str] = &["how", "what", "when", "where", "which", "who", "why"];
 
-/// `settled` without the action words `text` uses as nouns or as the purpose
-/// of another, and with an opening "Return" when nothing else is the action.
+/// `settled` without the action words `text` uses as nouns, as the purpose of
+/// another or in a clause that says when, and with an opening "Return", or a
+/// Korean request to make something so, when nothing else is the action.
 ///
 /// `found` is every cue hit the matcher made, before any prohibition settled
 /// one away: "test" in "don't change test files" is still the object of
-/// "change". It is returned with the "Return" added, so that grounding reads
-/// it as an instruction word. Hits other than action verbs pass through
-/// unchanged and in order.
+/// "change". It is returned with the "Return" or the request added, so that
+/// grounding reads it as an instruction word. Hits other than action verbs
+/// pass through unchanged and in order, but for a 반환 asked for, which
+/// becomes one.
 pub(crate) fn strip(
     text: &str,
     tokens: &[Token],
@@ -697,7 +797,10 @@ pub(crate) fn strip(
     let breaks = breaks(text);
     let kept: Vec<Hit<CueId>> = settled
         .into_iter()
-        .filter(|h| h.id != CueId::ActionVerb || !is_noun(text, h.span, &actions, &names))
+        .filter(|h| {
+            h.id != CueId::ActionVerb
+                || !(is_noun(text, h.span, &actions, &names) || clause_verb(text, h.span))
+        })
         .collect();
     let mut kept = purposes(text, &breaks, korean(text, &breaks, kept));
     if !kept.iter().any(|h| h.id == CueId::ActionVerb) {
@@ -706,6 +809,9 @@ pub(crate) fn strip(
             kept.push(hit);
         } else if let Some(hit) = kept.iter_mut().find(|h| asks_to_return(text, h)) {
             hit.id = CueId::ActionVerb;
+        } else if let Some(hit) = caused(text, tokens, &found) {
+            found.push(hit.clone());
+            kept.push(hit);
         }
     }
     (kept, found)
@@ -766,7 +872,31 @@ fn is_noun(text: &str, span: Span, actions: &[usize], names: &[Span]) -> bool {
     if quoted(text, span) || subject(text, span.end) {
         return true;
     }
-    let before = &text[..span.start];
+    let mut start = span.start;
+    if let Some(head) = text[..start].strip_suffix('-') {
+        match last_word(head) {
+            Some(part) if PREFIXES.binary_search(&fold(part).as_str()).is_ok() => return true,
+            Some(part) => {
+                // Any other compound is one word, read where it starts: "the
+                // re-deploy step" is a noun, and "Re-deploy staging" a verb.
+                // One that a hyphen joins to more before it is a longer name,
+                // a flag ("--dry-run") or "end-to-end".
+                start = head.len() - part.len();
+                if text[..start].ends_with('-') {
+                    return true;
+                }
+            }
+            // A dash that opens a line is a bullet: "-fix the parser".
+            None if head.trim_end_matches([' ', '\t']).is_empty()
+                || head.trim_end_matches([' ', '\t']).ends_with('\n') =>
+            {
+                return false
+            }
+            // Any other is the name of a flag: "--run", "go test -run".
+            None => return true,
+        }
+    }
+    let before = &text[..start];
     let joined = before.trim_end_matches([' ', '\t']);
     // Nothing but spaces between the two words: not the start of the text, a
     // line break, or punctuation.
@@ -782,8 +912,50 @@ fn is_noun(text: &str, span: Span, actions: &[usize], names: &[Span]) -> bool {
     let folded = fold(word);
     let start = joined.len() - word.len();
     modifies(&folded)
+        || PREPOSITIONS.binary_search(&folded.as_str()).is_ok()
         || compound(text, start, &folded)
         || (TOOLS.binary_search(&folded.as_str()).is_ok() && commanded(text, start, actions))
+}
+
+/// Whether the Korean after the action word at `span` makes it the verb of a
+/// clause that says when or whether something happens, which asks for
+/// nothing: push 할 때마다, 리팩터링하면, 업데이트 시, 커밋하는 경우.
+fn clause_verb(text: &str, span: Span) -> bool {
+    let rest = if span.slice(text).ends_with('하') {
+        // 커밋하 holds the 하 the clause is read from.
+        &text[span.end - '하'.len_utf8()..]
+    } else {
+        let rest = text[span.end..].trim_start_matches([' ', '\t']);
+        // An object particle may stand between them: 리팩터링을 할 때.
+        let rest = rest
+            .strip_prefix(['을', '를'])
+            .map_or(rest, |r| r.trim_start_matches([' ', '\t']));
+        if let Some(after) = rest.strip_prefix('시') {
+            // 시 alone is "upon": push 시, 업데이트 시에. Not push 시켜, or 시나리오.
+            if after
+                .chars()
+                .next()
+                .is_none_or(|c| !yp_lang::token::is_hangul(c))
+                || after.starts_with('에')
+                || after.starts_with("마다")
+            {
+                return true;
+            }
+        }
+        rest
+    };
+    if KO_WHEN.iter().any(|w| rest.starts_with(w)) {
+        return true;
+    }
+    KO_IF.iter().any(|ending| {
+        rest.strip_prefix(ending).is_some_and(|after| {
+            // 하면서 is "while doing it", which does not stop asking.
+            !after.starts_with(yp_lang::token::is_hangul) && {
+                let next = after.trim_start_matches([' ', '\t', ',']);
+                !KO_IF_ASKS.iter().any(|asks| next.starts_with(asks))
+            }
+        })
+    })
 }
 
 /// Whether the tool name starting at `start` is the object of an action word
@@ -839,8 +1011,30 @@ fn compound(text: &str, start: usize, word: &str) -> bool {
 fn subject(text: &str, end: usize) -> bool {
     let after = &text[end..];
     let next = after.trim_start_matches([' ', '\t']);
-    next.len() < after.len()
-        && next_word(next).is_some_and(|w| FINITE.binary_search(&fold(w).as_str()).is_ok())
+    next.len() < after.len() && next_word(next).is_some_and(|w| finite(w, &next[w.len()..]))
+}
+
+/// Whether `word`, with `rest` after it on its line, is one of the [`FINITE`]
+/// verbs. Not when it is a plural that "of" follows, since none of those
+/// verbs takes "of" after it: "Document returns of parse_args", "Investigate
+/// causes of the leak". "is of type int" is the copula. Nor "returns" before
+/// "in", which names the returns: "Fix returns in parse_args".
+fn finite(word: &str, rest: &str) -> bool {
+    let folded = fold(word);
+    if FINITE.binary_search(&folded.as_str()).is_err() {
+        return false;
+    }
+    let after = rest.trim_start_matches([' ', '\t']);
+    if after.len() == rest.len() {
+        return true;
+    }
+    match next_word(after).map(fold).as_deref() {
+        Some("of") => {
+            !folded.ends_with('s') || matches!(folded.as_str(), "does" | "has" | "is" | "was")
+        }
+        Some("in") => folded != "returns",
+        _ => true,
+    }
 }
 
 /// Whether `span` stands in quotes on its own, as in `Output: "test"` or the
@@ -891,22 +1085,27 @@ fn same_clause(breaks: &[usize], from: usize, to: usize) -> bool {
         .is_none_or(|&b| b >= to)
 }
 
-/// `kept` without the Korean action words that are another action's object,
-/// modifier or purpose.
+/// `kept` without the action words in Korean sentences that are another
+/// action's object, modifier or purpose.
 fn korean(text: &str, breaks: &[usize], kept: Vec<Hit<CueId>>) -> Vec<Hit<CueId>> {
     // Right to left, so that each action word knows whether another follows
-    // it in its sentence.
+    // it in its sentence, and whether that one is Korean.
     let mut keep = vec![true; kept.len()];
-    let mut later: Option<usize> = None;
+    let mut later: Option<(usize, bool)> = None;
     for (i, hit) in kept.iter().enumerate().rev() {
         if hit.id != CueId::ActionVerb {
             continue;
         }
-        let headed = later.is_some_and(|at| same_clause(breaks, hit.span.end, at));
-        if headed && !hit.term.is_ascii() && (modifier(text, hit) || purpose(text, hit.span.end)) {
+        let headed = later.is_some_and(|(at, _)| same_clause(breaks, hit.span.end, at));
+        let object = if hit.term.is_ascii() {
+            later.is_some_and(|(_, korean)| korean) && subcommand(text, hit.span)
+        } else {
+            modifier(text, hit) || purpose(text, hit.span.end)
+        };
+        if headed && object {
             keep[i] = false;
         } else {
-            later = Some(hit.span.start);
+            later = Some((hit.span.start, !hit.term.is_ascii()));
         }
     }
     kept.into_iter()
@@ -935,6 +1134,22 @@ fn modifier(text: &str, hit: &Hit<CueId>) -> bool {
         && !KO_JOINS
             .iter()
             .any(|j| next.strip_prefix(j).is_some_and(|r| r.starts_with(' ')))
+}
+
+/// Whether the English action word at `span` is a tool's subcommand that no
+/// 하다 or 시키다 after it makes the verb: "test" in "cargo test 돌려줘" is
+/// what 돌려 runs, as it is in "run cargo test", and in "cargo test 해줘" it
+/// is what is asked for.
+fn subcommand(text: &str, span: Span) -> bool {
+    let before = &text[..span.start];
+    let joined = before.trim_end_matches([' ', '\t']);
+    let tool = joined.len() < before.len()
+        && last_word(joined).is_some_and(|w| TOOLS.binary_search(&fold(w).as_str()).is_ok());
+    let rest = text[span.end..].trim_start_matches([' ', '\t']);
+    let next = rest
+        .strip_prefix(KO_PARTICLES)
+        .map_or(rest, |r| r.trim_start_matches([' ', '\t']));
+    tool && !KO_VERBALIZERS.iter().any(|v| next.starts_with(v))
 }
 
 /// Whether the Korean action word ending at `end` carries -도록, "so that":
@@ -991,26 +1206,13 @@ fn purpose_of(text: &str, breaks: &[usize], previous: Span, verb: Span) -> bool 
 /// The first "return" in `tokens` that opens a sentence or a clause and that
 /// no cue phrase holds, as an action-verb hit.
 fn returned(text: &str, tokens: &[Token], found: &[Hit<CueId>]) -> Option<Hit<CueId>> {
-    // Sorted by start, with the furthest end reached so far, so that whether
-    // any of them holds a word is one binary search.
-    let mut claimed: Vec<Span> = found.iter().map(|h| h.span).collect();
-    claimed.sort_unstable();
-    let mut furthest = 0;
-    let reach: Vec<usize> = claimed
-        .iter()
-        .map(|c| {
-            furthest = furthest.max(c.end);
-            furthest
-        })
-        .collect();
-    let held = |span: Span| {
-        let at = claimed.partition_point(|c| c.start <= span.start);
-        at > 0 && reach[at - 1] >= span.end
-    };
+    let claimed = Claimed::new(found);
     tokens
         .iter()
         .filter(|t| t.kind == TokenKind::Word && t.text == "return")
-        .find(|t| !held(t.span) && opens_clause(text, t.span.start) && !subject(text, t.span.end))
+        .find(|t| {
+            !claimed.holds(t.span) && opens_clause(text, t.span.start) && !subject(text, t.span.end)
+        })
         .map(|t| Hit {
             id: CueId::ActionVerb,
             term: t.span.slice(text).to_string(),
@@ -1018,11 +1220,47 @@ fn returned(text: &str, tokens: &[Token], found: &[Hit<CueId>]) -> Option<Hit<Cu
         })
 }
 
+/// The spans of some hits, sorted by start, with the furthest end reached so
+/// far, so that whether any of them holds or touches a word is one binary
+/// search.
+struct Claimed {
+    spans: Vec<Span>,
+    reach: Vec<usize>,
+}
+
+impl Claimed {
+    fn new(found: &[Hit<CueId>]) -> Self {
+        let mut spans: Vec<Span> = found.iter().map(|h| h.span).collect();
+        spans.sort_unstable();
+        let mut furthest = 0;
+        let reach = spans
+            .iter()
+            .map(|c| {
+                furthest = furthest.max(c.end);
+                furthest
+            })
+            .collect();
+        Self { spans, reach }
+    }
+
+    /// Whether one of them holds all of `span`.
+    fn holds(&self, span: Span) -> bool {
+        let at = self.spans.partition_point(|c| c.start <= span.start);
+        at > 0 && self.reach[at - 1] >= span.end
+    }
+
+    /// Whether one of them holds any of `span`.
+    fn touches(&self, span: Span) -> bool {
+        let at = self.spans.partition_point(|c| c.start < span.end);
+        at > 0 && self.reach[at - 1] > span.start
+    }
+}
+
 /// Whether the word at `at` opens a sentence or a clause: it starts the text
 /// or a line, follows punctuation, or follows a word like "and" or "just" that
 /// no modal stands before. "it should also return monomials" says what
 /// something should do, as "should return" does.
-fn opens_clause(text: &str, at: usize) -> bool {
+pub(crate) fn opens_clause(text: &str, at: usize) -> bool {
     let before = text[..at].trim_end_matches([' ', '\t']);
     match before.chars().next_back() {
         None => true,
@@ -1040,18 +1278,71 @@ fn opens_clause(text: &str, at: usize) -> bool {
 }
 
 /// Whether `hit` is 반환 or 리턴 asked for: 반환해줘, 리턴해 주세요,
-/// 반환하세요.
+/// 반환하세요, and made to: 반환하게 해줘, as "make it return" asks.
 fn asks_to_return(text: &str, hit: &Hit<CueId>) -> bool {
-    let endings = match hit.term.as_str() {
-        "반환해" | "리턴해" => KO_ASKING,
-        "반환" | "리턴" => KO_ASKING_HA,
-        _ => return false,
-    };
+    let rest = &text[hit.span.end..];
     hit.id == CueId::IoSpec
-        && endings.iter().any(|ending| {
-            text[hit.span.end..]
-                .strip_prefix(ending)
-                .is_some_and(|rest| !rest.starts_with(yp_lang::token::is_hangul))
+        && match hit.term.as_str() {
+            "반환해" | "리턴해" => ends_asking(rest, KO_ASKING),
+            "반환" | "리턴" => {
+                ends_asking(rest, KO_ASKING_HA)
+                    || rest.strip_prefix('하').is_some_and(|after| {
+                        KO_CAUSED
+                            .iter()
+                            .any(|c| after.strip_prefix(c).is_some_and(made))
+                    })
+            }
+            _ => false,
+        }
+}
+
+/// Whether `rest` starts with one of `endings` and nothing Korean goes on
+/// after it.
+fn ends_asking(rest: &str, endings: &[&str]) -> bool {
+    endings.iter().any(|ending| {
+        rest.strip_prefix(ending)
+            .is_some_and(|after| !after.starts_with(yp_lang::token::is_hangul))
+    })
+}
+
+/// Whether `rest`, the text after a verb's -게 or -도록, asks for it to be
+/// made so: 해줘, 해 주세요, 하세요.
+fn made(rest: &str) -> bool {
+    let rest = rest.trim_start_matches([' ', '\t']);
+    rest.strip_prefix('해')
+        .is_some_and(|after| ends_asking(after, KO_ASKING))
+        || ends_asking(rest, KO_ASKING_HA)
+}
+
+/// A Korean request that something be made so, as an action-verb hit over
+/// the verb and the 해 that asks for it: 테스트 돌게 해줘, 기다리게 해줘,
+/// 공유하도록 해주세요. "make" is an action word, and these asked for
+/// nothing where "make the tests run" asks for one thing. A word a cue holds
+/// is left to it: 반환하게 해줘 is 반환 asked for.
+fn caused(text: &str, tokens: &[Token], found: &[Hit<CueId>]) -> Option<Hit<CueId>> {
+    let claimed = Claimed::new(found);
+    tokens
+        .iter()
+        .find(|t| {
+            let word = t.text.as_str();
+            t.kind == TokenKind::Hangul
+                && KO_CAUSED
+                    .iter()
+                    .any(|c| word.len() > c.len() && word.ends_with(c))
+                && !KO_MANNER.contains(&word)
+                && made(&text[t.span.end..])
+                && !claimed.touches(t.span)
+        })
+        .map(|t| {
+            // Through the 해 or 하 that asks: "돌게 해".
+            let rest = &text[t.span.end..];
+            let gap = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+            let span = Span::new(t.span.start, t.span.end + gap + '해'.len_utf8());
+            Hit {
+                id: CueId::ActionVerb,
+                term: span.slice(text).to_string(),
+                span,
+            }
         })
 }
 
@@ -1295,6 +1586,8 @@ mod tests {
             CAUSATIVES,
             JOINS,
             TOOLS,
+            PREPOSITIONS,
+            PREFIXES,
             KO_NOUN_ACTIONS,
             RETURN_LEADS,
             THAT_HEADS,
@@ -1401,6 +1694,128 @@ mod tests {
         // Typed on its own, the command is what is asked for.
         assert_eq!(verbs("cargo test"), ["test"]);
         assert_eq!(verbs("go fix the parser"), ["fix"]);
+        // In Korean the verb that runs it comes after it, and 하다 makes the
+        // command itself the verb.
+        assert_eq!(verbs("cargo test 돌려줘"), ["돌려"]);
+        assert_eq!(
+            verbs("cargo test 랑 cargo clippy 돌리는 워크플로 만들어줘"),
+            ["만들어"]
+        );
+        assert_eq!(verbs("cargo test 해줘"), ["test"]);
+        assert_eq!(verbs("cargo test 해주고 실패하면 고쳐줘"), ["test", "고쳐"]);
+    }
+
+    #[test]
+    fn an_action_word_a_prefix_or_a_flag_holds_is_part_of_a_noun() {
+        // The first three counted the joined word as a second objective once
+        // commit, push and install were actions.
+        for (text, wanted) in [
+            (
+                "Add a pre-commit hook that runs prettier on staged files.",
+                vec!["Add"],
+            ),
+            ("Add a pre-push hook that runs the tests.", vec!["Add"]),
+            ("Fix the post-install script in package.json.", vec!["Fix"]),
+            ("Only change non-test files.", vec!["change"]),
+            ("Fix the re-deploy step in scripts/deploy.sh.", vec!["Fix"]),
+            ("Implement soft-delete for users.", vec!["Implement"]),
+            ("Add a dry-run flag to scripts/deploy.sh.", vec!["Add"]),
+            ("Run scripts/deploy.sh with --dry-run", vec!["Run"]),
+            ("go test -run TestVerify ./auth", vec!["test"]),
+        ] {
+            assert_eq!(verbs(text), wanted, "{text}");
+        }
+        // A compound that opens an instruction is its verb, and a dash that
+        // opens a line is a bullet.
+        for (text, wanted) in [
+            ("Re-deploy staging after the fix.", vec!["deploy"]),
+            ("Re-enable the flaky test in tests/auth.rs.", vec!["enable"]),
+            ("Re-run the failing tests.", vec!["Re-run"]),
+            ("Cross-compile the CLI for aarch64.", vec!["compile"]),
+            ("-fix the parser\n-add a test", vec!["fix", "add"]),
+        ] {
+            assert_eq!(verbs(text), wanted, "{text}");
+        }
+    }
+
+    #[test]
+    fn an_action_word_after_a_preposition_is_its_object() {
+        // "Trigger" is not an action word, and "push" was the objective.
+        assert!(verbs("Trigger the deploy on push to main.").is_empty());
+        for (text, wanted) in [
+            ("Run the tests on push to main.", vec!["Run"]),
+            ("Run the tests on every push to main.", vec!["Run"]),
+            ("Run clippy upon commit.", vec!["Run"]),
+            ("Run the linter before commit.", vec!["Run"]),
+            ("Lint the code during build.", vec!["Lint"]),
+            ("Fix the race: use SELECT ... FOR UPDATE.", vec!["Fix"]),
+            // "to" and a verb is no preposition and its object.
+            ("I want to fix the parser", vec!["fix"]),
+        ] {
+            assert_eq!(verbs(text), wanted, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_korean_clause_of_time_or_condition_asks_for_nothing() {
+        // push was read as a third objective, beside the "test" that
+        // 돌리는 runs.
+        assert_eq!(
+            verbs("push 할 때마다 cargo test 랑 cargo clippy 돌리는 GitHub Actions 워크플로 만들어줘."),
+            ["만들어"]
+        );
+        for (text, wanted) in [
+            ("push 하면 테스트 돌려줘.", vec!["돌려"]),
+            (
+                "main 에 merge 될 때 배포 스크립트를 수정해줘.",
+                vec!["수정해"],
+            ),
+            ("push 시 테스트를 돌려줘.", vec!["돌려"]),
+            ("리팩터링을 하기 전에 테스트 추가해줘.", vec!["추가해"]),
+            ("커밋하는 경우 테스트를 돌려줘.", vec!["돌려"]),
+            ("리팩터링할 때 테스트도 같이 고쳐줘.", vec!["고쳐"]),
+            // A request after the condition asks for what it names, and so
+            // does "while doing it".
+            ("리팩터링하면 좋겠어.", vec!["리팩터링"]),
+            ("main 에 push 하면 돼.", vec!["push"]),
+            ("리팩터링하면서 테스트도 고쳐줘.", vec!["리팩터링", "고쳐"]),
+            ("push 시켜줘.", vec!["push"]),
+        ] {
+            assert_eq!(verbs(text), wanted, "{text}");
+        }
+        // Forbidden, it asks for nothing either.
+        assert!(verbs("main 에 push 하면 안 돼.").is_empty());
+    }
+
+    #[test]
+    fn a_plural_before_of_and_returns_before_in_are_nouns() {
+        // The first two lost their objective (424.2 to 270.3): "returns" was
+        // read as the verb whose subject the word before it was.
+        for (text, wanted) in [
+            ("Document returns of parse_args.", vec!["Document"]),
+            ("Fix returns in parse_args.", vec!["Fix"]),
+            (
+                "Investigate causes of the memory leak in worker.py.",
+                vec!["Investigate"],
+            ),
+            ("Log runs of the nightly job to stderr.", vec!["Log"]),
+        ] {
+            assert_eq!(verbs(text), wanted, "{text}");
+        }
+        // The verbs still make the word before them their subject.
+        for text in [
+            "build is broken",
+            "build is of no use",
+            "test returns early",
+            "Test runs twice, fix the fixture.",
+        ] {
+            assert!(
+                !verbs(text)
+                    .iter()
+                    .any(|v| v.eq_ignore_ascii_case("test") || v == "build"),
+                "{text}"
+            );
+        }
     }
 
     #[test]
@@ -1569,14 +1984,42 @@ mod tests {
 
     #[test]
     fn an_opening_return_is_not_also_a_result_shape() {
-        let text = "반환해줘";
-        let found = yp_lang::resources().unwrap().cue_matcher.find(text);
-        let settled = crate::negation::settle(text, &found);
-        let (settled, _) = strip(text, &yp_lang::tokenize(text), found, settled);
-        assert!(
-            !settled.iter().any(|h| h.id == CueId::IoSpec),
-            "{settled:?}"
-        );
+        for text in ["반환해줘", "Err(()) 를 반환하게 해줘"] {
+            let found = yp_lang::resources().unwrap().cue_matcher.find(text);
+            let settled = crate::negation::settle(text, &found);
+            let (settled, _) = strip(text, &yp_lang::tokenize(text), found, settled);
+            assert!(
+                !settled.iter().any(|h| h.id == CueId::IoSpec),
+                "{text}: {settled:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_korean_request_to_make_something_so_is_the_action() {
+        // Each asked for nothing, where "make the tests run" asks for one
+        // thing.
+        for (text, wanted) in [
+            ("main 에 push 할 때 테스트 돌게 해줘.", "돌게 해"),
+            (
+                "SESSION_TIMEOUT_SECS 를 환경 변수 YP_SESSION_TIMEOUT 으로 설정할 수 있게 해줘.",
+                "있게 해",
+            ),
+            ("고객마다 한 번씩만 나오게 해 주세요.", "나오게 해"),
+            (
+                "두 사전이 같은 타입을 공유하도록 해주세요.",
+                "공유하도록 해",
+            ),
+            ("비어 있으면 Err(()) 를 반환하게 해줘.", "반환"),
+        ] {
+            assert_eq!(verbs(text), [wanted], "{text}");
+        }
+        // Another action is the objective, and the request adds none; "how"
+        // names no action, and neither does a report of what was done.
+        assert_eq!(verbs("파서 고치고 테스트 돌게 해줘"), ["고치"]);
+        for text in ["이렇게 해줘", "저거 좀 어떻게 해줘", "테스트 돌게 했어"] {
+            assert!(verbs(text).is_empty(), "{text}: {:?}", verbs(text));
+        }
     }
 
     #[test]
@@ -1723,9 +2166,12 @@ mod tests {
         // In each pair the same action words are found, but in the first
         // text every one of them looks back to the same earlier action, or
         // ahead to the same later one, across all the others. Read that way
-        // for each of them, the work would be quadratic. Timed against each
-        // other, the two texts measure how the work grows, not how fast the
-        // machine is.
+        // for each of them, the work would be quadratic. In the last pair no
+        // action is found, and in its first text every word asks for
+        // something to be made so beside a cue that holds it, which a search
+        // through every cue for each would make quadratic too. Timed against
+        // each other, the two texts measure how the work grows, not how fast
+        // the machine is.
         use std::time::{Duration, Instant};
         let time = |text: &str| {
             let r = yp_lang::resources().unwrap();
@@ -1756,6 +2202,10 @@ mod tests {
             (
                 "the type check that returns ".repeat(4_000),
                 "the type. check. that. returns. ".repeat(4_000),
+            ),
+            (
+                "입력하게 해줘 ".repeat(10_000),
+                "입력하게. 해줘. ".repeat(10_000),
             ),
         ] {
             let (heavy_time, light_time) = (time(&heavy), time(&light));

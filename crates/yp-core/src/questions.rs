@@ -1,4 +1,4 @@
-//! Direct questions, counted as requests.
+//! Questions, counted as requests.
 //!
 //! "Why does verify_token panic on expired tokens?" asks for an explanation
 //! as plainly as "explain why verify_token panics" does. It names no action
@@ -27,14 +27,38 @@
 //! every vague request in the tier over it. "fix it" at least leaves the agent
 //! a fix to make; such a question leaves it nothing to look at, so it stands
 //! where a remark stands.
+//!
+//! A yes/no question can also be asked by the verb that wants it answered,
+//! with no question mark: "Check whether Token::decode can panic on any
+//! input.", "Token::decode 가 어떤 입력에서 panic 할 수 있는지 확인해줘.".
+//! "check" and 확인해 are not actions, because on their own they do not say
+//! what to look for. The clause after "whether" or "if", or the one before
+//! -지, does, so such a request counts as the question it asks, by the rules a
+//! question with a question mark follows. Once "decode" was read as part of
+//! the name, these two asked for nothing and scored 376.7 and 301.9; they
+//! score 530.5 and 455.7, what they scored while "decode" was mistaken for
+//! their action. Only an imperative asks, as only an opening "Return" does:
+//! "Your job is to check if ..." in HumanEvalComm's problem 119 describes the
+//! function, and read as a question it put the version cut short after that
+//! sentence above the original, 628.4 to 620.4.
 
 use yp_lang::question::Question;
-use yp_lang::{CueId, Hit, SmellHit, SmellId, Token, TokenKind};
+use yp_lang::{CueId, Hit, SmellHit, SmellId, Span, Token, TokenKind};
 
 use crate::prompt::is_pasted_block;
 
-/// The direct questions in `text` that count as requests, and `smell_hits`
-/// without the interrogatives that asked them.
+/// English verbs that ask the yes/no question of the clause after "whether"
+/// or "if": "check whether the cache is stale". Sorted, for binary search.
+const EN_ASKING: &[&str] = &["check", "determine"];
+
+/// Korean words that ask the question of the clause before them, when it
+/// ends in -지: 버그인지 확인해줘, 통과하는지 체크해줘. 확인하는 describes,
+/// as in 반환하는지 확인하는 테스트.
+const KO_ASKING: &[&str] = &["알아봐", "체크해", "확인 좀", "확인해"];
+
+/// The questions in `text` that count as requests, direct ones and those a
+/// verb asks, in text order, and `smell_hits` without the interrogatives that
+/// asked them.
 ///
 /// `smell_hits` must already be without the pronouns pasted material
 /// anchors, and, with no index, those a name before them anchors, so any
@@ -84,8 +108,10 @@ pub fn asked(
         .map(|s| s.span.start)
         .collect();
     deictics.sort_unstable();
-    let questions = found
+    let embedded = embedded(text, tokens, &found);
+    let mut questions: Vec<Hit<CueId>> = found
         .into_iter()
+        .chain(embedded)
         .filter(|q| {
             named || {
                 let first = deictics.partition_point(|&d| d < q.sentence.start);
@@ -94,7 +120,97 @@ pub fn asked(
         })
         .map(|q| q.hit)
         .collect();
+    questions.sort_by_key(|q| q.span.start);
     (questions, smell_hits)
+}
+
+/// The yes/no questions in `text` that a verb asks rather than a question
+/// mark, outside the sentences of the `found` direct ones: "can you check
+/// whether it panics?" is one question, not two.
+fn embedded(text: &str, tokens: &[Token], found: &[Question]) -> Vec<Question> {
+    let ends = sentence_ends(text);
+    let mut out = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let asks = match token.kind {
+            // Only an imperative asks, as only an opening "Return" does: "I'll
+            // check if it works" and "Your job is to check if ..." say what
+            // someone will do.
+            TokenKind::Word => {
+                EN_ASKING.binary_search(&token.text.as_str()).is_ok()
+                    && tokens.get(i + 1).is_some_and(|next| {
+                        next.kind == TokenKind::Word
+                            && matches!(next.text.as_str(), "whether" | "if")
+                    })
+                    && crate::nouns::opens_clause(text, token.span.start)
+            }
+            TokenKind::Hangul => {
+                KO_ASKING
+                    .iter()
+                    .any(|k| text[token.span.start..].starts_with(k))
+                    && i > 0
+                    && tokens[i - 1].kind == TokenKind::Hangul
+                    && text[tokens[i - 1].span.end..token.span.start]
+                        .trim()
+                        .is_empty()
+                    && asks_whether(&tokens[i - 1].text)
+            }
+            _ => false,
+        };
+        if !asks {
+            continue;
+        }
+        let at = token.span.start;
+        // The sentence it stands in, between the ends around it.
+        let after = ends.partition_point(|&e| e <= at);
+        let sentence = Span::new(
+            after.checked_sub(1).map_or(0, |b| ends[b]),
+            ends.get(after).copied().unwrap_or(text.len()),
+        );
+        let direct = found.partition_point(|q| q.sentence.end <= at);
+        if found.get(direct).is_some_and(|q| q.sentence.contains(at)) {
+            continue;
+        }
+        out.push(Question {
+            hit: Hit {
+                id: CueId::Question,
+                term: token.span.slice(text).to_string(),
+                span: token.span,
+            },
+            sentence,
+            interrogative: false,
+        });
+    }
+    out
+}
+
+/// Whether the Korean word `word` ends a clause in -지 that a verb after it
+/// asks about: 있는지, 버그인지, 될지, and with a particle, 있는지를. The
+/// syllable before 지 closes on ㄴ or ㄹ, which 페이지, 메시지 and 까지 do not.
+fn asks_whether(word: &str) -> bool {
+    let word = word.strip_suffix(['를', '도']).unwrap_or(word);
+    let mut syllables = word.chars().rev();
+    syllables.next() == Some('지')
+        && syllables.next().is_some_and(|c| {
+            // A precomposed syllable's final consonant is its offset from
+            // U+AC00 modulo 28; ㄴ is 4 and ㄹ is 8.
+            matches!(c as u32, 0xAC00..=0xD7A3) && matches!((c as u32 - 0xAC00) % 28, 4 | 8)
+        })
+}
+
+/// Where the sentences of `text` end: at a line break, and at sentence
+/// punctuation followed by a space or by the end. Sorted.
+fn sentence_ends(text: &str) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let closes = c == '\n'
+            || (matches!(c, '.' | '!' | '?' | '。' | '？' | '！')
+                && chars.peek().is_none_or(|&(_, n)| n.is_whitespace()));
+        if closes {
+            ends.push(i + c.len_utf8());
+        }
+    }
+    ends
 }
 
 /// Whether `token` holds the word that asks one of the `found` questions.
@@ -206,6 +322,72 @@ mod tests {
     }
 
     #[test]
+    fn a_verb_that_asks_whether_asks_a_question() {
+        for (text, wanted) in [
+            (
+                "Check whether Token::decode can panic on any input.",
+                "Check",
+            ),
+            (
+                "Please check if verify_token handles an empty token.",
+                "check",
+            ),
+            (
+                "Determine whether parse_args accepts an empty list.",
+                "Determine",
+            ),
+            (
+                "Token::decode 가 어떤 입력에서 panic 할 수 있는지 확인해줘.",
+                "확인해줘",
+            ),
+            ("verify_token 이 빈 토큰을 받는지 체크해줘", "체크해줘"),
+            ("parse_args 가 빈 리스트를 받을지 알아봐줘", "알아봐줘"),
+        ] {
+            assert_eq!(questions(text), [wanted], "{text}");
+        }
+        // Said of what someone will do, or of something other than a
+        // clause, it asks nothing; and with a question mark it is one
+        // question, not two.
+        for text in [
+            "I'll check if verify_token works and get back to you.",
+            "Your job is to check if it is possible to parse the list.",
+            "Check the logs in src/server.rs.",
+            "check, if needed, the logs in src/server.rs",
+            "로그인 페이지 확인해줘.",
+            "에러 메시지 확인해줘.",
+            "여기까지 확인해줘.",
+            "반환하는지 확인하는 테스트",
+        ] {
+            assert!(questions(text).is_empty(), "{text}: {:?}", questions(text));
+        }
+        assert_eq!(
+            questions("Can you check whether verify_token panics?"),
+            ["Can"]
+        );
+        // About a pronoun that points at nothing, it asks about nothing.
+        assert!(questions("Check whether it works.").is_empty());
+    }
+
+    #[test]
+    fn a_question_a_verb_asks_is_the_objective_in_both_languages() {
+        // Both earned no objective once "decode" was read as part of the
+        // name: 376.7 and 301.9.
+        for text in [
+            "Check whether Token::decode can panic on any input.",
+            "Token::decode 가 어떤 입력에서 panic 할 수 있는지 확인해줘.",
+        ] {
+            let s = crate::score(text).unwrap();
+            let objective = &s.actionability.components[0];
+            assert_eq!(
+                objective.earned,
+                crate::params::actionability::OBJECTIVE_MAX,
+                "{text}: {}",
+                objective.detail
+            );
+        }
+    }
+
+    #[test]
     fn a_place_is_not_a_pronoun_the_question_is_about() {
         assert_eq!(questions("Is there a test for the parser?"), ["Is"]);
     }
@@ -235,7 +417,8 @@ mod tests {
         // Every token, smell and question used to be checked against every
         // question in the prompt. Each pair below finds the same questions,
         // but in the first text of a pair those checks are the work: it says
-        // nothing besides its questions, or puts a deictic in every one. At
+        // nothing besides its questions, puts a deictic in every one, or asks
+        // them all in one sentence that a verb's question looks up. At
         // 80,000 and 20,000 questions, the checks took 7.9 s against 68 ms
         // and 21.6 s against 26 ms in a debug build. Timed against each
         // other, the two texts measure how the work grows, not how fast the
@@ -261,6 +444,10 @@ mod tests {
             (
                 "why is it broken? ".repeat(20_000),
                 "why is the build broken? ".repeat(20_000),
+            ),
+            (
+                "and check whether it works ".repeat(20_000),
+                "and check whether the build works. ".repeat(20_000),
             ),
         ] {
             let (heavy_time, light_time) = (time(&heavy), time(&light));
