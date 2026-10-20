@@ -205,6 +205,56 @@ const ROUTE_ADVERBS: &[&str] = &[
     "usually",
 ];
 
+/// Names that call a command rather than a route: verbs of the work a
+/// command does to code, and the nouns it is done on. Claude Code's own
+/// `/bug`, `/review`, `/compact` and `/loop` take free text, and so do
+/// custom commands such as `/fix`, `/debug`, `/plan` or `/tdd`, whose
+/// argument is often a report that opens with what is broken: "/fix test
+/// fails on windows", "/plan api returns too much data". Read as sentences
+/// about a route, as "/login page flickers on load" is, 12 of 26 such
+/// commands a reviewer typed were graded, from 87.2 to 280.1.
+///
+/// A route is named after what an application offers its users, and in the
+/// plural when it lists them: `/login`, `/checkout`, `/users`, `/reviews`. A
+/// command name that is also a common route, such as `/search`, `/upload`,
+/// `/docs` or `/todo`, is left off. Sorted, for binary search.
+const COMMAND_WORDS: &[&str] = &[
+    "bug",
+    "code-review",
+    "commit",
+    "compact",
+    "debug",
+    "diagnose",
+    "explain",
+    "fix",
+    "fix-bug",
+    "fix-issue",
+    "implement",
+    "investigate",
+    "issue",
+    "loop",
+    "optimize",
+    "plan",
+    "pr",
+    "refactor",
+    "repro",
+    "review",
+    "review-pr",
+    "security-review",
+    "tdd",
+    "test",
+    "think",
+    "troubleshoot",
+    "ultrathink",
+];
+
+/// True for a name in [`COMMAND_WORDS`], however it is capitalised.
+fn is_command_word(name: &str) -> bool {
+    COMMAND_WORDS
+        .binary_search(&name.to_ascii_lowercase().as_str())
+        .is_ok()
+}
+
 /// Words that, after an auxiliary, make it the start of a question: "is
 /// this", "should we". A question is what a command can take, and typed
 /// without its question mark "/review is this safe to merge" was graded,
@@ -213,9 +263,19 @@ const QUESTION_SUBJECTS: &[&str] = &[
     "he", "i", "it", "she", "that", "there", "these", "they", "this", "those", "we", "you",
 ];
 
+/// Words that open a noun phrase. After a command word and an auxiliary
+/// they make a question too, "/review are the tests sufficient", graded
+/// 109.6: no command is the subject of "are the tests". After a route's
+/// name they do not, "/login is the slowest page". Sorted, for binary
+/// search.
+const DETERMINERS: &[&str] = &[
+    "a", "all", "an", "any", "every", "my", "our", "some", "the", "their", "your",
+];
+
 /// Words that, after a status code, make it a route's: "/sign-up 500 on
-/// submit". After a hyphenated name a bare code is an issue number,
-/// "/fix-issue 201 and add a regression test". Sorted, for binary search.
+/// submit". After a hyphenated name or a command word a bare code is an
+/// issue or pull request number, "/fix-issue 201 and add a regression
+/// test", "/review 404". Sorted, for binary search.
 const STATUS_CONTEXT: &[&str] = &[
     "after", "error", "errors", "on", "since", "when", "whenever",
 ];
@@ -284,27 +344,41 @@ fn normalise(word: &str) -> String {
     kept.replace('\u{2019}', "'").to_ascii_lowercase()
 }
 
+/// The name after the slash when the text opens the way a slash command
+/// does, whatever follows it: "fix" in "/fix test fails on windows", and
+/// "checkout" in "/checkout takes 8 seconds to load". A second `/` makes the
+/// first word a path instead.
+///
+/// A command's name starts with a letter: "/-- docs -/" opens a Lean
+/// comment, which Claude Code sends to the model. It never ends in a colon,
+/// while a path quoted from an error message does: "/tmp: No space left on
+/// device".
+pub fn slash_name(text: &str) -> Option<&str> {
+    let name = text.split_whitespace().next()?.strip_prefix('/')?;
+    let named = name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-'));
+    (named && !name.ends_with(':')).then_some(name)
+}
+
 /// A slash command: the first word is `/` and a name, with no second `/`
 /// that would make it a path. `/review:security` is a command;
 /// `/usr/local/bin is not on PATH` is not, and neither is a prompt about a
 /// root directory or a route: "/tmp is full", "/health returns 500".
 fn is_command(text: &str) -> bool {
-    let mut words = text.split_whitespace();
-    let Some(name) = words.next().and_then(|word| word.strip_prefix('/')) else {
+    let Some(name) = slash_name(text) else {
         return false;
     };
-    // A command's name starts with a letter: "/-- docs -/" opens a Lean
-    // comment, which Claude Code sends to the model. It never ends in a
-    // colon, while a path quoted from an error message does: "/tmp: No space
-    // left on device".
-    let named = name.starts_with(|c: char| c.is_ascii_alphabetic())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-'));
-    if !named || name.ends_with(':') || ROOT_DIRS.binary_search(&name).is_ok() {
+    if ROOT_DIRS.binary_search(&name).is_ok() {
         return false;
     }
-    let after: Vec<String> = words.take(3).map(normalise).collect();
+    let after: Vec<String> = text
+        .split_whitespace()
+        .skip(1)
+        .take(3)
+        .map(normalise)
+        .collect();
     let Some(next) = after.first() else {
         return true;
     };
@@ -316,9 +390,10 @@ fn is_command(text: &str) -> bool {
     }
     if PATH_AUXILIARIES.binary_search(&next.as_str()).is_ok() {
         return asks(text)
-            || after
-                .get(1)
-                .is_some_and(|w| QUESTION_SUBJECTS.binary_search(&w.as_str()).is_ok());
+            || after.get(1).is_some_and(|w| {
+                QUESTION_SUBJECTS.binary_search(&w.as_str()).is_ok()
+                    || (is_command_word(name) && DETERMINERS.binary_search(&w.as_str()).is_ok())
+            });
     }
     // Plugin and MCP commands are namespaced, "/review:security" and
     // "/mcp__github__list_prs", and no route is.
@@ -326,22 +401,30 @@ fn is_command(text: &str) -> bool {
         return true;
     }
     if is_status_code(next) {
-        return name.contains('-')
+        return (name.contains('-') || is_command_word(name))
             && !after
                 .get(1)
                 .is_some_and(|w| STATUS_CONTEXT.binary_search(&w.as_str()).is_ok());
     }
-    !about_the_route(&after)
+    !about_the_route(name, &after)
 }
 
 /// True when the words after `/name` read as a sentence with the route as
 /// its subject: "page flickers", "never updates", "-> 500", "and /logout
 /// both need CSRF tokens".
-fn about_the_route(after: &[String]) -> bool {
+///
+/// After a command word, a noun or an adverb with a verb behind it is the
+/// command's argument instead, a report of what is broken: "/fix test fails
+/// on windows", "/fix still fails after the patch". A verb right after the
+/// name still makes the name its subject, "/debug returns 404 in
+/// production".
+fn about_the_route(name: &str, after: &[String]) -> bool {
     let word = |i: usize| after.get(i).map_or("", String::as_str);
     let first = word(0);
-    (ROUTE_NOUNS.binary_search(&first).is_ok() && (is_finite(word(1)) || is_finite(word(2))))
-        || (ROUTE_ADVERBS.binary_search(&first).is_ok() && is_finite(word(1)))
+    let subject = (ROUTE_NOUNS.binary_search(&first).is_ok()
+        && (is_finite(word(1)) || is_finite(word(2))))
+        || (ROUTE_ADVERBS.binary_search(&first).is_ok() && is_finite(word(1)));
+    (subject && !is_command_word(name))
         || (matches!(first, "->" | "=>" | "\u{2192}") && is_status_code(word(1)))
         || (matches!(first, "and" | "or" | "&") && word(1).starts_with('/'))
 }
@@ -358,22 +441,52 @@ fn asks(text: &str) -> bool {
     false
 }
 
-/// The elements Claude Code is known to wrap around what it sends on its
-/// own: a background task reports back in a `<task-notification>`, and a
-/// `<system-reminder>` carries what Claude Code adds to a turn. Any other
-/// lowercase hyphenated tag counts as well, since that is the shape of
-/// Claude Code's markup and a message from another session may arrive in
-/// one.
-const HARNESS_TAGS: &[&str] = &["system-reminder", "task-notification"];
+/// The elements Claude Code wraps around a turn it sends on its own, by name.
+///
+/// The prompt hook also runs when a background task reports back, in a
+/// `<task-notification>`, and when another session sends a message, in a
+/// `<cross-session-message>`. A `<system-reminder>` carries what Claude Code
+/// adds to a turn. The rest are the markup Claude Code writes around a slash
+/// command, a local command's output, `!` shell input and a prompt hook's
+/// output.
+///
+/// Any lowercase hyphenated tag used to count as well, and that is also how
+/// people structure a prompt of their own: all eight a reviewer wrote only
+/// in tags such as `<task-description>`, `<bug-report>` and `<error-log>`
+/// were skipped as Claude Code's, where they scored from 190.6 to 754.7. A
+/// turn wrapped in a tag missing here is graded, which costs an F in the
+/// status line; a request taken for one is never seen. Sorted, for binary
+/// search.
+const HARNESS_TAGS: &[&str] = &[
+    "bash-input",
+    "bash-stderr",
+    "bash-stdout",
+    "command-args",
+    "command-message",
+    "command-name",
+    "cross-session-message",
+    "local-command-caveat",
+    "local-command-stderr",
+    "local-command-stdout",
+    "system-reminder",
+    "task-notification",
+    "user-prompt-submit-hook",
+];
 
 /// True when the text is harness markup and nothing else: one element or
-/// more, each opened by `<tag` and closed by `</tag>`, with only whitespace
-/// around and between them.
+/// more, each a [`HARNESS_TAGS`] element opened by `<tag` and closed by
+/// `</tag>`, with only whitespace around and between them. What an element
+/// holds is not read, so a report may carry markup of any kind.
 ///
 /// The close tag has to end the prompt. "<my-button> doesn't render, fix
 /// it", markup pasted ahead of a question, and a prompt that opens with
 /// `<div>` are the user's own, and graded. So is pasted text that Claude
-/// Code marks as `<pasted_content id="1">`: its tag is not hyphenated.
+/// Code marks as `<pasted_content id="1">`, and a request wrapped in a tag of
+/// the user's own, `<bug-report>`.
+///
+/// One pass, each byte read a bounded number of times, so this can read a
+/// prompt whole: given a megabyte of a report, of reminders or of nested
+/// markup, the whole hook takes 8 to 14 ms.
 fn is_automated(text: &str) -> bool {
     let mut rest = text.trim();
     if rest.is_empty() {
@@ -387,8 +500,7 @@ fn is_automated(text: &str) -> bool {
             .find(|c: char| !(c.is_ascii_lowercase() || c == '-'))
             .unwrap_or(open.len());
         let (name, after) = open.split_at(length);
-        let hyphenated = name.contains('-') && name.split('-').all(|part| !part.is_empty());
-        if !(hyphenated || HARNESS_TAGS.contains(&name))
+        if HARNESS_TAGS.binary_search(&name).is_err()
             || !after.starts_with(|c: char| c == '>' || c.is_whitespace())
         {
             return false;
@@ -413,23 +525,30 @@ fn is_automated(text: &str) -> bool {
 /// and only its first [`crate::prompt::MAX_INSTRUCTION_BYTES`]. The cut
 /// changes nothing here, since the marker left where a paste was is code
 /// just as the paste was. The cap can: past 64 KB this reads text the score
-/// never sees, and the two may disagree.
+/// never sees, and the two may disagree, except on whether Claude Code sent
+/// the turn, which both decide on all of it.
 pub fn kind_of(text: &str) -> (Kind, Option<&'static str>) {
-    classify(text, &yp_lang::tokenize(text))
+    classify(text, text, &yp_lang::tokenize(text))
 }
 
-/// [`kind_of`] for a caller that has already tokenized the text.
-pub(crate) fn classify(text: &str, tokens: &[Token]) -> (Kind, Option<&'static str>) {
-    if is_automated(text) {
+/// [`kind_of`] for a caller that has already tokenized the text it reads,
+/// `read`, the start of `whole`.
+///
+/// Whether Claude Code sent the turn is decided on `whole`. Its markup is
+/// recognised by the close tag that ends it, and a report longer than the
+/// cap lost that tag to it: a task notification of 69,326 bytes was graded
+/// 205.7, an F, and took the place of an 809.5 A in the status line.
+pub(crate) fn classify(whole: &str, read: &str, tokens: &[Token]) -> (Kind, Option<&'static str>) {
+    if is_automated(whole) {
         return (Kind::Automated, None);
     }
-    if is_command(text) {
+    if is_command(read) {
         return (Kind::Command, None);
     }
     if yp_lang::resources().is_some_and(|r| r.follow_ups.is_follow_up(tokens)) {
         return (Kind::FollowUp, None);
     }
-    if let Some(foreign) = yp_lang::foreign::detect(text) {
+    if let Some(foreign) = yp_lang::foreign::detect(read) {
         return (Kind::Unsupported, foreign.name);
     }
     (Kind::Task, None)
@@ -456,9 +575,12 @@ mod tests {
             PATH_VERBS,
             ROUTE_NOUNS,
             ROUTE_ADVERBS,
+            COMMAND_WORDS,
             QUESTION_SUBJECTS,
+            DETERMINERS,
             STATUS_CONTEXT,
             PATH_AUXILIARIES,
+            HARNESS_TAGS,
         ] {
             assert!(list.windows(2).all(|w| w[0] < w[1]), "{list:?}");
         }
@@ -506,6 +628,82 @@ mod tests {
             "/run",
         ] {
             assert_eq!(kind(text), Kind::Command, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_command_word_keeps_its_argument_however_it_reads() {
+        // A report of what is broken opens the way a sentence about a route
+        // does. Each of these was graded, an F.
+        for text in [
+            "/debug test fails on CI",
+            "/fix test fails on windows",
+            "/tdd form submits twice",
+            "/bug button renders twice on hover",
+            "/explain query is slow",
+            "/plan api returns too much data",
+            "/issue token refresh is broken",
+            "/investigate request times out after 30s",
+            "/bug view shows stale data after save",
+            "/fix webhook handler panics on empty body",
+            "/fix tests are flaky on macOS",
+            "/ultrathink session handling is wrong",
+            "/Fix test fails on windows",
+            "/fix still fails after the patch",
+            // A question needs no question mark, and after a command word
+            // "are the tests" opens one: no command is its subject.
+            "/review are the tests sufficient",
+            "/review has the migration been tested",
+            "/review is the cache invalidated on logout",
+            // A bare code after a command word is an issue or a pull
+            // request, as it is after "/fix-issue".
+            "/review 404",
+            "/fix 500",
+        ] {
+            assert_eq!(kind(text), Kind::Command, "{text:?}");
+        }
+        // The name is still the subject of a verb that follows it right
+        // away, of an auxiliary that does not open a question, of a status
+        // code told where it happens, and of a sentence about two names.
+        for text in [
+            "/debug returns 404 in production",
+            "/review is broken",
+            "/fix 500 on submit",
+            "/fix and /test both fail on windows",
+            "/plan -> 500",
+        ] {
+            assert_eq!(kind(text), Kind::Task, "{text:?}");
+        }
+        // A route with the same report is a task, as before.
+        for text in [
+            "/login test fails on windows",
+            "/checkout form submits twice",
+            "/search api returns too much data",
+            "/reviews page is the slowest",
+        ] {
+            assert_eq!(kind(text), Kind::Task, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_slash_name_is_what_a_command_would_be_called() {
+        for (text, name) in [
+            ("/fix test fails on windows", "fix"),
+            ("  /review:security", "review:security"),
+            ("/checkout takes 8 seconds to load", "checkout"),
+            ("/fix-issue 123", "fix-issue"),
+        ] {
+            assert_eq!(slash_name(text), Some(name), "{text:?}");
+        }
+        for text in [
+            "/usr/local/bin is not on PATH",
+            "/tmp: No space left on device",
+            "/-- The main theorem about lists -/ fails to compile",
+            "fix the /score command",
+            "/",
+            "/점수",
+        ] {
+            assert_eq!(slash_name(text), None, "{text:?}");
         }
     }
 
@@ -584,6 +782,15 @@ mod tests {
             "  <system-reminder>a</system-reminder>\n\n<task-notification>b</task-notification>\n",
             "<cross-session-message from=\"api-worker\">Schema migration finished\
              </cross-session-message>",
+            "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n\
+             <command-args></command-args>",
+            "<local-command-stdout>Compacted. ctrl+o to see full summary</local-command-stdout>",
+            "<bash-input>git status</bash-input>",
+            "<bash-stdout>On branch main\nnothing to commit</bash-stdout><bash-stderr></bash-stderr>",
+            "<user-prompt-submit-hook>Prompt blocked by policy</user-prompt-submit-hook>",
+            // What a report holds is not read: the user's markup may be in it.
+            "<task-notification>\n<result>\n<bug-report>The form submits twice.</bug-report>\n\
+             <my-button>Save</my-button>\n</result>\n</task-notification>",
         ] {
             assert_eq!(classified(text), (Kind::Automated, None), "{text:?}");
             // The score says so too, so `yp score` and the web page agree
@@ -615,8 +822,115 @@ mod tests {
             "<system-reminder>never closed",
             "<pasted_content id=\"1\">\nTraceback (most recent call last):\n</pasted_content id=\"1\">",
             "<Task-Notification>x</Task-Notification>",
+            // A request wrapped in tags of the user's own, hyphenated as
+            // Claude Code's are. Each of these was skipped as a turn Claude
+            // Code sent, though they scored from 190.6 to 754.7.
+            "<task-description>\nFix verify_token in src/auth/login.rs so it returns \
+             Err(AuthError::Expired) instead of panicking on an expired token.\n</task-description>",
+            "<coding-guidelines>\nUse snake_case and keep functions under 40 lines.\n\
+             </coding-guidelines>\n<user-request>\nRename parseArgs to parse_args in src/cli.rs \
+             and update every caller.\n</user-request>",
+            "<task-context>\nWe use Postgres 16 and sqlx.\n</task-context>\n\n<task-instructions>\n\
+             Add a migration that creates the audit_log table with id, user_id, action and \
+             created_at columns.\n</task-instructions>\n\n<acceptance-criteria>\ncargo sqlx \
+             migrate run succeeds and cargo test passes.\n</acceptance-criteria>",
+            "<bug-report>\nThe login form submits twice when you press Enter. It happens in \
+             Chrome and Firefox, not Safari.\n</bug-report>",
+            "<error-log>\nthread 'main' panicked at src/auth/login.rs:42:9:\ncalled \
+             `Option::unwrap()` on a `None` value\n</error-log>\n<expected-behavior>\n\
+             verify_token returns Err(AuthError::Expired)\n</expected-behavior>",
+            "<user-story>As a user I want to reset my password from the login page</user-story>",
+            "<code-review-request>\nReview src/parser.rs for panics on malformed input.\n\
+             </code-review-request>",
+            "<feature-request>Add a --dry-run flag to yp install that prints the settings diff \
+             without writing it.</feature-request>",
+            "<bug-report>\nverify_token in src/auth/login.rs panics on an expired token. It \
+             should return Err(AuthError::Expired). tests/auth.rs must still pass.\n</bug-report>",
+            "<user-request>\nAdd a dark mode toggle to the settings page and remember the choice \
+             in localStorage.\n</user-request>",
+            "<coding-task>Fix verify_token so it returns Err(AuthError::Expired) instead of \
+             panicking.</coding-task>",
+            // Beside Claude Code's own markup, the user's still makes the
+            // prompt theirs.
+            "<system-reminder>The user opened src/cli.rs.</system-reminder>\n\
+             <bug-report>The lint fails on this file.</bug-report>",
         ] {
             assert_eq!(kind(text), Kind::Task, "{text:?}");
+        }
+    }
+
+    /// A background agent's report: `sentences` sentences of result in a
+    /// `<task-notification>`, the close tag at the very end.
+    fn report(sentences: usize) -> String {
+        format!(
+            "<task-notification>\n<task-id>a1b2</task-id>\n<status>completed</status>\n\
+             <summary>Agent \"Investigate auth bug\" finished</summary>\n<result>{}</result>\n\
+             </task-notification>",
+            "The agent read src/auth/login.rs and found the bug. ".repeat(sentences)
+        )
+    }
+
+    #[test]
+    fn a_report_longer_than_what_is_scored_is_still_automated() {
+        // Only the first 64 KB of an instruction is scored, and the close tag
+        // that marks a report as Claude Code's was cut off with the rest: a
+        // report of 69,326 bytes was graded 205.7, an F, and recorded in
+        // place of the user's task.
+        let long = report(1_400);
+        assert!(long.len() > 70 * 1024, "{} bytes", long.len());
+        assert!(crate::prompt::split(&long).capped().is_some());
+        assert_eq!(classified(&long), (Kind::Automated, None));
+        assert_eq!(crate::score(&long).unwrap().kind, Kind::Automated);
+        // A megabyte of one.
+        assert_eq!(kind(&report(20_000)), Kind::Automated);
+        // As long, the user's own markup and a report with a question after
+        // it are graded, as they are when short.
+        let theirs = format!(
+            "<bug-report>\n{}</bug-report>",
+            "The login form submits twice when you press Enter. ".repeat(1_400)
+        );
+        assert_eq!(kind(&theirs), Kind::Task);
+        assert_eq!(crate::score(&theirs).unwrap().kind, Kind::Task);
+        assert_eq!(kind(&format!("{long}\nwhy did it stop there?")), Kind::Task);
+    }
+
+    #[test]
+    fn markup_is_decided_in_time_that_grows_with_its_length() {
+        // The whole of a prompt is read for its markup, so the work has to
+        // grow no faster than the prompt does. Each shape is a megabyte,
+        // timed against a megabyte of prose.
+        fn time(text: &str) -> std::time::Duration {
+            (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    std::hint::black_box(crate::kind_of(text));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        }
+        const MB: usize = 1 << 20;
+        let fill = |unit: &str| unit.repeat(MB / unit.len());
+        let plain = time(&fill(
+            "The agent read src/auth/login.rs and found the bug. ",
+        ));
+        for text in [
+            report(20_000),
+            fill("<system-reminder>x</system-reminder>\n"),
+            format!(
+                "<task-notification>\n<result>\n{}</result>\n</task-notification>",
+                fill("<x-y><a-b>z</a-b></x-y>\n")
+            ),
+            fill("<task-notification>"),
+            format!("{} fix it", fill("<system-reminder>x</system-reminder>")),
+            format!("<system-reminder>{}", fill("</system-reminde")),
+        ] {
+            let markup = time(&text);
+            assert!(
+                markup < plain * 20 + std::time::Duration::from_millis(100),
+                "{:.40}: {markup:?}, against {plain:?} for prose",
+                text
+            );
         }
     }
 
@@ -714,6 +1028,9 @@ mod tests {
             "👍",
             "✅",
             "🙏",
+            // A plan approved without naming work: 65.0 and 87.2.
+            "proceed as planned",
+            "do as you suggested",
         ] {
             assert_eq!(kind(text), Kind::FollowUp, "{text:?}");
         }
@@ -792,6 +1109,12 @@ mod tests {
             "그렇게 해줘",
             "응 그렇게 해줘",
             "네 그렇게 진행해주세요",
+            // Each of these was graded, an F: "the rest" and "where you
+            // left off", and thanks as a session ends.
+            "마저 해줘",
+            "이어서 해줘",
+            "수고하셨어요",
+            "고생하셨습니다",
         ] {
             assert_eq!(kind(text), Kind::FollowUp, "{text:?}");
         }
@@ -868,6 +1191,14 @@ mod tests {
             "아직도 안 돼",
             "한번 돌려봐",
             "다른 거 해줘",
+            // A plan approved with an action verb is work, as "fix it" is,
+            // and so is an approval with a request in it, or a lead with
+            // nothing after it.
+            "implement the plan",
+            "go ahead and implement it",
+            "proceed as planned but skip the flaky tests",
+            "마저",
+            "이어서 로그인 버그 고쳐줘",
         ] {
             assert_eq!(kind(text), Kind::Task, "{text:?}");
         }

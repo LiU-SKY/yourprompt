@@ -56,10 +56,15 @@ pub use stats::PromptStats;
 /// the raw prompt, and past the cap it can answer differently. The cap is not
 /// what keeps this fast any more: a megabyte of short fenced blocks is
 /// classified in about 10 ms read raw and 3 ms read like this.
+///
+/// Whether Claude Code sent the turn is the one question asked of the whole
+/// instruction, as [`score_with`] asks it: the markup that says so closes at
+/// the very end, past the cap of a long report.
 pub fn kind_of(text: &str) -> (Kind, Option<&'static str>) {
     let parts = prompt::split(text);
     let capped = parts.capped();
-    kind::kind_of(capped.as_ref().unwrap_or(&parts).instruction())
+    let read = capped.as_ref().unwrap_or(&parts).instruction();
+    kind::classify(parts.instruction(), read, &yp_lang::tokenize(read))
 }
 
 /// A scored prompt.
@@ -186,6 +191,7 @@ pub(crate) fn request_factor(
 /// [`prompt::MAX_INSTRUCTION_BYTES`]. Every way in passes through here, so the
 /// hook, the command line and the web page share the bound.
 pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Option<Score> {
+    let whole = parts.instruction();
     let capped = parts.capped();
     let parts = capped.as_ref().unwrap_or(parts);
     let resources = yp_lang::resources()?;
@@ -196,7 +202,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     let pasted = pasted::Pasted::of(parts);
     let stats = stats::analyze(text, &tokens).with_pasted(pasted.substance());
     let code = yp_lang::token::code_regions(text);
-    let (kind, language) = kind::classify(text, &tokens);
+    let (kind, language) = kind::classify(whole, text, &tokens);
 
     let cue_hits = resources.cue_matcher.find_masked(text, &code);
     let smell_hits = resources.smells.find_masked(text, &code);

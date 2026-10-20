@@ -747,6 +747,56 @@ mod tests {
     }
 
     #[test]
+    fn a_plan_approved_without_an_action_verb_is_a_reply() {
+        // Each of these was graded, from 15.1 to 87.2.
+        for text in [
+            "proceed as planned",
+            "do as you suggested",
+            "go ahead as discussed",
+            "ok, as you said",
+            "이어서 해줘",
+            "이어서",
+            "마저 해줘",
+            "마저 진행해",
+        ] {
+            assert!(is_follow_up(text), "{text:?}");
+        }
+        // An action verb names work, and work with the plan is graded.
+        for text in [
+            "implement the plan",
+            "go ahead and implement it",
+            "proceed as planned but skip the flaky tests",
+            "as discussed, fix the login handler",
+            "이어서 로그인 버그 고쳐줘",
+            "마저 테스트 돌려줘",
+            "마저",
+        ] {
+            assert!(!is_follow_up(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn thanks_for_the_work_is_a_reply_in_any_polite_form() {
+        // Each of these was graded, 15.1 or 41.0.
+        for text in [
+            "수고하셨어요",
+            "수고 많으셨습니다",
+            "고생했어",
+            "고생하셨습니다",
+            "고생 많았어요",
+            "네 수고하셨어요 👍",
+        ] {
+            assert!(is_follow_up(text), "{text:?}");
+        }
+        for text in [
+            "수고하셨어요, 근데 테스트 하나만 더 추가해줘",
+            "고생 시키는 버그 고쳐줘",
+        ] {
+            assert!(!is_follow_up(text), "{text:?}");
+        }
+    }
+
+    #[test]
     fn plus_one_agrees() {
         assert!(is_follow_up("+1"));
         assert!(is_follow_up("+1, go ahead"));

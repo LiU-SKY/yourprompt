@@ -105,7 +105,19 @@ pub fn run() -> ExitCode {
     // Classified before the index is loaded, so a "yes" costs no file read.
     // The sidecar keeps the last task, which is what the status line and
     // `/score` should still be showing.
-    let (kind, _) = yp_core::kind_of(&input.prompt);
+    let (mut kind, _) = yp_core::kind_of(&input.prompt);
+    let cwd = if input.cwd.is_empty() {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    } else {
+        std::path::PathBuf::from(&input.cwd)
+    };
+    // Looking for a command file and for the index both read the user's
+    // directories, and share one deadline.
+    let lookups = std::time::Instant::now();
+    if kind == Kind::Task && names_a_command_file(&input.prompt, &cwd, crate::repo::LOOKUP_DEADLINE)
+    {
+        kind = Kind::Command;
+    }
     if matches!(kind, Kind::Command | Kind::FollowUp | Kind::Automated) {
         debug(&format!(
             "session={} kind={kind:?}; not recorded",
@@ -118,12 +130,7 @@ pub fn run() -> ExitCode {
     // repository takes seconds, and nothing here may delay a prompt. Nor
     // may finding out where the index is, which reads the working directory:
     // past the deadline the prompt is scored without one.
-    let cwd = if input.cwd.is_empty() {
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-    } else {
-        std::path::PathBuf::from(&input.cwd)
-    };
-    let deadline = crate::repo::LOOKUP_DEADLINE;
+    let deadline = crate::repo::LOOKUP_DEADLINE.saturating_sub(lookups.elapsed());
     let started = std::time::Instant::now();
     let corpus = match crate::repo::load_for_within(&cwd, deadline) {
         Some(found) => {
@@ -136,7 +143,7 @@ pub fn run() -> ExitCode {
         None => {
             debug(&format!(
                 "gave up looking for the repository index after {} ms",
-                deadline.as_millis()
+                lookups.elapsed().as_millis()
             ));
             None
         }
@@ -161,6 +168,50 @@ pub fn run() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// True when the prompt opens with `/name` and Claude Code has a command of
+/// that name: `name.md` in the project's `.claude/commands`, or in the
+/// `commands` of the user's Claude Code directory.
+///
+/// The classifier tells a command from a sentence about a route by its
+/// words alone, and a command's argument can open like such a sentence.
+/// With a `triage.md` beside it, "/triage form submits twice" is the triage
+/// command, where without one it reads as a report about a form on the
+/// /triage route, and is graded. A command file settles it.
+///
+/// It is asked only of a prompt that opens with a slash and would be
+/// graded, and it is two file lookups. They run on a thread of their own,
+/// given up on at the deadline as the index lookup is, since the project
+/// may be on a share that does not answer.
+fn names_a_command_file(
+    prompt: &str,
+    cwd: &std::path::Path,
+    deadline: std::time::Duration,
+) -> bool {
+    // A namespaced name is a plugin's or an MCP server's, and no file's.
+    let Some(name) = yp_core::kind::slash_name(prompt).filter(|name| !name.contains(':')) else {
+        return false;
+    };
+    let file = format!("{name}.md");
+    let project = cwd.join(".claude").join("commands").join(&file);
+    let user = claude_dir().map(|dir| dir.join("commands").join(&file));
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let looking = std::thread::Builder::new()
+        .name("command lookup".into())
+        .spawn(move || {
+            // Nobody may be listening any more; that is fine.
+            let _ = sender.send(project.is_file() || user.is_some_and(|path| path.is_file()));
+        });
+    looking.is_ok() && receiver.recv_timeout(deadline).unwrap_or(false)
+}
+
+/// The directory Claude Code keeps its configuration and the user's own
+/// commands in: `CLAUDE_CONFIG_DIR`, or `.claude` in the home directory.
+fn claude_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| session::home_dir().map(|home| home.join(".claude")))
 }
 
 /// The debug line for a prompt that was scored and recorded.
