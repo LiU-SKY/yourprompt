@@ -56,9 +56,10 @@ point at one place or forty, and whether you said what done looks like.
 - **English and Korean.** A prompt in Spanish, Japanese, Russian or 25 other
   languages says "not graded" rather than failing, even when it borrows
   English words such as "fix" or "update". An English request around a
-  pasted error or ticket in another language is still graded. A prompt of
-  two or three words can still slip through and be graded, and so can one
-  that opens or ends with a sentence of English.
+  pasted error or ticket in another language is still graded, when the
+  request is a sentence or a line of its own. A prompt of two or three words
+  can still slip through and be graded, and so can one that opens or ends
+  with a sentence of English.
 
 ## Try it
 

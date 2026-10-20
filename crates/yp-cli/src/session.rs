@@ -191,6 +191,13 @@ pub fn config_dir() -> Option<PathBuf> {
     config_dir_in(&env_var, cfg!(windows), &windows_profile)
 }
 
+/// The home directory Claude Code uses: on Windows `USERPROFILE`, else the
+/// profile directory, before `HOME`; elsewhere `HOME`. Where it differs from
+/// [`home_dir`], both are homes, and neither is a project.
+pub fn claude_home() -> Option<PathBuf> {
+    claude_home_in(&env_var, cfg!(windows), &windows_profile)
+}
+
 /// On Windows, a `HOME` that is not the home Claude Code uses, when no
 /// `CLAUDE_CONFIG_DIR` decides for both. Builds before this one put their
 /// settings and state under it, where Claude Code never looked.

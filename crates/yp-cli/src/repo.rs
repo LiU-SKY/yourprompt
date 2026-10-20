@@ -88,9 +88,18 @@ fn plain(path: PathBuf) -> PathBuf {
     PathBuf::from(text)
 }
 
-/// The home directory, spelt as [`canonical`] spells it.
-fn home() -> Option<PathBuf> {
-    session::home_dir().map(|h| canonical(&h))
+/// The home directories, spelt as [`canonical`] spells them: the shell's
+/// `HOME`, and the one Claude Code uses. On Windows the second is
+/// `USERPROFILE`, and with `HOME` set elsewhere a session in a folder under
+/// the profile walked up into a profile kept in git and indexed all of it.
+fn homes() -> Vec<PathBuf> {
+    let mut homes: Vec<PathBuf> = [session::home_dir(), session::claude_home()]
+        .into_iter()
+        .flatten()
+        .map(|h| canonical(&h))
+        .collect();
+    homes.dedup();
+    homes
 }
 
 /// The repository root containing `start`.
@@ -106,10 +115,10 @@ fn home() -> Option<PathBuf> {
 /// against that one index. Home is a root only when it is where you are.
 pub fn repo_root(start: &Path) -> PathBuf {
     let start = canonical(start);
-    let home = home();
+    let homes = homes();
     let mut current = start.as_path();
     loop {
-        if home.as_deref() == Some(current) {
+        if homes.iter().any(|home| home == current) {
             return start;
         }
         if current.join(".git").exists() {
@@ -125,7 +134,7 @@ pub fn repo_root(start: &Path) -> PathBuf {
 /// True when `root` is the home directory, which is never indexed: what is
 /// under it is everything, not a project.
 fn is_home(root: &Path) -> bool {
-    home().as_deref() == Some(root)
+    homes().iter().any(|home| home == root)
 }
 
 pub fn index_dir() -> Option<PathBuf> {
@@ -411,13 +420,18 @@ mod tests {
 
     impl Home {
         fn at(home: &Path) -> Self {
+            Self::split(home, home)
+        }
+
+        /// HOME at `home` and USERPROFILE at `profile`, as MSYS2, Emacs and
+        /// many dotfile setups leave them on Windows.
+        fn split(home: &Path, profile: &Path) -> Self {
             static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let keys = ["HOME", "USERPROFILE"];
             let saved = keys.map(|key| (key, std::env::var_os(key))).to_vec();
-            for key in keys {
-                std::env::set_var(key, home);
-            }
+            std::env::set_var("HOME", home);
+            std::env::set_var("USERPROFILE", profile);
             Home { saved, _lock: lock }
         }
     }
@@ -460,5 +474,33 @@ mod tests {
             assert!(err.to_string().contains("home directory"), "{err}");
         }
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_home_claude_code_uses_is_a_home_too() {
+        let base = std::env::temp_dir().join(format!("yp-homes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let shell = base.join("shell");
+        let profile = base.join("profile");
+        let notes = profile.join("Documents/notes");
+        std::fs::create_dir_all(&shell).unwrap();
+        std::fs::create_dir_all(profile.join(".git")).unwrap();
+        std::fs::create_dir_all(&notes).unwrap();
+
+        {
+            let _home = Home::split(&shell, &profile);
+            if cfg!(windows) {
+                // The profile is the home Claude Code uses: a folder under
+                // it is not part of a profile kept in git, and the profile
+                // itself is never indexed.
+                assert_eq!(repo_root(&notes), canonical(&notes));
+                let err = build_for(&profile).expect_err("the profile must not be indexed");
+                assert!(err.to_string().contains("home directory"), "{err}");
+            } else {
+                // Elsewhere both read HOME, and the profile is a repository.
+                assert_eq!(repo_root(&notes), canonical(&profile));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

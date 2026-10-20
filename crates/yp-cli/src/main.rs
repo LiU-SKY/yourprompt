@@ -397,4 +397,19 @@ mod tests {
             .expect("a rule for the subtitle's code");
         assert!(rule.contains("overflow-wrap: anywhere"), "{rule}");
     }
+
+    #[test]
+    fn the_served_page_breaks_a_long_attachment_name() {
+        // A 70-letter attachment name ran 385 px past the right edge at
+        // 320 px, as the demo page's did before it gained the same rule.
+        let page = include_str!("../assets/index.html");
+        let rule = |selector: &str| {
+            page.split_once(selector)
+                .and_then(|(_, rest)| rest.split_once('}'))
+                .map(|(rule, _)| rule.to_string())
+                .unwrap_or_else(|| panic!("a rule for {selector}"))
+        };
+        assert!(rule(".att .nm {").contains("overflow-wrap: anywhere"));
+        assert!(rule(".att .sz {").contains("white-space: nowrap"));
+    }
 }
