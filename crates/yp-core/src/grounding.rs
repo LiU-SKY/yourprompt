@@ -215,11 +215,21 @@ const VALUE_WRAPPERS: &[&str] = &["box", "err", "none", "ok", "some", "string", 
 /// pointing at nothing in the code: 458.5, against 759.1 for `decode()`. A
 /// value wrapper is not a call, nor is a plural: prose writes "file(s)" and
 /// "match(es)".
+///
+/// Nor is anything the index could never hold. A method chained onto a call,
+/// `.values` in `filter(x).values('id')`, is a word with nothing before its
+/// dot, and a one-letter name, `Q(...)` or `f(x)`, is shorter than any term
+/// the index keeps. Taken for calls, 40 such names in 36 of SWE-bench Lite's
+/// issues were missing from every repository, the issue's own included.
 fn called(tokens: &[Token], i: usize) -> bool {
+    let word = &tokens[i];
     let Some(open) = tokens.get(i + 1) else {
         return false;
     };
-    if open.text != "(" || tokens[i].span.end != open.span.start {
+    if open.text != "(" || word.span.end != open.span.start {
+        return false;
+    }
+    if word.text.len() < 2 || !word.text.starts_with(|c: char| c.is_ascii_alphabetic()) {
         return false;
     }
     let plural = match (tokens.get(i + 2), tokens.get(i + 3)) {
@@ -231,7 +241,7 @@ fn called(tokens: &[Token], i: usize) -> bool {
         }
         _ => false,
     };
-    !plural && !VALUE_WRAPPERS.contains(&tokens[i].text.as_str())
+    !plural && !VALUE_WRAPPERS.contains(&word.text.as_str())
 }
 
 /// The token indices of a name qualified with `::`, if one starts at `i`.
@@ -1155,6 +1165,14 @@ mod tests {
         );
         assert_eq!(texts(&found), ["login"]);
         assert!(found[0].explicit);
+
+        // Nor is what no index holds: a method chained onto a call, and a
+        // name of one letter.
+        let found = found_in(
+            "Why does decode(raw).unwrap() panic for Q(a=1) and f(x)?",
+            &corpus,
+        );
+        assert_eq!(texts(&found), ["decode"]);
 
         // A value wrapper holds a value; it is not a function anyone means.
         let found = found_in(
