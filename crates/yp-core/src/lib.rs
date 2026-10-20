@@ -652,6 +652,10 @@ mod tests {
             ("parser.py 버그 고쳐줘. 테스트 통과, 경고 없이.", 601.0),
             ("출력은 JSON 형식으로 해줘.", 314.5),
             ("출력은 그대로 유지해.", 288.9),
+            // What the singular scores. The plurals are I/O cue words too,
+            // and as neither a name nor an I/O noun they scored 322.6.
+            ("Fix the parser. Keep the return values unchanged.", 700.3),
+            ("Fix the parser. Keep the return types unchanged.", 700.3),
         ] {
             let s = score(text).unwrap();
             assert!(

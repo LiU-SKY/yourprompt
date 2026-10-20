@@ -124,7 +124,9 @@ const IO_NOUNS: &[&str] = &[
     "request body",
     "response",
     "return type",
+    "return types",
     "return value",
+    "return values",
     "route",
     "schema",
     "signature",
@@ -1515,9 +1517,77 @@ mod tests {
         assert_kept(&[
             "Keep the response schema unchanged.",
             "Keep the output unchanged.",
+            "Keep the return values unchanged.",
+            "Keep the return types unchanged.",
             "Don't change the response.",
             "입력과 출력은 그대로 유지해.",
         ]);
+    }
+
+    #[test]
+    fn every_io_noun_the_lexicons_list_names_a_part_of_the_result_here() {
+        // The I/O cue words that name no part of the result: verbs, words
+        // that join a condition to its outcome, arrows, and phrases that
+        // state a shape rather than name one. Any other I/O cue word is a
+        // noun a boundary or a check can be about. "return values" was added
+        // to the lexicon without being added here, and "Keep the return
+        // values unchanged." lost its boundary and its result shape, 322.6
+        // against 700.3 for "return value".
+        const NAME_NOTHING: &[&str] = &[
+            "->",
+            "=>",
+            "accepts",
+            "expects",
+            "for input",
+            "given",
+            "must return",
+            "produces",
+            "returns",
+            "should return",
+            "takes",
+            "the shape",
+            "then",
+            "type is",
+            "typed as",
+            "when",
+            "yields",
+            "결과는",
+            "결과로",
+            "내보내",
+            "돌려주",
+            "돌려줘야",
+            "리턴",
+            "리턴해",
+            "받아서",
+            "반환",
+            "반환해",
+            "타입으로",
+            "타입은",
+            "형식으로",
+            "형태로",
+        ];
+        let table = &yp_lang::resources().unwrap().cues.table;
+        let terms: Vec<String> = table
+            .terms
+            .iter()
+            .zip(&table.categories)
+            .filter(|(_, &id)| id == CueId::IoSpec)
+            .map(|(t, _)| t.to_lowercase())
+            .collect();
+        assert!(terms.len() > 40, "{} I/O cue words", terms.len());
+        for term in &terms {
+            assert!(
+                IO_NOUNS.binary_search(&term.as_str()).is_ok()
+                    ^ NAME_NOTHING.contains(&term.as_str()),
+                "{term:?} must be in exactly one of IO_NOUNS and NAME_NOTHING"
+            );
+        }
+        for noun in IO_NOUNS {
+            assert!(
+                terms.contains(&noun.to_string()),
+                "{noun:?} is no I/O cue word"
+            );
+        }
     }
 
     #[test]
