@@ -742,6 +742,11 @@ mod tests {
                  compatibility\n- tests pass",
                 835.0,
             ),
+            // "only" bounds the result to the format beside it. As padding,
+            // with the format and its I/O cue, the first scored 366.8 and the
+            // second 7.3.
+            ("Add a report command. Output JSON only.", 655.8),
+            ("Output JSON only.", 296.3),
             ("`yp export` 명령 추가해줘. JSON 출력. 테스트 통과.", 711.7),
             ("`yp export` 명령 추가해줘. JSON 반환. 테스트 통과.", 711.7),
             (

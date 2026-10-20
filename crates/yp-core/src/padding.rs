@@ -29,7 +29,8 @@
 //!   counts itself: "Keep the response schema unchanged", 입력과 출력은
 //!   그대로 유지하고. So it does for a boundary when the two stand alone,
 //!   "Return type unchanged", and a format beside the I/O cue it describes
-//!   counts with it, "JSON output", JSON 반환; see [`FORMATS`].
+//!   counts with it, "JSON output", JSON 반환, as does "only" beside the
+//!   two, "Output JSON only"; see [`FORMATS`].
 //! - **A statement about the result.** An I/O cue counts in a sentence, or as
 //!   the value of a label such as "Output:"; see [`names_its_own`]. A word
 //!   alone between commas after such a sentence is the next item of its
@@ -165,6 +166,10 @@ const IO_NOUNS: &[&str] = &[
 /// describes, a format says what the result looks like: "JSON output",
 /// "Returns JSON", "YAML input", JSON 반환. Sorted, for binary search.
 const FORMATS: &[&str] = &["json", "stderr", "stdout", "yaml", "표준 출력"];
+
+/// The scope cue that bounds a result to the format beside it, "Output JSON
+/// only", and so may stand with the two; see [`Clause::format_pair`].
+const ONLY: &str = "only";
 
 /// Cue words that take a value: "returns 404", "exit code 1", "expected 5",
 /// "limit to 100", 404 반환. A number beside one of them is what it returns,
@@ -816,6 +821,8 @@ struct Clause {
     /// categories, a bit each.
     cues: HashSet<String>,
     kinds: u8,
+    /// How many of those cue words are I/O cues.
+    io: usize,
     /// How many example markers it holds.
     markers: usize,
     /// How many words it holds, values aside, and how many of them are cue
@@ -859,9 +866,15 @@ impl Clause {
     }
 
     /// How many things it holds that say something: cues and plain names.
-    /// Letters and values name nothing.
+    /// Letters and values name nothing, and "only" that bounds a format pair
+    /// is part of the pair, so the three are as short an entry as the two
+    /// and a run of them is a list as a run of format pairs is. Read as a
+    /// third unit, it took each pair out of its list: "Refactor `x`. returns
+    /// json only, input yaml only, output stdout only." scored 775.2 for it,
+    /// and scores 318.2.
     fn units(&self) -> usize {
-        self.cues.len() + self.markers + self.names.len()
+        let only = self.cues.contains(ONLY) && self.format_pair();
+        self.cues.len() + self.markers + self.names.len() - usize::from(only)
     }
 
     /// Whether it is short enough to be an entry of a list: a cue and at
@@ -918,6 +931,26 @@ impl Clause {
                 && !self.headed
                 && !self.solid
                 && self.names.len() == 1)
+    }
+
+    /// Whether it is a format beside the I/O cue it describes and nothing
+    /// else, "JSON output", "Returns JSON", JSON 반환, but for "only", which
+    /// bounds the result to that format: "Output JSON only".
+    fn format_pair(&self) -> bool {
+        let only = self.cues.contains(ONLY);
+        self.io == 2
+            && self.cues.len() == 2 + usize::from(only)
+            && self.markers + self.names.len() == 0
+            && !self.objective
+            && !self.function
+            && !self.solid
+            && !self.labelled
+            && self
+                .cues
+                .iter()
+                .filter(|t| FORMATS.binary_search(&t.trim()).is_ok())
+                .count()
+                == 1
     }
 
     /// Whether it is a single cue word with nothing beside it but articles
@@ -1172,7 +1205,9 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         {
             clause.io_nouns.push(term.clone());
         }
-        clause.cues.insert(term);
+        if clause.cues.insert(term) && hit.id == CueId::IoSpec {
+            clause.io += 1;
+        }
         clause.kinds |= match hit.id {
             CueId::IoSpec => 1,
             CueId::Acceptance => 2,
@@ -1241,21 +1276,20 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
     // describes, "JSON output", "Returns JSON", JSON 반환, and the two count
     // together. Neither names the other, and "Add a `yp export` command.
     // JSON output. Tests pass." scored 569.2 with both as padding, against
-    // 763.6.
+    // 763.6. "only" beside the two bounds the result to that format and
+    // counts with them: with all three as padding, "Add a report command.
+    // Output JSON only." scored 366.8, against 655.8.
     let mut counted: HashSet<(CueId, String)> = HashSet::new();
     for (c, clause) in clauses.iter().enumerate() {
-        if !listed[c]
-            && clause.short()
-            && clause.kinds == 1
-            && clause.cues.len() == 2
-            && clause
-                .cues
-                .iter()
-                .filter(|t| FORMATS.binary_search(&t.trim()).is_ok())
-                .count()
-                == 1
-        {
-            counted.extend(clause.cues.iter().map(|t| (CueId::IoSpec, t.clone())));
+        if !listed[c] && clause.format_pair() {
+            counted.extend(clause.cues.iter().map(|t| {
+                let id = if t == ONLY {
+                    CueId::ScopeConstraint
+                } else {
+                    CueId::IoSpec
+                };
+                (id, t.clone())
+            }));
         }
     }
 
@@ -1907,6 +1941,24 @@ mod tests {
         assert_eq!(
             padded("Add a `yp export` command. Input schema."),
             ["Input", "schema"]
+        );
+        // "only" beside the two bounds the result to that format, and counts
+        // with them; beside a format and any other cue it does not.
+        assert_kept(&[
+            "Add a report command. Output JSON only.",
+            "Add a report command. Only output JSON.",
+            "Add a report command. Returns YAML only.",
+            "Output JSON only.",
+        ]);
+        assert_eq!(
+            padded("Add a report command. Keep JSON only."),
+            ["Keep", "JSON", "only"]
+        );
+        // The three are one entry of a list, as the two are, and a run of
+        // them is a list.
+        assert_eq!(
+            padded("Refactor `x`. returns json only, input yaml only, output stdout only.").len(),
+            9
         );
     }
 
