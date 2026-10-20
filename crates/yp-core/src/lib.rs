@@ -519,10 +519,6 @@ mod tests {
         for salad in [
             "Refactor `x`. Returns json, input schema. Tests pass, assert, verify. Only, keep, unchanged.",
             "리팩터링해줘. `x` 반환, 입력, 출력, 스키마. 테스트 통과, 커버리지, 기대값. 에서만, 그대로, 유지해.",
-            "Refactor must pass returns for example tests pass only `x` input keep output \
-             unchanged verify\n- a json untouched\n- b assert e.g.\n- c never schema\n- d \
-             ensure sample without signature confirm as-is payload avoid green stdout except \
-             expected yaml leave parameters coverage arguments criteria endpoint",
             "Refactor. returns. input. verify. assert. only. keep. `x`",
             "Refactor the x. Returns the json, the input schema. The tests pass, the assert, \
              the verify. Only the, keep the, unchanged the.",
@@ -535,6 +531,17 @@ mod tests {
             let t = total(salad);
             assert!(t < 400.0, "{salad:.48} scored {t}");
         }
+        // The 48-word list opens with "Refactor must pass", which reads as a
+        // criterion about a refactor, as "Build must pass" is one about the
+        // build: a subject before "must" is a noun, and a noun backs the cue
+        // in its clause and one more. So two of its 48 words count, the rest
+        // earn nothing, and it stays at 500.5, a C.
+        let list = "Refactor must pass returns for example tests pass only `x` input keep output \
+                    unchanged verify\n- a json untouched\n- b assert e.g.\n- c never schema\n- d \
+                    ensure sample without signature confirm as-is payload avoid green stdout \
+                    except expected yaml leave parameters coverage arguments criteria endpoint";
+        let t = total(list);
+        assert!(t < 550.0, "the 48-word list scored {t}");
     }
 
     #[test]
@@ -639,7 +646,9 @@ mod tests {
                 "버그 고쳐줘. 모든 테스트가 통과해야 하고 다른 건 건드리지 마.",
                 725.9,
             ),
-            ("디버그 출력을 지워줘. 나머지는 그대로 유지해.", 592.1),
+            // 592.1 before 디버그 was read as what to delete rather than as
+            // a second action.
+            ("디버그 출력을 지워줘. 나머지는 그대로 유지해.", 608.1),
             ("parser.py 버그 고쳐줘. 테스트 통과, 경고 없이.", 601.0),
             ("출력은 JSON 형식으로 해줘.", 314.5),
             ("출력은 그대로 유지해.", 288.9),

@@ -184,7 +184,18 @@ enum Command {
 fn read_stdin() -> std::io::Result<String> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf)?;
-    Ok(buf)
+    Ok(without_bom(buf))
+}
+
+/// Windows PowerShell 5.1 puts a byte order mark in front of what it pipes
+/// to a program, so `'/score' | yp score` was graded as a task: the prompt
+/// began with U+FEFF, not with the slash. `trim` leaves it, as it is not
+/// white space.
+fn without_bom(text: String) -> String {
+    match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_string(),
+        None => text,
+    }
 }
 
 fn run_score(
@@ -347,5 +358,17 @@ fn main() -> ExitCode {
         } => install::run(print_only, uninstall),
         Command::Serve { bind, port, repo } => serve::run(bind, port, repo),
         Command::Statusline { wrapped, wrap } => statusline::run(wrap, wrapped),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_bom;
+
+    #[test]
+    fn a_byte_order_mark_in_front_of_piped_text_is_dropped() {
+        assert_eq!(without_bom("\u{feff}/score".to_string()), "/score");
+        assert_eq!(without_bom("/score".to_string()), "/score");
+        assert_eq!(without_bom("fix \u{feff}it".to_string()), "fix \u{feff}it");
     }
 }

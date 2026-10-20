@@ -282,6 +282,7 @@ const STR = {
         'cue:conjunction': 'joins a second objective',
         'cue:question': 'asks a direct question',
         'name:unique': 'defined once in your code',
+        'name:one_file': 'in one file of your code, no definition found',
         'name:ambiguous': n => `could be any of ${n}`,
         'name:missing': 'not in your code',
         // pronoun:dangling comes only from a prompt checked against an index,
@@ -394,6 +395,7 @@ const STR = {
         'cue:conjunction': '두 번째 목표를 이어 붙임',
         'cue:question': '질문으로 할 일을 말함',
         'name:unique': '코드에 한 번 정의됨',
+        'name:one_file': '코드의 한 파일에만 있음, 정의는 없음',
         'name:ambiguous': n => `${n}개 중 무엇인지 불분명`,
         'name:missing': '코드에 없음',
         'pronoun:dangling': '가리킬 대상이 코드에 없음',
@@ -651,9 +653,10 @@ function renderAxis(axis, absent) {
 }
 
 // What the page says instead of a number when the prompt is not a task: a
-// slash command, a follow-up that leans on the conversation, or a language
-// the lexicons do not cover. Null for a task, and for a scorer too old to
-// report a kind, which is graded as it always was.
+// slash command, a follow-up that leans on the conversation, a turn Claude
+// Code sent on its own, or a language the lexicons do not cover. Null for a
+// task, and for a scorer too old to report a kind, which is graded as it
+// always was.
 function ungradedNote(s) {
   const say = s.kind && T().ungraded[s.kind];
   if (!say) return null;

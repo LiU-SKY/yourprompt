@@ -235,10 +235,10 @@ pub fn record(session_id: &str, cwd: &str, prompt: &str, entry: Entry) -> io::Re
             latest.kind = Some(kind);
             latest.language = language;
         }
-        // A command or follow-up can only be here from a sidecar written
-        // before kinds existed. This version would never have recorded it,
-        // so it does not enter the history either.
-        if !matches!(kind, Kind::Command | Kind::FollowUp) {
+        // A command, a follow-up or a turn Claude Code sent can only be here
+        // from a sidecar written before kinds existed. This version would
+        // never have recorded it, so it does not enter the history either.
+        if !matches!(kind, Kind::Command | Kind::FollowUp | Kind::Automated) {
             history.push(latest);
         }
         history.extend(previous.history);

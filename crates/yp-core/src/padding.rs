@@ -1366,7 +1366,8 @@ mod tests {
     fn judged(text: &str) -> (Vec<Token>, Vec<Hit<CueId>>, Verdict) {
         let tokens = yp_lang::tokenize(text);
         let found = yp_lang::resources().unwrap().cue_matcher.find(text);
-        let settled = crate::nouns::strip(text, &found, crate::negation::settle(text, &found));
+        let settled = crate::negation::settle(text, &found);
+        let (settled, found) = crate::nouns::strip(text, &tokens, found, settled);
         let verdict = judge(text, &tokens, &found, &settled);
         (tokens, settled, verdict)
     }
