@@ -112,7 +112,7 @@ impl Referent {
 /// function, the parts of a qualified name -- always count. A plain prose word
 /// counts only if it is neither grammar nor syntax, the repository contains
 /// it without using it everywhere, and something there is called that: a
-/// definition, or a module file.
+/// definition, or a module file. An abbreviation is never a name.
 ///
 /// `text` is the instruction the tokens were cut from.
 pub fn referents(
@@ -121,7 +121,17 @@ pub fn referents(
     instruction_words: &[Span],
     corpus: &dyn Corpus,
 ) -> Vec<Referent> {
-    let claimed = Claimed::new(instruction_words);
+    // A cue word inside a name is part of the name, as the noun reading takes
+    // it: the "verify" in `tests/auth.rs::verify` is the test, not the check
+    // asked for. Claimed as an instruction word, a name shaped like code was
+    // passed over as if it were the sentence's verb.
+    let names = crate::antecedents::names(text, tokens);
+    let instruction_words: Vec<Span> = instruction_words
+        .iter()
+        .copied()
+        .filter(|&word| !crate::antecedents::inside(&names, word))
+        .collect();
+    let claimed = Claimed::new(&instruction_words);
     let mut out = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
@@ -192,18 +202,36 @@ pub fn referents(
     out
 }
 
-/// True when `tokens[i]` is followed directly by `()`.
+/// Constructors that wrap a value rather than name a function anyone means:
+/// `Err(AuthError::Expired)` is the error it holds.
+const VALUE_WRAPPERS: &[&str] = &["box", "err", "none", "ok", "some", "string", "vec"];
+
+/// True when `tokens[i]` is called: followed directly by `(`, as `login()`
+/// and `decode(raw)` are.
 ///
-/// Empty parentheses only. `Err(AuthError::Expired)` wraps a value rather
-/// than naming a function, and prose writes "file(s)" and "test(s)".
+/// Arguments and all, as the lexical passes read a call. Grounding once took
+/// empty parentheses only, and against the demo's sample "Fix decode(raw) so
+/// it returns an error for an empty string." named nothing, with its "it"
+/// pointing at nothing in the code: 458.5, against 759.1 for `decode()`. A
+/// value wrapper is not a call, nor is a plural: prose writes "file(s)" and
+/// "match(es)".
 fn called(tokens: &[Token], i: usize) -> bool {
-    let (Some(open), Some(close)) = (tokens.get(i + 1), tokens.get(i + 2)) else {
+    let Some(open) = tokens.get(i + 1) else {
         return false;
     };
-    open.text == "("
-        && close.text == ")"
-        && tokens[i].span.end == open.span.start
-        && open.span.end == close.span.start
+    if open.text != "(" || tokens[i].span.end != open.span.start {
+        return false;
+    }
+    let plural = match (tokens.get(i + 2), tokens.get(i + 3)) {
+        (Some(ending), Some(close)) => {
+            matches!(ending.text.as_str(), "s" | "es")
+                && close.text == ")"
+                && open.span.end == ending.span.start
+                && ending.span.end == close.span.start
+        }
+        _ => false,
+    };
+    !plural && !VALUE_WRAPPERS.contains(&tokens[i].text.as_str())
 }
 
 /// The token indices of a name qualified with `::`, if one starts at `i`.
@@ -355,6 +383,14 @@ fn push_referent(
         return;
     }
 
+    if crate::antecedents::is_abbreviation(&token.text) {
+        // "e.g." is an identifier to the tokenizer and "etc." a definition
+        // wherever a comment lists "class, etc.", but both are prose. Looked
+        // up as a name the demo's sample lacks, "e.g" took a prompt about it
+        // from 345.7 grounding points to 252.3.
+        return;
+    }
+
     if !explicit && claimed.overlaps(&token.span) {
         // A word already doing duty as an instruction -- "fix", "return",
         // "only" -- is not the user naming something. Repositories are full of
@@ -463,14 +499,18 @@ fn module_file(word: &str, corpus: &dyn Corpus) -> Option<(String, TermFacts)> {
 /// thousand, and it measured nothing.
 ///
 /// Language syntax is skipped: `let` and `return` live in every codebase and
-/// say nothing about which one this is.
+/// say nothing about which one this is. So are abbreviations, which name
+/// nothing: an attached document's "e.g." counted as one of its names that
+/// this repository had never heard of.
 pub fn attachment_fit(attachments: &[&str], corpus: &dyn Corpus) -> Option<f64> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut known = 0usize;
 
     for attachment in attachments {
         for token in yp_lang::tokenize(attachment) {
-            if yp_lang::is_code_keyword(&token.text) {
+            if yp_lang::is_code_keyword(&token.text)
+                || crate::antecedents::is_abbreviation(&token.text)
+            {
                 continue;
             }
             if !(token.is_referent_candidate() || token.kind == TokenKind::Word) {
@@ -1083,14 +1123,139 @@ mod tests {
         assert!(login.explicit);
         assert_eq!(login.candidates(), Some(37));
 
-        // Without the parentheses, or with something in them, it is prose.
+        // Without the parentheses, or as a plural, it is prose.
         for text in [
             "keep login (and logout) as it is",
             "keep the login(s) working",
+            "keep the login(es) working",
         ] {
             let found = found_in(text, &corpus);
             assert!(found.iter().all(|r| !r.explicit), "{text}");
         }
+    }
+
+    #[test]
+    fn a_word_called_with_arguments_is_called_all_the_same() {
+        // `decode(raw)` named nothing against the demo's sample while
+        // `decode()` resolved, and the "it" after it dangled.
+        let corpus = sample();
+        for text in [
+            "Fix decode(raw) so it returns an error for an empty string.",
+            "Fix decode() so it returns an error for an empty string.",
+            "Why does decode(&raw, 0) fail?",
+        ] {
+            let found = found_in(text, &corpus);
+            let decode = named(&found, "decode");
+            assert!(decode.explicit, "{text}");
+            assert_eq!(decode.candidates(), Some(1), "{text}");
+        }
+        let found = found_in(
+            "Why does login(user, password) panic when the token is expired?",
+            &corpus,
+        );
+        assert_eq!(texts(&found), ["login"]);
+        assert!(found[0].explicit);
+
+        // A value wrapper holds a value; it is not a function anyone means.
+        let found = found_in(
+            "Return Err(AuthError::Expired), Ok(claims), Some(x), Box(x), Vec(x) or \
+             String(x), never None.",
+            &corpus,
+        );
+        for wrapper in ["Err", "Ok", "Some", "Box", "Vec", "String", "None"] {
+            assert!(
+                !found.iter().any(|r| r.text.eq_ignore_ascii_case(wrapper)),
+                "{wrapper}: {:?}",
+                texts(&found)
+            );
+        }
+    }
+
+    #[test]
+    fn a_cue_word_inside_a_name_is_part_of_the_name() {
+        // The matcher's acceptance cue "verify" and action verb "decode",
+        // which the noun reading already takes for names here.
+        let corpus = MapCorpus::new(
+            6,
+            &[
+                ("tests/auth.rs", 1, 1, 1),
+                ("verify", 2, 3, 1),
+                ("decode", 2, 3, 1),
+            ],
+        );
+        let text = "Run tests/auth.rs::verify, then verify that decode(raw) works.";
+        let claimed: Vec<Span> = ["verify, then", "verify that", "decode"]
+            .iter()
+            .map(|cue| {
+                let at = text.find(cue).unwrap();
+                let word = cue.split([',', ' ']).next().unwrap();
+                Span::new(at, at + word.len())
+            })
+            .collect();
+        let found = referents(text, &tokenize(text), &claimed, &corpus);
+        // The test in the file is a name; the verb after it is still a verb.
+        assert_eq!(
+            texts(&found),
+            ["tests/auth.rs", "verify", "decode"],
+            "{:?}",
+            found.iter().map(|r| r.offset).collect::<Vec<_>>()
+        );
+        assert_eq!(found[1].offset, text.find("verify").unwrap());
+        assert!(!found[1].explicit);
+    }
+
+    #[test]
+    fn an_abbreviation_is_never_a_name() {
+        // "e.g" and "i.e" are identifiers to the tokenizer, and "etc" is a
+        // definition wherever a comment lists "class, etc.".
+        let corpus = MapCorpus::new(
+            6,
+            &[
+                ("verify_token", 3, 6, 1),
+                ("etc", 2, 2, 1),
+                ("vs", 2, 2, 1),
+                ("cf", 1, 1, 1),
+            ],
+        );
+        for text in [
+            "Make verify_token return an error for bad input, e.g. an empty string.",
+            "Make verify_token return an error for bad input, i.e. anything it cannot decode.",
+            "Make verify_token reject empty, blank, etc. input.",
+            "Make verify_token fail fast (E.g. on empty input, cf. the old parser).",
+            "Compare verify_token vs. the old check, a.k.a. the w.r.t. test, at 2 a.m.",
+        ] {
+            let found = found_in(text, &corpus);
+            assert!(
+                found.iter().all(|r| r.text == "verify_token"),
+                "{text}: {:?}",
+                texts(&found)
+            );
+            // The passes that read names without an index agree.
+            let tokens = tokenize(text);
+            let names = crate::antecedents::names(text, &tokens);
+            assert!(
+                names.iter().all(|name| name.slice(text) == "verify_token"),
+                "{text}: {:?}",
+                names
+                    .iter()
+                    .map(|name| name.slice(text))
+                    .collect::<Vec<_>>()
+            );
+        }
+        // In a snippet every word is a name, but a comment's "e.g." is not.
+        let found = found_in(
+            "Fix verify_token:\n```\n# e.g. an empty string, i.e. no claims\nverify_token(x)\n```",
+            &corpus,
+        );
+        assert!(found.iter().any(|r| r.text == "claims"));
+        assert!(
+            !found.iter().any(|r| r.text.contains('.')),
+            "{:?}",
+            texts(&found)
+        );
+        // Material is judged on the names in it, and it has none of these.
+        let fit = |attached: &str| attachment_fit(&[attached], &corpus);
+        assert_eq!(fit("verify_token, e.g. etc. i.e."), fit("verify_token"));
     }
 
     #[test]
@@ -1243,6 +1408,13 @@ mod tests {
                 ("tests", 1, 1, 0),
                 ("session", 3, 13, 1),
                 ("verify_token", 3, 6, 1),
+                ("decode", 2, 2, 1),
+                ("login", 6, 12, 1),
+                // `Err(...)` and `Ok(...)`, and a `String` that `pub sub:
+                // String` makes a definition, read as Perl's `sub`.
+                ("err", 4, 7, 0),
+                ("ok", 4, 7, 0),
+                ("string", 4, 7, 1),
             ],
         )
     }
