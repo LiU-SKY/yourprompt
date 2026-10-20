@@ -38,15 +38,14 @@
 //! # What is kept outside settings.json
 //!
 //! A status line that gets wrapped is kept verbatim, every field of it, in
-//! `install.json` in the state directory, and `yp statusline --wrapped` runs
-//! it from there, or from the backup of the settings when the state
-//! directory has been cleared. Quoting it into our own command line, as
-//! v0.1.1 did, handed it to the outer shell first: `$(...)`, `$VAR` and
-//! backticks were expanded before yp started, embedded quotes came out
-//! garbled, and `input=$(cat)` swallowed the status JSON meant for both of
-//! us, so the line went blank.
-//! `install.json` also records the `/score` command file as written, so a
-//! later run can tell it from one the user wrote or edited.
+//! `yp-install.json` beside settings.json, and `yp statusline --wrapped`
+//! runs it from there, or from the backup of the settings when that file is
+//! gone. Quoting it into our own command line, as v0.1.1 did, handed it to
+//! the outer shell first: `$(...)`, `$VAR` and backticks were expanded
+//! before yp started, embedded quotes came out garbled, and `input=$(cat)`
+//! swallowed the status JSON meant for both of us, so the line went blank.
+//! `yp-install.json` also records the `/score` command file as written, so
+//! a later run can tell it from one the user wrote or edited.
 //!
 //! The transformations themselves are pure functions over `serde_json::Value`
 //! and [`Saved`], so every case below is tested without going near a real
@@ -151,7 +150,8 @@ impl Shell {
     }
 }
 
-/// What `yp install` keeps outside settings.json, in the state directory.
+/// What `yp install` keeps outside settings.json, in [`SAVED_FILE`] beside
+/// it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Saved {
     /// The status line found when installing, exactly as it was, for
@@ -359,6 +359,14 @@ fn legacy_wrap(rest: &str) -> Option<String> {
     (quote(&original) == quoted).then_some(original)
 }
 
+/// The status line `line` wraps by the [`legacy_wrap`] in `rest`, with every
+/// other field of `line`: what was there before that install.
+fn legacy_line(line: &Value, rest: &str) -> Option<Value> {
+    let mut original = line.clone();
+    original["command"] = Value::String(legacy_wrap(rest)?);
+    Some(original)
+}
+
 /// True when what follows `statusline` runs the status line kept in [`Saved`].
 fn runs_kept(rest: &str) -> bool {
     rest.split_whitespace().any(|word| word == "--wrapped")
@@ -411,15 +419,14 @@ fn apply_status_line(
 
     if let Some((found, rest)) = ours(&command, "statusline") {
         let noted = notes.len();
-        let tail = match legacy_wrap(rest) {
-            Some(original) => {
-                let mut kept = line.clone();
-                kept["command"] = Value::String(original.clone());
-                saved.status_line = Some(kept);
+        let tail = match legacy_line(&line, rest) {
+            Some(kept) => {
                 notes.push(format!(
                     "moved the status line it wraps out of its command line, where \
-                     the shell rewrote it: {original}"
+                     the shell rewrote it: {}",
+                    kept["command"].as_str().unwrap_or_default()
                 ));
+                saved.status_line = Some(kept);
                 " --wrapped".to_string()
             }
             None => rest.to_string(),
@@ -786,12 +793,10 @@ pub fn remove(settings: &mut Value, saved: &mut Saved) -> Notes {
         .map(|(_, rest)| rest.to_string());
     match ours_rest {
         Some(rest) => {
-            let restored = saved.status_line.take().or_else(|| {
-                let original = legacy_wrap(&rest)?;
-                let mut line = object["statusLine"].clone();
-                line["command"] = Value::String(original);
-                Some(line)
-            });
+            let restored = saved
+                .status_line
+                .take()
+                .or_else(|| legacy_line(&object["statusLine"], &rest));
             match restored {
                 Some(line) => {
                     let shown = line
@@ -943,56 +948,85 @@ fn plan_backup(raw: &str, settings: &Value, earlier: Option<&[u8]>) -> Backup {
     }
 }
 
-/// Where `yp install` keeps [`Saved`].
-fn saved_path() -> Option<PathBuf> {
-    session::state_dir().map(|d| d.join("install.json"))
+/// The file beside settings.json that holds [`Saved`].
+///
+/// It was `install.json` in the state directory, beside the session files
+/// and the indexes, which reach 19 MB for one repository: a folder people
+/// clear, and are told they may. Clearing it lost the status line yp had
+/// wrapped, and the backup of the settings, read in its place, holds the one
+/// from before the first install: a status line changed and installed again
+/// since came back as the older one, and the uninstall then put that one
+/// back. Beside the settings it was taken from, it goes only where they go.
+const SAVED_FILE: &str = "yp-install.json";
+
+/// Where `yp install` keeps [`Saved`] for the settings at `settings`, then
+/// where builds before this one kept it, which is read while the first is
+/// missing and removed once the first is written.
+fn saved_paths(settings: &Path) -> Vec<PathBuf> {
+    saved_paths_in(settings, session::state_dir().as_deref())
 }
 
-fn load_saved() -> Saved {
-    saved_path()
-        .and_then(|path| fs::read_to_string(path).ok())
+/// [`saved_paths`], with the state directory at `state`.
+fn saved_paths_in(settings: &Path, state: Option<&Path>) -> Vec<PathBuf> {
+    let earlier = state.map(|dir| dir.join("install.json"));
+    std::iter::once(settings.with_file_name(SAVED_FILE))
+        .chain(earlier)
+        .collect()
+}
+
+/// [`Saved`] as the first of `paths` that can be read holds it.
+fn load_saved(paths: &[PathBuf]) -> Saved {
+    paths
+        .iter()
+        .find_map(|path| fs::read_to_string(path).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
 }
 
-/// Write [`Saved`], or remove the file once there is nothing left in it.
-fn store(saved: &Saved) -> io::Result<()> {
-    let path = saved_path().ok_or_else(|| io::Error::other("no state directory available"))?;
+/// Write [`Saved`] to the first of `paths`, or remove it once there is
+/// nothing left in it, and remove the rest: left behind, a record an earlier
+/// build kept would be read again once this one is gone, and an uninstall
+/// would put back a status line replaced since.
+fn store(paths: &[PathBuf], saved: &Saved) -> io::Result<()> {
+    let Some((path, earlier)) = paths.split_first() else {
+        return Ok(());
+    };
     if *saved == Saved::default() {
-        return match fs::remove_file(&path) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-            _ => Ok(()),
-        };
+        remove_if_there(path)?;
+    } else {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, serde_json::to_string_pretty(saved)? + "\n")?;
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, serde_json::to_string_pretty(saved)? + "\n")
+    earlier.iter().try_for_each(|path| remove_if_there(path))
 }
 
-/// The status line `yp install` wrapped, for `yp statusline --wrapped`.
-///
-/// It is kept in the state directory, beside the session files and the
-/// indexes, which reach 19 MB for one repository: a folder people clear.
-/// Once it was cleared, the status line yp had wrapped disappeared without a
-/// word, and only the next `yp install` brought it back, from the backup of
-/// the settings. So the backup is read here too, as it is there.
+/// Remove `path`, which may be gone already, or be in a state directory
+/// that is a file.
+fn remove_if_there(path: &Path) -> io::Result<()> {
+    use io::ErrorKind::{NotADirectory, NotFound};
+    match fs::remove_file(path) {
+        Err(e) if !matches!(e.kind(), NotFound | NotADirectory) => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// The status line `yp install` wrapped, for `yp statusline --wrapped`: from
+/// [`SAVED_FILE`], or else from the backup of the settings, which is where
+/// an install whose record is gone recovers it from too.
 pub fn wrapped_status_line() -> Option<String> {
-    wrapped_in(load_saved(), backup_path().as_deref())
+    let settings = settings_path()?;
+    wrapped_in(load_saved(&saved_paths(&settings)), &backup_of(&settings))
 }
 
 /// The command of the status line kept in `saved`, or else of the one in the
 /// backup at `backup`.
-fn wrapped_in(saved: Saved, backup: Option<&Path>) -> Option<String> {
+fn wrapped_in(saved: Saved, backup: &Path) -> Option<String> {
     let line = saved
         .status_line
-        .or_else(|| backed_up_status_line(backup?))?;
+        .or_else(|| backed_up_status_line(backup))?;
     line.get("command")?.as_str().map(str::to_string)
-}
-
-/// The backup of the settings `yp install` makes before changing them.
-fn backup_path() -> Option<PathBuf> {
-    settings_path().as_deref().map(backup_of)
 }
 
 fn backup_of(settings: &Path) -> PathBuf {
@@ -1009,7 +1043,13 @@ fn runs_a_kept_status_line(settings: &Value) -> bool {
 }
 
 /// The status line in the backup of the settings from before yp changed
-/// them, if it is not one of ours.
+/// them: the one there, or the one it wraps when it is v0.1.0's own.
+///
+/// v0.1.0 wrote the backup on every run, so after a second `yp install` of
+/// it the backup held its own status line, `statusline --wrap "echo mine"`.
+/// That was refused as yp's: with the record gone the status line showed no
+/// "mine", the next install recovered nothing, and the uninstall removed the
+/// status line.
 fn backed_up_status_line(backup: &Path) -> Option<Value> {
     let text = fs::read_to_string(backup).ok()?;
     let settings: Value =
@@ -1019,7 +1059,10 @@ fn backed_up_status_line(backup: &Path) -> Option<Value> {
         .get("command")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    ours(command, "statusline").is_none().then(|| line.clone())
+    match ours(command, "statusline") {
+        Some((_, rest)) => legacy_line(line, rest),
+        None => Some(line.clone()),
+    }
 }
 
 /// True when a shell would find `yp` by name, which `/score` needs: it runs
@@ -1030,11 +1073,37 @@ fn yp_on_path() -> bool {
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
 }
 
+/// The settings file Claude Code reads.
 fn settings_path() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        return Some(PathBuf::from(dir).join("settings.json"));
+    session::config_dir().map(|dir| dir.join("settings.json"))
+}
+
+/// What to say when `HOME` is not where Claude Code looks, as on Windows it
+/// may not be: which settings Claude Code reads, here `settings`, and how to
+/// take out an install an earlier build made under `home`, where Claude Code
+/// never read it.
+fn home_notes(home: &Path, settings: &Path) -> Notes {
+    let mut notes = vec![format!(
+        "HOME is {}, but on Windows Claude Code reads {}, under USERPROFILE, and \
+         so does yp now; set CLAUDE_CONFIG_DIR to choose another directory for both",
+        home.display(),
+        settings.display()
+    )];
+    let earlier = home.join(".claude");
+    let installed = fs::read_to_string(earlier.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok())
+        .is_some_and(|settings| has_ours(&settings));
+    if installed {
+        let dir = earlier.display();
+        notes.push(format!(
+            "an earlier yp install is in {}, which Claude Code reads only when \
+             CLAUDE_CONFIG_DIR is {dir}; to take it out, run `yp install --uninstall` \
+             with CLAUDE_CONFIG_DIR set to {dir}",
+            earlier.join("settings.json").display()
+        ));
     }
-    session::home_dir().map(|h| h.join(".claude").join("settings.json"))
+    notes
 }
 
 /// How a settings file was written out, so that it is written back the same
@@ -1135,8 +1204,9 @@ fn current_exe() -> String {
 
 pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
     let Some(path) = settings_path() else {
+        let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
         eprintln!("yp: could not locate your Claude Code settings directory");
-        eprintln!("    set CLAUDE_CONFIG_DIR or HOME and try again");
+        eprintln!("    set CLAUDE_CONFIG_DIR or {home} and try again");
         return ExitCode::FAILURE;
     };
 
@@ -1167,16 +1237,21 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
         }
     };
     let original = settings.clone();
-    let saved_before = load_saved();
+    let records = saved_paths(&path);
+    let saved_before = load_saved(&records);
     let mut saved = saved_before.clone();
     let backup = backup_of(&path);
     let exe = current_exe();
 
     let mut notes = Notes::new();
+    if let Some(home) = session::ignored_home() {
+        notes.extend(home_notes(&home, &path));
+    }
     if saved.status_line.is_none() && runs_a_kept_status_line(&settings) {
-        // What yp kept of the status line it wraps is gone, as when its
-        // state directory was cleared. The backup still holds the one from
-        // before yp changed the settings, which beats losing it.
+        // What yp kept of the status line it wraps is gone: deleted, or kept
+        // by an earlier build in a state directory cleared since. The backup
+        // still holds the one from before yp changed the settings, which
+        // beats losing it.
         if let Some(line) = backed_up_status_line(&backup) {
             notes.push(format!(
                 "nothing was kept of the status line yp wrapped, so it comes from {}",
@@ -1262,11 +1337,11 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
             CommandFile::Delete => println!("# would remove {}", command_path.display()),
             CommandFile::Leave => {}
         }
-        if let (Some(line), Some(kept)) = (&saved.status_line, saved_path()) {
+        if let Some(line) = &saved.status_line {
             if saved.status_line != saved_before.status_line {
                 println!(
                     "# would keep your status line in {}: {line}",
-                    kept.display()
+                    records[0].display()
                 );
             }
         }
@@ -1279,8 +1354,22 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
     } else {
         rendered
     };
+    // What an earlier build kept in the state directory moves out of it.
+    let moving = records[1..].iter().any(|path| path.is_file());
 
     if !uninstall {
+        // The hook records every score in the state directory, so an install
+        // with nowhere to record one would never show a score. It stopped
+        // here when yp kept its own record there, and still does.
+        if let Some(dir) = session::state_dir() {
+            if let Err(e) = fs::create_dir_all(&dir) {
+                eprintln!("yp: could not create {}: {e}", dir.display());
+                eprintln!(
+                    "    the hook records every score there; fix or move it, then run this again"
+                );
+                return ExitCode::FAILURE;
+            }
+        }
         let worth_keeping = raw.as_deref().filter(|r| !matches!(r.trim(), "" | "{}"));
         if let (true, Some(raw)) = (changed, worth_keeping) {
             let plan = plan_backup(raw, &original, fs::read(&backup).ok().as_deref());
@@ -1302,20 +1391,19 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
         }
         // Kept before the settings point at it, so the status line never
         // runs `--wrapped` with nothing to run.
-        if saved != saved_before {
-            if let Err(e) = store(&saved) {
-                eprintln!("yp: could not save what it keeps in its state directory: {e}");
+        if saved != saved_before || moving {
+            if let Err(e) = store(&records, &saved) {
+                eprintln!("yp: could not save what it keeps beside your settings: {e}");
                 eprintln!("    refusing to modify your settings without it");
                 return ExitCode::FAILURE;
             }
         }
-        if let (Some(_), Some(kept)) = (&saved.status_line, saved_path()) {
-            if saved.status_line != saved_before.status_line {
-                notes.push(format!(
-                    "your status line is kept in {}, and runs from there",
-                    kept.display()
-                ));
-            }
+        if saved.status_line.is_some() && (saved.status_line != saved_before.status_line || moving)
+        {
+            notes.push(format!(
+                "your status line is kept in {}, and runs from there",
+                records[0].display()
+            ));
         }
     }
 
@@ -1348,9 +1436,9 @@ pub fn run(print_only: bool, uninstall: bool) -> ExitCode {
     if let Err(e) = command_result {
         eprintln!("yp: could not update {}: {e}", command_path.display());
     }
-    if uninstall && saved != saved_before {
-        if let Err(e) = store(&saved) {
-            eprintln!("yp: could not update what it keeps in its state directory: {e}");
+    if uninstall && (saved != saved_before || moving) {
+        if let Err(e) = store(&records, &saved) {
+            eprintln!("yp: could not update what it keeps beside your settings: {e}");
         }
     }
 
@@ -2302,30 +2390,173 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            wrapped_in(Saved::default(), Some(&backup)).as_deref(),
+            wrapped_in(Saved::default(), &backup).as_deref(),
             Some("echo [Opus] main")
         );
-        // What install.json keeps comes first.
+        // What the record keeps comes first.
         let kept = Saved {
             status_line: Some(json!({ "type": "command", "command": "echo kept" })),
             ..Saved::default()
         };
-        assert_eq!(
-            wrapped_in(kept, Some(&backup)).as_deref(),
-            Some("echo kept")
-        );
+        assert_eq!(wrapped_in(kept, &backup).as_deref(), Some("echo kept"));
         // A backup whose status line is yp's own wraps nothing.
         fs::write(
             &backup,
             r#"{"statusLine": {"command": "/usr/local/bin/yp statusline"}}"#,
         )
         .unwrap();
-        assert_eq!(wrapped_in(Saved::default(), Some(&backup)), None);
+        assert_eq!(wrapped_in(Saved::default(), &backup), None);
+        assert_eq!(wrapped_in(Saved::default(), &dir.0.join("none")), None);
+    }
+
+    #[test]
+    fn a_backup_of_v010s_own_settings_still_gives_the_status_line_it_wrapped() {
+        // v0.1.0 wrote the backup on every run, so after its second install
+        // the backup held its own `--wrap "echo mine"`. With the record
+        // gone, "mine" left the status line, a re-install recovered nothing,
+        // and the uninstall removed the status line.
+        let dir = Dir::new("v010-backup");
+        let backup = dir.0.join("settings.json.yp-backup");
+        let v010 = r#"C:\Users\me\.cargo\bin\yp.exe statusline --wrap "echo \"[Opus] mine\"""#;
+        let settings = json!({
+            "statusLine": { "type": "command", "command": v010, "padding": 0 },
+            "hooks": { "UserPromptSubmit": [ { "hooks": [
+                { "type": "command", "command": r"C:\Users\me\.cargo\bin\yp.exe hook" }
+            ] } ] }
+        });
+        fs::write(&backup, serde_json::to_string_pretty(&settings).unwrap()).unwrap();
+        let original =
+            json!({ "type": "command", "command": r#"echo "[Opus] mine""#, "padding": 0 });
+        assert_eq!(backed_up_status_line(&backup), Some(original.clone()));
         assert_eq!(
-            wrapped_in(Saved::default(), Some(&dir.0.join("none"))),
-            None
+            wrapped_in(Saved::default(), &backup).as_deref(),
+            Some(r#"echo "[Opus] mine""#)
         );
-        assert_eq!(wrapped_in(Saved::default(), None), None);
+
+        // The install that finds no record recovers it, and the uninstall
+        // after it puts it back.
+        let mut v = json!({
+            "statusLine": { "type": "command", "command": "/usr/local/bin/yp statusline --wrapped" }
+        });
+        let mut saved = Saved {
+            status_line: backed_up_status_line(&backup),
+            ..Saved::default()
+        };
+        remove(&mut v, &mut saved);
+        assert_eq!(v["statusLine"], original);
+
+        // A wrap written by hand is not one yp wrote, and stands for nothing.
+        fs::write(
+            &backup,
+            r#"{"statusLine": {"command": "yp statusline --wrap 'echo mine'"}}"#,
+        )
+        .unwrap();
+        assert_eq!(backed_up_status_line(&backup), None);
+    }
+
+    #[test]
+    fn what_install_keeps_survives_clearing_the_state_directory() {
+        // The reported sequence: "echo mine" wrapped, then changed to "echo
+        // newer" by hand and installed again; then ~/.claude/yourprompt
+        // cleared. The status line ran "echo mine" from the backup, and the
+        // uninstall put "echo mine" back: "echo newer" was in no file left.
+        let dir = Dir::new("kept");
+        let (config, state) = (dir.0.join("config"), dir.0.join("state"));
+        fs::create_dir_all(&config).unwrap();
+        let settings = config.join("settings.json");
+        let backup = backup_of(&settings);
+        let original = "{\n  \"statusLine\": {\n    \"type\": \"command\",\n    \"command\": \"echo mine\"\n  }\n}\n";
+        fs::write(&backup, original).unwrap();
+        let records = saved_paths_in(&settings, Some(&state));
+        assert_eq!(records[0], config.join(SAVED_FILE));
+
+        let mut v: Value = serde_json::from_str(original).unwrap();
+        let mut saved = load_saved(&records);
+        install(&mut v, EXE, &mut saved);
+        store(&records, &saved).unwrap();
+        v["statusLine"]["command"] = json!("echo newer");
+        let mut saved = load_saved(&records);
+        install(&mut v, EXE, &mut saved);
+        store(&records, &saved).unwrap();
+
+        fs::create_dir_all(state.join("index")).unwrap();
+        fs::remove_dir_all(&state).unwrap();
+        let mut saved = load_saved(&records);
+        assert_eq!(
+            wrapped_in(saved.clone(), &backup).as_deref(),
+            Some("echo newer")
+        );
+        remove(&mut v, &mut saved);
+        assert_eq!(statusline_of(&v), "echo newer");
+        store(&records, &saved).unwrap();
+        assert!(!records[0].exists(), "the record outlived the uninstall");
+    }
+
+    #[test]
+    fn a_record_an_earlier_build_kept_in_the_state_directory_moves_beside_the_settings() {
+        let dir = Dir::new("moved");
+        let (config, state) = (dir.0.join("config"), dir.0.join("state"));
+        fs::create_dir_all(&state).unwrap();
+        let records = saved_paths_in(&config.join("settings.json"), Some(&state));
+        let earlier = state.join("install.json");
+        assert_eq!(records[1], earlier);
+        let kept = Saved {
+            status_line: Some(json!({ "type": "command", "command": "echo mine" })),
+            score_command: Some(SCORE_COMMAND.to_string()),
+        };
+        fs::write(&earlier, serde_json::to_string_pretty(&kept).unwrap()).unwrap();
+
+        // Read from where it was until it is written where it goes.
+        assert_eq!(load_saved(&records), kept);
+        store(&records, &kept).unwrap();
+        assert!(!earlier.exists(), "left behind in the state directory");
+        assert_eq!(load_saved(&records), kept);
+        // Gone from both once there is nothing to keep, so an uninstall
+        // cannot find an older record and put its status line back.
+        fs::write(&earlier, serde_json::to_string_pretty(&kept).unwrap()).unwrap();
+        store(&records, &Saved::default()).unwrap();
+        assert!(!records[0].exists() && !earlier.exists());
+        assert_eq!(load_saved(&records), Saved::default());
+        // A state directory that is a file holds no record to remove.
+        fs::remove_dir_all(&state).unwrap();
+        fs::write(&state, "not a directory").unwrap();
+        store(&records, &kept).unwrap();
+        assert_eq!(load_saved(&records), kept);
+    }
+
+    #[test]
+    fn a_home_claude_code_does_not_read_is_named_with_what_was_installed_there() {
+        // With HOME in one scratch directory and USERPROFILE in another,
+        // Claude Code 2.1.304 read the second one's settings, and builds
+        // before this one installed into the first.
+        let dir = Dir::new("home");
+        let home = dir.0.join("home");
+        let settings = dir.0.join("profile").join(".claude").join("settings.json");
+        let notes = home_notes(&home, &settings);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].starts_with("HOME is "), "{notes:?}");
+        assert!(
+            notes[0].contains(&settings.display().to_string()),
+            "{notes:?}"
+        );
+
+        let earlier = home.join(".claude");
+        fs::create_dir_all(&earlier).unwrap();
+        fs::write(earlier.join("settings.json"), r#"{"model": "opus"}"#).unwrap();
+        assert_eq!(home_notes(&home, &settings).len(), 1);
+        let mut v = json!({ "model": "opus" });
+        install(&mut v, EXE, &mut Saved::default());
+        fs::write(
+            earlier.join("settings.json"),
+            "\u{feff}".to_string() + &v.to_string(),
+        )
+        .unwrap();
+        let notes = home_notes(&home, &settings);
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(
+            notes[1].contains(&format!("CLAUDE_CONFIG_DIR set to {}", earlier.display())),
+            "{notes:?}"
+        );
     }
 
     #[test]

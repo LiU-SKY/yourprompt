@@ -146,6 +146,14 @@ fn axis_block(axis: &Axis, style: &Style) -> String {
 /// and no breakdown: a column of sub-scores reads as a grade whatever the
 /// heading says. `--json` still carries every number.
 pub fn full(score: &Score, style: &Style) -> String {
+    full_with_reason(score, style, "no repository index here; run `yp index`")
+}
+
+/// [`full`], with `no_index` saying why the grounding axis was not scored,
+/// for a score without one. After a lookup that gave up, `yp explain` said
+/// to run `yp index`, which on the share that did not answer took 21.6 s to
+/// index no files.
+pub fn full_with_reason(score: &Score, style: &Style, no_index: &str) -> String {
     if let Some(why) = not_graded(score.kind, score.language) {
         return format!("\n  {} {why}\n\n", style.bold("not graded:"));
     }
@@ -165,7 +173,7 @@ pub fn full(score: &Score, style: &Style) -> String {
         None => out.push_str(&format!(
             "  {:<16}{}\n",
             style.bold("grounding"),
-            style.dim("not scored -- no repository index here; run `yp index`")
+            style.dim(&format!("not scored -- {no_index}"))
         )),
     }
     out.push_str(&axis_block(&score.actionability, style));

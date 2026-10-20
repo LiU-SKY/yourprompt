@@ -137,7 +137,7 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
         }
     }
 
-    print!("{}", report::full(&score, &style));
+    print!("{}", breakdown(&score, &style, gave_up));
 
     // A sidecar written before kinds existed may hold a "continue" or a
     // "/score" as its latest task. Its report already says it is not graded,
@@ -165,6 +165,16 @@ pub fn run(session_id: Option<String>, no_color: bool) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// The report on `score`, which says, when the lookup `gave_up`, that it
+/// timed out, not that there is no index to find.
+fn breakdown(score: &Score, style: &Style, gave_up: bool) -> String {
+    if gave_up {
+        report::full_with_reason(score, style, "the index lookup timed out")
+    } else {
+        report::full(score, style)
+    }
 }
 
 /// How much of the prompt the status line's score was computed on.
@@ -326,6 +336,27 @@ mod tests {
             lost.contains("an index of this repository that is gone"),
             "{lost}"
         );
+    }
+
+    #[test]
+    fn a_lookup_that_timed_out_is_not_called_a_missing_index() {
+        // With its cwd on a share that did not answer, /score said "no
+        // repository index here; run `yp index`", and `yp index` there took
+        // 21.6 s to index no files.
+        let score = now(true);
+        let timed_out = breakdown(&score, &Style::plain(), true);
+        assert!(
+            timed_out.contains("not scored -- the index lookup timed out"),
+            "{timed_out}"
+        );
+        assert!(!timed_out.contains("yp index"), "{timed_out}");
+        let missing = breakdown(&score, &Style::plain(), false);
+        assert!(
+            missing.contains("not scored -- no repository index here; run `yp index`"),
+            "{missing}"
+        );
+        // Everything else in the report is the same.
+        assert_eq!(timed_out.lines().count(), missing.lines().count());
     }
 
     #[test]
