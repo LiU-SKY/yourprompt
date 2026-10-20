@@ -71,6 +71,23 @@ pub trait Corpus {
     fn bare_file(&self, _name: &str) -> bool {
         self.flat()
     }
+
+    /// What the indexed paths that end in `tail` after a `/` denote, counted
+    /// together, or `None` when none does.
+    ///
+    /// A prompt gives as much of a path as its writer thought enough:
+    /// `auth/login.rs` for `src/auth/login.rs` was "not in this repository",
+    /// and against the demo's sample "Fix the expired-token panic in
+    /// auth/login.rs." scored 378.5 where the whole path scores 644.3. The
+    /// tail names the file when one path ends in it, and could be any of them
+    /// when several do, as a bare file name could. A path at the root has no
+    /// `/` in front of its name and is not counted.
+    ///
+    /// A corpus that cannot list its paths answers `None`, and a partial path
+    /// is then missing, as it always was.
+    fn paths_ending_in(&self, _tail: &str) -> Option<TermFacts> {
+        None
+    }
 }
 
 /// A corpus built from a literal list, for tests and examples.
@@ -143,6 +160,19 @@ impl Corpus for MapCorpus {
     fn bare_file(&self, name: &str) -> bool {
         self.flat || self.bare.contains(&name.to_lowercase())
     }
+
+    fn paths_ending_in(&self, tail: &str) -> Option<TermFacts> {
+        let end = format!("/{}", tail.to_lowercase());
+        self.terms
+            .iter()
+            .filter(|(term, _)| term.ends_with(&end))
+            .map(|(_, facts)| *facts)
+            .reduce(|a, b| TermFacts {
+                df: a.df.saturating_add(b.df),
+                cf: a.cf.saturating_add(b.cf),
+                def: a.def.saturating_add(b.def),
+            })
+    }
 }
 
 #[cfg(test)]
@@ -192,5 +222,43 @@ mod tests {
         assert!(!mixed.flat());
         assert!(mixed.bare_file("login.rs"));
         assert!(!mixed.bare_file("auth.rs"));
+    }
+
+    #[test]
+    fn a_path_is_found_by_its_end_after_a_slash() {
+        let corpus = MapCorpus::new(
+            3,
+            &[
+                ("Cargo.toml", 1, 1, 1),
+                ("crates/api/Cargo.toml", 1, 1, 1),
+                ("src/auth/login.rs", 1, 1, 1),
+                ("src/oauth/login.rs", 1, 1, 1),
+                ("src/auth", 1, 1, 1),
+            ],
+        );
+        let ending = |tail: &str| corpus.paths_ending_in(tail).map(|f| f.def);
+        assert_eq!(ending("auth/login.rs"), Some(1));
+        assert_eq!(ending("AUTH/Login.rs"), Some(1));
+        assert_eq!(ending("login.rs"), Some(2));
+        assert_eq!(ending("src/auth"), None, "a whole path is not its own end");
+        assert_eq!(ending("auth"), Some(1));
+        // The root `Cargo.toml` has no `/` before its name.
+        assert_eq!(ending("Cargo.toml"), Some(1));
+        assert_eq!(ending("th/login.rs"), None);
+        assert_eq!(ending("logout.rs"), None);
+        // A corpus that cannot list its paths finds none.
+        struct Opaque;
+        impl Corpus for Opaque {
+            fn lookup(&self, _: &str) -> Option<TermFacts> {
+                None
+            }
+            fn documents(&self) -> usize {
+                0
+            }
+            fn total_terms(&self) -> u64 {
+                0
+            }
+        }
+        assert_eq!(Opaque.paths_ending_in("auth/login.rs"), None);
     }
 }

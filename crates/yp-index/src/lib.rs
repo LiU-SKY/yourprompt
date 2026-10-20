@@ -27,6 +27,7 @@ pub mod walk;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub use extract::TermStat;
 
@@ -60,6 +61,57 @@ pub struct RepoIndex {
     total_terms: u64,
     distinct_terms: usize,
     flat: bool,
+    /// The paths in it read from their end, built the first time a path is
+    /// asked for by its end.
+    ends: OnceLock<PathEnds>,
+}
+
+/// Every path an index holds, file or directory, spelled backwards and
+/// sorted, so the paths that end in one tail sit side by side.
+///
+/// A prompt names a file by as much of its path as it likes, and the index
+/// is sorted from the front. Read from the front, finding every path that
+/// ends in `auth/login.rs` means reading every record, once per path in the
+/// prompt; read from the back, it is a binary search.
+///
+/// Building it reads every record once, so it is built only when a path is
+/// first asked for by its end. For django's 93,356 records, 4,676 of them
+/// paths, that costs the hook about 5 ms, 24 ms against 19 for a prompt
+/// naming `db/models/query.py`, and a 64 KB prompt of 2,849 such paths took
+/// it 36 ms.
+struct PathEnds {
+    reversed: Vec<String>,
+    /// The counts of the first `i` paths, summed, at `i`: what any run of
+    /// them adds up to is two subtractions, however many there are.
+    totals: Vec<[u64; 3]>,
+}
+
+impl PathEnds {
+    fn of(body: &str) -> PathEnds {
+        let mut paths: Vec<(String, TermStat)> = body
+            .lines()
+            .filter_map(|line| {
+                let key = line.split('\t').next()?;
+                key.contains('/')
+                    .then(|| Some((key.chars().rev().collect(), parse_record(line)?)))
+                    .flatten()
+            })
+            .collect();
+        paths.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let mut totals = Vec::with_capacity(paths.len() + 1);
+        let mut sum = [0u64; 3];
+        totals.push(sum);
+        for (_, stat) in &paths {
+            sum[0] += u64::from(stat.df);
+            sum[1] += u64::from(stat.cf);
+            sum[2] += u64::from(stat.def);
+            totals.push(sum);
+        }
+        PathEnds {
+            reversed: paths.into_iter().map(|(key, _)| key).collect(),
+            totals,
+        }
+    }
 }
 
 impl RepoIndex {
@@ -106,6 +158,38 @@ impl RepoIndex {
     /// Look one term up. Case-insensitive: the index stores lowercase.
     pub fn lookup(&self, term: &str) -> Option<TermStat> {
         self.record(term).and_then(parse_record)
+    }
+
+    /// The indexed paths that end in `tail` after a `/`, counted together, or
+    /// `None` when no path ends that way. Case-insensitive, as
+    /// [`lookup`](Self::lookup) is.
+    ///
+    /// `auth/login.rs` is how much of `src/auth/login.rs` a prompt may give,
+    /// and `yp-cli/src` of the directory `crates/yp-cli/src`; neither ends
+    /// `src/oauth/login.rs`. A path at the root has no `/` before its name,
+    /// so `Cargo.toml` counts only the `Cargo.toml`s below the root.
+    ///
+    /// Every path and directory is a definition, so `def` says how many
+    /// things the tail could be.
+    pub fn paths_ending_in(&self, tail: &str) -> Option<TermStat> {
+        let ends = self
+            .ends
+            .get_or_init(|| PathEnds::of(&self.blob[self.body..]));
+        let needle: String = format!("/{}", tail.to_lowercase()).chars().rev().collect();
+        // Every path that starts with the needle, read backwards, comes
+        // straight after the ones that sort below it.
+        let first = ends.reversed.partition_point(|key| *key < needle);
+        let count = ends.reversed[first..].partition_point(|key| key.starts_with(&needle));
+        if count == 0 {
+            return None;
+        }
+        let (below, through) = (ends.totals[first], ends.totals[first + count]);
+        let sum = |i: usize| u32::try_from(through[i] - below[i]).unwrap_or(u32::MAX);
+        Some(TermStat {
+            df: sum(0),
+            cf: sum(1),
+            def: sum(2),
+        })
     }
 
     /// The whole record line for `term`, if the index has one.
@@ -327,6 +411,7 @@ impl RepoIndex {
             total_terms,
             distinct_terms,
             flat,
+            ends: OnceLock::new(),
         }
     }
 
@@ -385,6 +470,7 @@ impl RepoIndex {
             total_terms,
             distinct_terms,
             flat,
+            ends: OnceLock::new(),
         })
     }
 }
@@ -558,6 +644,76 @@ mod tests {
         assert_eq!(dir.df, 2);
         // A top-level directory stays a prose word.
         assert!(index.lookup("crates").is_none_or(|t| t.def == 0));
+    }
+
+    #[test]
+    fn a_path_is_found_by_its_end() {
+        let files: Vec<(String, String)> = [
+            "./Cargo.toml",
+            "crates/api/Cargo.toml",
+            "crates/api/src/lib.rs",
+            "crates/core/src/lib.rs",
+            "src/auth/login.rs",
+            "src/oauth/login.rs",
+            "tests/auth.rs",
+            "docs/설계/회의록.md",
+        ]
+        .iter()
+        .map(|path| (path.to_string(), "fn verify_token() {}".to_string()))
+        .collect();
+        let built = RepoIndex::from_files(&files);
+        let reread = RepoIndex::parse_str(built.as_str()).expect("parses");
+        for index in [built, reread] {
+            let ending = |tail: &str| index.paths_ending_in(tail).map(|s| s.def);
+            assert_eq!(ending("auth/login.rs"), Some(1));
+            assert_eq!(ending("Auth/LOGIN.rs"), Some(1));
+            assert_eq!(ending("src/lib.rs"), Some(2));
+            assert_eq!(ending("core/src/lib.rs"), Some(1));
+            // A directory is a path too.
+            assert_eq!(ending("api/src"), Some(1));
+            // Only the Cargo.toml below the root has a `/` before its name.
+            assert_eq!(ending("Cargo.toml"), Some(1));
+            assert_eq!(ending("설계/회의록.md"), Some(1));
+            assert_eq!(ending("th/login.rs"), None);
+            assert_eq!(ending("auth/logout.rs"), None);
+            assert_eq!(ending(""), None);
+
+            // The same answer as reading every record.
+            let paths: Vec<(String, TermStat)> = index
+                .as_str()
+                .lines()
+                .skip(1)
+                .filter(|line| line.split('\t').next().unwrap().contains('/'))
+                .map(|line| {
+                    let key = line.split('\t').next().unwrap();
+                    (key.to_string(), parse_record(line).unwrap())
+                })
+                .collect();
+            let scan = |tail: &str| {
+                let end = format!("/{}", tail.to_lowercase());
+                let found: Vec<&TermStat> = paths
+                    .iter()
+                    .filter(|(key, _)| key.ends_with(&end))
+                    .map(|(_, stat)| stat)
+                    .collect();
+                (!found.is_empty()).then(|| TermStat {
+                    df: found.iter().map(|s| s.df).sum(),
+                    cf: found.iter().map(|s| s.cf).sum(),
+                    def: found.iter().map(|s| s.def).sum(),
+                })
+            };
+            for (key, _) in &paths {
+                let mut tail = key.as_str();
+                while let Some((_, rest)) = tail.split_once('/') {
+                    assert_eq!(index.paths_ending_in(rest), scan(rest), "{rest}");
+                    tail = rest;
+                }
+                let shorter: String = key.chars().skip(1).collect();
+                for near in [format!("x{key}"), format!("{key}x"), shorter] {
+                    assert_eq!(index.paths_ending_in(&near), scan(&near), "{near}");
+                }
+            }
+        }
     }
 
     #[test]
