@@ -48,12 +48,6 @@ claude plugin marketplace add LiU-SKY/yourprompt
 claude plugin install yourprompt@yourprompt
 ```
 
-On Claude Code 2.1.275 or later, one line does both:
-
-```
-/plugin install yourprompt --marketplace LiU-SKY/yourprompt
-```
-
 Start a new session afterwards. Without `yp` on your `PATH` the hooks fail to
 run, and nothing is scored.
 

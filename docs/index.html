@@ -1055,13 +1055,14 @@ function dropFromHash(key) {
 // Grounding is 350 of the 1000 points, and a visitor with no code at hand
 // never sees it: with nothing indexed, the prompt about src/banana.rs scores
 // 799.8, the same as the one about src/auth/login.rs, because neither name
-// was checked. Against these six files the login prompt rises to 860.3 and
+// was checked. Against these six files the login prompt rises to 865.6 and
 // the invented one falls to 563.8. They are indexed exactly like dropped
 // files.
 //
-// No English prose, on purpose. In a corpus this small a README makes "the"
-// a name found in one file, and "fix the bug" scored 428.5 against it
-// instead of 278.5.
+// No English prose. In a corpus this small a README used to make "the" a
+// name found in one file, and "fix the bug" scored 428.5 against it instead
+// of 278.5. A prose word now names something only where the code defines
+// it, so a README would no longer do that; the sample stays as it was.
 
 const SAMPLE = [
   ['Cargo.toml', `[package]
@@ -1205,7 +1206,7 @@ function looksBinary(text) {
 // drops or picks, and the sample repository. A file already present with the
 // same name and contents is not added again, because a second copy makes
 // every name defined in it look defined twice: loading the sample twice took
-// the showcase prompt from 860.3 to 787.2. For the same reason a folder that
+// the showcase prompt from 865.6 to 788.9. For the same reason a folder that
 // arrives again replaces what it brought before, or an edited file would be
 // indexed twice under one path.
 function addTexts(entries, folder) {

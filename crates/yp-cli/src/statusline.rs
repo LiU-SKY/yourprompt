@@ -49,7 +49,7 @@ fn ungraded(kind: Kind) -> Option<&'static str> {
     }
 }
 
-/// The segment this tool contributes, e.g. `⟦ 860.3 ▓▓▓▓▓▓▓▓▓░ A+ ▲ ⟧`, or
+/// The segment this tool contributes, e.g. `⟦ 865.6 ▓▓▓▓▓▓▓▓▓░ A+ ▲ ⟧`, or
 /// `None` when the session has nothing to show.
 pub fn segment(sidecar: &Sidecar, style: &Style) -> Option<String> {
     let (kind, _) = sidecar.latest_kind();

@@ -8,19 +8,19 @@ Axis A claims to read your repository. This checks that claim the only way that 
 
 | Comparison | Issues | Own repository scores higher | Mean margin |
 |---|---:|---:|---:|
-| versus the mean foreign repository | 270 | **88.5%** | 47.3 |
-| versus the *best* foreign repository | 270 | **71.5%** | 28.5 |
+| versus the mean foreign repository | 270 | **88.9%** | 56.3 |
+| versus the *best* foreign repository | 270 | **70.7%** | 32.9 |
 
 No length baseline is shown, because none can beat chance here: both sides of every comparison are the same text, scored against different repositories, so "longer wins" ties every one.
 
 | Repository | Issues | Own scores higher | Mean margin |
 |---|---:|---:|---:|
-| django/django | 114 | 90.4% | 60.9 |
-| matplotlib/matplotlib | 23 | 91.3% | 46.8 |
-| pytest-dev/pytest | 17 | 76.5% | 13.9 |
-| scikit-learn/scikit-learn | 23 | 100.0% | 69.6 |
-| sphinx-doc/sphinx | 16 | 56.2% | 9.6 |
-| sympy/sympy | 77 | 90.9% | 35.8 |
+| django/django | 114 | 93.0% | 76.7 |
+| matplotlib/matplotlib | 23 | 91.3% | 47.8 |
+| pytest-dev/pytest | 17 | 64.7% | 13.4 |
+| scikit-learn/scikit-learn | 23 | 100.0% | 75.0 |
+| sphinx-doc/sphinx | 16 | 56.2% | 8.9 |
+| sympy/sympy | 77 | 90.9% | 42.2 |
 
 ## Gold-patch test (a negative result)
 
@@ -28,12 +28,12 @@ The patch names the files that actually had to change. The idea was that an issu
 
 | Issue names a file the fix touched | Issues | Mean resolution | Has a name resolving to exactly one thing |
 |---|---:|---:|---:|
-| yes | 60 | 68.0 | 98.3% |
-| no | 210 | 55.7 | 94.8% |
+| yes | 60 | 69.5 | 95.0% |
+| no | 210 | 57.6 | 92.9% |
 
-Separation: **+12.2** points, which is nothing.
+Separation: **+11.9** points, which is nothing.
 
-The last column explains why, and it is a flaw in the test rather than a finding about the score. Essentially every issue in the dataset -- 96% of them -- already contains at least one name that resolves to exactly one thing in its repository. Both groups are saturated, so there is no headroom for the label to discriminate.
+The last column explains why, and it is a flaw in the test rather than a finding about the score. Essentially every issue in the dataset -- 93% of them -- already contains at least one name that resolves to exactly one thing in its repository. Both groups are saturated, so there is no headroom for the label to discriminate.
 
 The label is also asking a different question than it appears to. Naming the file a maintainer eventually chose to edit is not the same as being well grounded: an issue can point precisely at a symptom whose fix belongs somewhere else entirely. The test is kept and reported because it was proposed as evidence and produced none, which is worth saying out loud rather than dropping quietly.
 

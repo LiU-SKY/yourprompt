@@ -21,7 +21,7 @@
 </p>
 
 ```
-[Opus] ~/proj main 42% ctx  ⟦ 860.3 ▓▓▓▓▓▓▓▓▓░ A+ ▲ ⟧
+[Opus] ~/proj main 42% ctx  ⟦ 865.6 ▓▓▓▓▓▓▓▓▓░ A+ ▲ ⟧
 ```
 
 <p align="center">
@@ -47,12 +47,15 @@ point at one place or forty, and whether you said what done looks like.
 - **Shows it in place.** In the web UI the prompt is coloured as you type:
   green where it earned points, yellow where it is unclear, red where it lost
   them, with a chip per word saying why.
-- **Grades tasks, not chatter.** Slash commands and short follow-ups like
-  "yes", "continue" or "계속해" are not graded, so the status line keeps your
-  last task's score instead of flashing an F.
+- **Grades tasks, not chatter.** Slash commands, replies like "yes", "looks
+  good to me", "알아서 해줘" or 👍, and the turns Claude Code sends on its own,
+  such as a background agent reporting back, are not graded. The status line
+  keeps your last task's score instead of flashing an F.
 - **English and Korean.** A prompt in Spanish, Japanese, Russian or 25 other
-  languages says "not graded" rather than failing. One of two or three words
-  can still slip through and be graded.
+  languages says "not graded" rather than failing, even when it borrows
+  English words such as "fix" or "update". A prompt of two or three words can
+  still slip through and be graded, and so can one that is as much English as
+  anything else.
 
 ## Try it
 
@@ -62,7 +65,7 @@ locally, so the grounding axis is about your code. Nothing is uploaded.
 
 With no files loaded, names cannot be checked, and the page says so next to
 the grade: a prompt about a made-up `src/banana.rs` scores the same 799.8 as
-the real one. Load the six-file sample repo and the real prompt rises to 860.3
+the real one. Load the six-file sample repo and the real prompt rises to 865.6
 while the made-up one falls to 563.8.
 
 Or from the command line, here in a directory with no index, which the `~`
@@ -120,19 +123,28 @@ yp install
 ```
 
 `yp install` registers the hooks and the status line in your Claude Code
-settings and adds the `/score` command. The first time it changes your
-settings it backs them up. If you already have a status line it keeps it, runs
-it, and appends the score segment. The hooks need Claude Code 2.1.139 or newer.
+settings and adds the `/score` command. Before it changes your settings it
+backs them up to `settings.json.yp-backup`, once: a later install keeps that
+backup, unless an uninstall came between and you have changed the settings
+since. If you already have a status line it keeps it, runs it, and appends the
+score segment. The hooks need Claude Code 2.1.139 or newer.
 
 ```bash
 yp install --print-only   # show the change, write nothing
 yp install --uninstall    # remove what it added, restoring a status line it wrapped
 ```
 
+An uninstall that leaves nothing else changed gives `settings.json` back byte
+for byte. If you edited it in between, it keeps its byte order mark, line
+endings and indentation, but an object written on one line comes back spread
+over several, and a `\u` escape as the character it stands for.
+`settings.json.yp-backup` keeps the exact original.
+
 There is also a Claude Code plugin under [`plugin/`](plugin/): the same hooks
-and `/score`, but no status line, which a plugin cannot ship. Use the plugin or
-`yp install`, not both: each registers the hook, and Claude Code would run it
-twice.
+and `/score`, but no status line, which a plugin cannot ship. It needs `yp` on
+your `PATH`. Install it with `/plugin marketplace add LiU-SKY/yourprompt`, then
+`/plugin install yourprompt@yourprompt`. Use the plugin or `yp install`, not
+both: each registers the hook, and Claude Code would run it twice.
 
 ## How it stays at zero tokens
 
@@ -146,19 +158,28 @@ prompt ─┬─▶ yp hook        stdout: ""   exit 0     nothing injected
         └─▶ yp statusline  reads the file, renders the bar
 ```
 
-The hook never blocks and never indexes. If anything goes wrong it exits 0
-silently. Indexing runs from the session-start hook, or by hand with `yp index`.
+The hook never blocks and never indexes. If finding the index takes longer
+than a second, as with a working directory on a network share that has dropped
+off, it scores without one. If anything goes wrong it exits 0 silently.
+Indexing runs in the background from the session-start hook, or by hand with
+`yp index`. Clearing `~/.claude/yourprompt` costs the indexes and the session
+scores, nothing else: a status line yp wrapped is read back from
+`settings.json.yp-backup`.
 
 ## How the score is built
 
 Four axes, 1000 points total. Every count goes through a saturating function,
-and each axis has a cap, so no single trick can max the score.
+and each axis has a cap, so repeating one word does not pay. A cue word for
+the result, the finish line or the boundary counts only when its clause is
+about something: a name, a part of the result, or a criterion stated whole,
+such as "tests pass". Cue words written into sentences still count; see
+[Caveats](#caveats).
 
 | Axis | Points | What it measures |
 |---|---:|---|
 | **Grounding** | 350 | Do the names in the prompt resolve to exactly one thing in this repo? How specific is the vocabulary to this codebase? Are there pronouns with no antecedent ("it", "that one", "그거")? |
 | **Actionability** | 250 | One clear command verb and goal. Explicit inputs and outputs. A stated acceptance criterion ("tests pass", "must return X"). |
-| **Clarity** | 250 | Starts full, loses points per ambiguity smell: subjective terms, comparatives with no baseline, hedges, vague adverbs, passive voice, escape clauses, contradictions. |
+| **Clarity** | 250 | Loses points per ambiguity smell: subjective terms, comparatives and superlatives with no baseline, hedges, vague adverbs, nouns and pronouns, verbs that name no specific action, passive voice, open-ended terms, escape clauses. A prompt too short or too repetitive to judge, or one that asks for nothing, gets only part of the credit for having none. |
 | **Context** | 150 | Scope limits ("don't touch X"), examples, code blocks, lists, and length in a reasonable range. |
 
 Without an index the grounding axis is off and the other three are
@@ -179,11 +200,11 @@ fix the score handler
   grounding   80.0 / 350   resolution   0.0/150  names nothing that exists in this repository
 
 fix compute_paycheck in payroll.rs
-  grounding  197.0 / 350   resolution  26.5/150  0 of 2 names resolve; "payroll.rs" is not in this repository
+  grounding  190.6 / 350   resolution  22.2/150  0 of 2 names resolve; "payroll.rs" is not in this repository
 ```
 
-`compute_paycheck` does appear here, in three files of tests and docs that use
-it as an example, which is where the 26.5 comes from. "score" is in most files,
+`compute_paycheck` does appear here, in four files of tests and docs that use
+it as an example, which is where the 22.2 comes from. "score" is in most files,
 so it counts as vocabulary rather than as a name.
 
 ### Things that used to score well and no longer do
@@ -202,7 +223,7 @@ used to cost 70 points, because its 434 identifiers were averaged into the
 dozen you typed. A pasted file now counts as context, but the score cannot
 tell the file a task is about from any other. With the demo's sample repo
 loaded, pasting `login.rs` into the prompt about `src/auth/login.rs` takes it
-from 860.3 to 859.3, while the unrelated `tests/auth.rs` lifts it to 882.7.
+from 865.6 to 860.8, while the unrelated `tests/auth.rs` lifts it to 884.2.
 
 The same goes for a pasted error. "fix this" over a stack trace in a code
 fence scored 278.3, because "this" was read as pointing at nothing. The trace
@@ -216,6 +237,17 @@ tokens?" scored 155.3 for having no action verb; it now scores 511.1, while
 A forbidden verb is a boundary, not the task. "Don't change anything. Tests
 must still pass." scored 673.4, with "change" read as the thing to do. It is
 now 519.6, and "Done means: the test suite passes." counts as a finish line.
+
+A relative "that" points at nothing. "write a function that returns the sum
+of a list" was charged for a vague pronoun and scored 486.4; it now scores
+634.2, the same as with "which".
+
+A list of cue words used to reach the top. "Refactor `x`. Returns json, input
+schema. Tests pass, assert, verify. Only, keep, unchanged." names nothing and
+scored 909.8, an S. It now scores 321.8, an F. After "Refactor verify_token."
+the same twelve words lifted the sample repo's score from 503.1 to 912.1,
+above the prompt that names the file, the function and the test; they now
+lift it to 529.9.
 
 ## Benchmarks
 
@@ -234,28 +266,29 @@ is the baseline to beat: call whichever prompt is longer the original.
 
 | | Pairs | Original scores higher | Longer prompt wins |
 |---|---:|---:|---:|
-| Defects visible in the text | 399 | 66.2% | 72.7% |
-| All pairs | 771 | 53.6% | 59.0% |
+| Defects visible in the text | 399 | 67.4% | 72.7% |
+| All pairs | 771 | 55.1% | 59.0% |
 
 | Defect | Pairs | Correct | Longer prompt wins |
 |---|---:|---:|---:|
-| incompleteness | 164 | 83.5% | 100.0% |
+| incompleteness | 164 | 81.1% | 100.0% |
 | ambiguity + incompleteness | 71 | 77.5% | 100.0% |
-| ambiguity | 164 | 43.9% | 33.5% |
-| inconsistency | 163 | 24.5%, 98 ties | 35.6% |
+| ambiguity | 164 | 49.4% | 33.5% |
+| inconsistency | 163 | 25.2%, 98 ties | 35.6% |
 
 Length beats the score overall, and that is worth saying first. HumanEvalComm
 makes a prompt incomplete by cutting text out, so the shorter side is the
 damaged one in all 164 incomplete pairs: no scorer can do better than length
 there, and this one does not. On vague wording, where length cannot help, the
-score is right 43.9% of the time: below a coin flip, but ahead of length's
-33.5%. The grounding benchmark below is immune to length altogether, because
-both sides of every comparison are the same text.
+score is right 49.4% of the time: just below a coin flip, but ahead of
+length's 33.5%. The grounding benchmark below is immune to length altogether,
+because both sides of every comparison are the same text.
 
 Inconsistency is out of reach for a lexical scorer. HumanEvalComm makes a
 docstring inconsistent by contradicting its worked example, for instance
 `truncate_number(3.5) -> 3` against prose that asks for the decimal part.
-Catching that means evaluating the example. Those pairs come out as ties.
+Catching that means evaluating the example. Most of those pairs, 98 of 163,
+come out as ties.
 
 The first run returned 45.3%. The ablation showed the clarity axis making
 things worse. Three bugs: hedges like "a certain" were missing from the
@@ -272,16 +305,16 @@ number both times.
 
 | Comparison | Issues | Own repo scores higher | Mean margin |
 |---|---:|---:|---:|
-| vs the mean foreign repo | 270 | **88.5%** | +47.3 |
-| vs the best foreign repo | 270 | 71.5% | +28.5 |
+| vs the mean foreign repo | 270 | **88.9%** | +56.3 |
+| vs the best foreign repo | 270 | 70.7% | +32.9 |
 
 | Repository | Issues | Own repo higher |
 |---|---:|---:|
 | scikit-learn | 23 | 100.0% |
+| django | 114 | 93.0% |
 | matplotlib | 23 | 91.3% |
 | sympy | 77 | 90.9% |
-| django | 114 | 90.4% |
-| pytest | 17 | 76.5% |
+| pytest | 17 | 64.7% |
 | sphinx | 16 | 56.2% |
 
 The first run was 47.0%, below chance. The specificity measure was inverted:
@@ -309,8 +342,15 @@ Against this repository's own index it is 98.7%. See
 - Scoring parameters are reasoned defaults, not fitted ones.
 - It grades whether an agent can act on a prompt, not whether the request is
   wise. A precise "delete every file and force-push" scores well.
-- Word-level rules can be gamed: a sentence built from the cue words scores
-  better than it deserves, most of all with no files to check names against.
+- Word-level rules can still be gamed. Cue words are counted, not
+  understood. A list of them that names nothing earns little, but written
+  into sentences they count: "Refactor verify_token so that it returns json
+  and takes the input schema, and make sure the tests pass, and assert and
+  verify, and only keep it unchanged." scores 836.5, an A, against the sample
+  repo, though none of it is true of that function. With no index, made-up
+  names count as names: "Refactor `a1` `a2` `a3` returns json schema. Tests
+  pass. Nothing else. `b1` must pass. Only `c1`." scores 886.6, an A+. An
+  index checks names, not whether the words beside them are true.
 - The per-component explanation sentences are English only for now.
 
 ## How this was built
