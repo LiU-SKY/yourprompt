@@ -198,11 +198,14 @@ fn conflicting_output_flags_are_rejected() {
 }
 
 /// Run `yp` with an isolated state directory, so hook/statusline tests never
-/// touch the real `~/.claude` and never collide with each other.
+/// touch the real `~/.claude` and never collide with each other. The same
+/// directory stands in for Claude Code's own, where the hook looks for the
+/// user's commands.
 fn run_isolated(state: &std::path::Path, args: &[&str], stdin: &str) -> Output {
     let mut child = yp()
         .args(args)
         .env("YP_STATE_DIR", state)
+        .env("CLAUDE_CONFIG_DIR", state)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -418,6 +421,13 @@ fn commands_and_follow_ups_leave_the_last_task_in_place() {
         "알아서 해줘",
         "/review is this safe to merge",
         TASK_NOTIFICATION,
+        // A custom command's argument, however much it reads like a
+        // sentence about a route; a plan approved without naming work; and
+        // thanks as a session ends.
+        "/fix test fails on windows",
+        "/plan api returns too much data",
+        "proceed as planned",
+        "수고하셨어요",
     ] {
         let out = run_isolated(scratch.path(), &["hook"], &hook_payload(prompt, session));
         assert_eq!(out.status.code(), Some(0), "{prompt}");
@@ -443,6 +453,87 @@ fn commands_and_follow_ups_leave_the_last_task_in_place() {
     ));
     assert!(explained.contains("/ 1000"), "got {explained}");
     assert!(explained.contains("objective"), "got {explained}");
+}
+
+#[test]
+fn a_long_report_is_left_out_and_markup_the_user_wrote_is_recorded() {
+    // Only the first 64 KB of a prompt is scored, and a report longer than
+    // that lost the close tag that marks it as Claude Code's: one of 69,326
+    // bytes replaced an 809.5 A in the status line with 205.7, an F. A
+    // request the user wrapped in a hyphenated tag of their own was taken
+    // for Claude Code's and never recorded.
+    let scratch = Scratch::new("long-report");
+    let session = "long-report-session";
+    let task = "refactor parse_args in src/cli.rs so it returns Config";
+    run_isolated(scratch.path(), &["hook"], &hook_payload(task, session));
+
+    let report = format!(
+        "<task-notification>\n<task-id>a1b2</task-id>\n<status>completed</status>\n\
+         <result>{}</result>\n</task-notification>",
+        "The agent read src/auth/login.rs and found the bug. ".repeat(1_400)
+    );
+    assert!(report.len() > 70 * 1024, "{} bytes", report.len());
+    let out = run_isolated(scratch.path(), &["hook"], &hook_payload(&report, session));
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout.len(), 0);
+    assert_eq!(sidecar_of(scratch.path(), session)["latest_prompt"], task);
+    let line = stdout(&run_with_stdin(&["score", "--oneline"], &report));
+    assert!(line.contains("Claude Code sent this turn"), "got {line:?}");
+
+    let theirs = "<bug-report>\nThe login form submits twice when you press Enter.\n</bug-report>";
+    run_isolated(scratch.path(), &["hook"], &hook_payload(theirs, session));
+    let sidecar = sidecar_of(scratch.path(), session);
+    assert_eq!(sidecar["latest_prompt"], theirs);
+    assert_eq!(sidecar["latest"]["kind"], "task");
+    let line = stdout(&run(&["score", "--oneline", theirs]));
+    assert!(!line.contains("not graded"), "got {line:?}");
+}
+
+#[test]
+fn a_command_with_a_file_of_its_own_is_left_out_however_its_argument_reads() {
+    // "/triage form submits twice" opens the way a sentence about a form on
+    // the /triage route does, and is graded. With a triage command in the
+    // project, or a hotfix command in the user's Claude Code directory, it
+    // is that command.
+    let scratch = Scratch::new("command-files");
+    let project = scratch.path().join("project");
+    let commands = project.join(".claude").join("commands");
+    std::fs::create_dir_all(&commands).unwrap();
+    std::fs::write(commands.join("triage.md"), "Triage: $ARGUMENTS\n").unwrap();
+    std::fs::create_dir_all(scratch.path().join("commands")).unwrap();
+    std::fs::write(
+        scratch.path().join("commands").join("hotfix.md"),
+        "Fix: $ARGUMENTS\n",
+    )
+    .unwrap();
+    let session = "command-files-session";
+    let hook = |prompt: &str| {
+        let payload = serde_json::json!({
+            "session_id": session,
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": project,
+            "prompt": prompt,
+        });
+        let out = run_isolated(scratch.path(), &["hook"], &payload.to_string());
+        assert_eq!(out.status.code(), Some(0), "{prompt}");
+        assert_eq!(out.stdout.len(), 0, "{prompt}");
+    };
+
+    let task = "refactor parse_args in src/cli.rs so it returns Config";
+    hook(task);
+    for prompt in [
+        "/triage form submits twice",
+        "/hotfix page crashes on submit",
+    ] {
+        hook(prompt);
+        let sidecar = sidecar_of(scratch.path(), session);
+        assert_eq!(sidecar["latest_prompt"], task, "{prompt}");
+    }
+    // With no file of that name the same words are a sentence about a
+    // route, and graded.
+    let route = "/checkout form submits twice";
+    hook(route);
+    assert_eq!(sidecar_of(scratch.path(), session)["latest_prompt"], route);
 }
 
 #[test]
