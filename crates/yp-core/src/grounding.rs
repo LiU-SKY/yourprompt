@@ -33,8 +33,8 @@ pub struct Referent {
     /// Explicit names weigh more than prose words that happen to exist.
     pub weight: f64,
     /// True for backticked code, paths and identifiers -- things the user
-    /// clearly meant as names. False for a prose word that turned out to
-    /// exist in the repository.
+    /// clearly meant as names. False for a prose word that turned out to name
+    /// something the repository has: a definition, or a module file.
     pub explicit: bool,
     /// What the repository knows about it. `None` when it has never heard of
     /// it at all.
@@ -110,8 +110,9 @@ impl Referent {
 ///
 /// Explicit names -- code spans, paths, identifiers, a word called like a
 /// function, the parts of a qualified name -- always count. A plain prose word
-/// counts only if the repository contains it *and* it is not so widespread as
-/// to be vocabulary rather than a name.
+/// counts only if it is neither grammar nor syntax, the repository contains
+/// it without using it everywhere, and something there is called that: a
+/// definition, or a module file.
 ///
 /// `text` is the instruction the tokens were cut from.
 pub fn referents(
@@ -368,12 +369,25 @@ fn push_referent(
         return;
     }
 
+    if !explicit
+        && (yp_lang::legible::is_common_word(&token.text) || yp_lang::is_code_keyword(&token.text))
+    {
+        // Nor is grammar or syntax. "to", "as" and "at" are in every
+        // repository, inside `to_string`, `as_secs` and `expires_at`, and so
+        // is the keyword "if", and a small one holds each in a file or two:
+        // against the demo's six-file sample, "Add a dark mode toggle to the
+        // settings page." took all 150 resolution points for its "to", 597.1
+        // where "...in the settings page." scores 447.1.
+        return;
+    }
+
+    let mut text = token.text.clone();
     let mut facts = corpus.lookup(&token.text);
-    if facts.is_none() && token.kind == TokenKind::Path && corpus.flat() {
-        // Files handed over under bare names: `src/auth/login.rs` is the
+    if facts.is_none() && token.kind == TokenKind::Path {
+        // A file handed over under its bare name: `src/auth/login.rs` is the
         // `login.rs` the corpus holds, as far as anything here can tell.
         if let Some(name) = token.text.rsplit(['/', '\\']).next() {
-            if !name.is_empty() {
+            if !name.is_empty() && corpus.bare_file(name) {
                 facts = corpus.lookup(name);
             }
         }
@@ -381,15 +395,30 @@ fn push_referent(
 
     if !explicit {
         // Prose. Only interesting if the repository knows the word and does
-        // not use it everywhere.
-        let Some(facts) = facts else { return };
-        if facts.df as f64 / documents > g::UBIQUITY_CUTOFF {
+        // not use it everywhere...
+        let Some(known) = facts else { return };
+        if known.df as f64 / documents > g::UBIQUITY_CUTOFF {
             return;
+        }
+        // ...and only when something here is called that. A word nothing
+        // defines lives in the repository's identifiers, strings and
+        // comments, which makes it vocabulary rather than a name: the
+        // sample's `AuthError::Expired`, `expired_token_is_rejected` and
+        // "token expired" made "an expired token" a name that "could be any
+        // of 2", and `panic!` made "panic" one "defined once". With the rule
+        // above, this took the SWE-bench margin of an issue's own repository
+        // over the mean of the others from 47.3 to 56.9 points.
+        if known.def == 0 {
+            let Some((file, module)) = module_file(&token.text, corpus) else {
+                return;
+            };
+            text = file;
+            facts = Some(module);
         }
     }
 
     out.push(Referent {
-        text: token.text.clone(),
+        text,
         offset,
         weight: if explicit {
             g::EXPLICIT_WEIGHT
@@ -399,6 +428,25 @@ fn push_referent(
         explicit,
         facts,
     });
+}
+
+/// Extensions of the languages in which a module is a file that nothing
+/// declares by name. A Rust module is declared with `mod`, and a class or a
+/// package declares itself, so those are definitions already.
+const MODULE_EXTENSIONS: &[&str] = &["py", "js", "jsx", "ts", "tsx", "c", "h", "cpp"];
+
+/// The source file a prose word names as a module, when nothing in the
+/// repository defines the word itself, with what the repository knows of
+/// that file.
+///
+/// In django's index `executor` appears in ten files and is defined in none,
+/// while `executor.py` is one file: "the executor" names that file.
+fn module_file(word: &str, corpus: &dyn Corpus) -> Option<(String, TermFacts)> {
+    MODULE_EXTENSIONS.iter().find_map(|ext| {
+        let file = format!("{word}.{ext}");
+        let facts = corpus.lookup(&file)?;
+        (facts.def > 0).then_some((file, facts))
+    })
 }
 
 /// How much of an attachment this repository recognises.
@@ -673,6 +721,8 @@ mod tests {
                 ("the", 98, 5000, 0),
                 ("src/auth/login.rs", 1, 1, 0),
                 ("parse_args", 2, 8, 1),
+                ("score", 90, 900, 2),
+                ("session", 30, 100, 12),
             ],
         )
     }
@@ -705,12 +755,18 @@ mod tests {
 
     #[test]
     fn a_name_smeared_across_the_repository_does_not() {
-        // The headline case: "login" is in 37 files and defined in none.
+        // The headline case: `login` is in 37 files and defined in none.
         let precise = component(&axis_of("fix verify_token"), "resolution");
-        let vague = component(&axis_of("fix the login handler"), "resolution");
+        let vague = component(&axis_of("fix the `login` handler"), "resolution");
         assert!(
-            vague < precise / 2.0,
+            vague > 0.0 && vague < precise / 2.0,
             "vague {vague} should be far below precise {precise}"
+        );
+        // So is a word defined in twelve.
+        let defined = component(&axis_of("fix the session handler"), "resolution");
+        assert!(
+            defined > 0.0 && defined < precise / 2.0,
+            "twelve definitions {defined} vs one {precise}"
         );
     }
 
@@ -724,16 +780,21 @@ mod tests {
 
     #[test]
     fn ubiquitous_prose_words_are_not_treated_as_names() {
-        // "the" is in 98 of 100 files; counting it as a referent would drag
-        // every prompt down regardless of how precise its real names are.
+        // "score" is in 90 of 100 files; counting it as a referent would drag
+        // every prompt down regardless of how precise its real names are,
+        // although two of those files define it.
         let corpus = repo();
-        let found = found_in("fix the verify_token", &corpus);
+        let found = found_in("fix the score in verify_token", &corpus);
         assert!(
-            !found.iter().any(|r| r.text == "the"),
+            !found.iter().any(|r| r.text == "score"),
             "got {:?}",
             found.iter().map(|r| &r.text).collect::<Vec<_>>()
         );
         assert!(found.iter().any(|r| r.text == "verify_token"));
+        // Named as code, it is still a name.
+        assert!(found_in("fix `score`", &corpus)
+            .iter()
+            .any(|r| r.text == "score"));
     }
 
     #[test]
@@ -876,9 +937,12 @@ mod tests {
         // name that pins the work down counted for one part in a hundred and
         // fifty.
         let corpus = repo();
-        let filler = "the handler token verify login the handler token verify login ";
+        let filler = "the session handler token the session handler token ";
         let anchored = format!("{filler} fix verify_token");
         let unanchored = format!("{filler} fix something");
+        assert!(found_in(&unanchored, &corpus)
+            .iter()
+            .any(|r| r.text == "session"));
 
         let resolution_of = |text: &str| {
             grounding(text, &tokenize(text), &[], &[], &[], &corpus, 1.0)
@@ -1129,6 +1193,137 @@ mod tests {
         let walked = MapCorpus::new(1, &entries);
         let found = found_in(text, &walked);
         assert_eq!(named(&found, "src/auth/login.rs").facts, None);
+    }
+
+    #[test]
+    fn a_path_falls_back_to_its_file_name_only_where_that_file_had_no_path() {
+        // The page with a picked `login.rs` and a dropped `tests/auth.rs`.
+        let mixed = MapCorpus::new(
+            2,
+            &[
+                ("login.rs", 1, 1, 1),
+                ("tests/auth.rs", 1, 1, 1),
+                ("auth.rs", 1, 1, 1),
+            ],
+        )
+        .with_bare_file("login.rs");
+        let found = found_in(
+            "fix src/auth/login.rs, src/auth.rs and tests/auth.rs",
+            &mixed,
+        );
+        assert_eq!(named(&found, "src/auth/login.rs").candidates(), Some(1));
+        // The only auth.rs here is in tests/.
+        assert_eq!(named(&found, "src/auth.rs").facts, None);
+        assert_eq!(named(&found, "tests/auth.rs").candidates(), Some(1));
+    }
+
+    /// The demo's six-file sample, as far as these tests need it: each word
+    /// with the files it is in, its occurrences and its definitions.
+    fn sample() -> MapCorpus {
+        MapCorpus::new(
+            6,
+            &[
+                // Parts of `to_string`, `as_secs`, `expires_at` and
+                // `split_once`, and the keywords themselves.
+                ("to", 1, 1, 0),
+                ("as", 1, 1, 0),
+                ("at", 1, 2, 0),
+                ("once", 1, 1, 0),
+                ("if", 1, 2, 0),
+                ("return", 1, 1, 0),
+                ("match", 1, 1, 0),
+                // `fn now()`: a definition, and still an adverb in prose.
+                ("now", 1, 3, 1),
+                // `AuthError::Expired`, `expired_token_is_rejected` and the
+                // string "token expired".
+                ("expired", 2, 4, 0),
+                // `panic!(...)`.
+                ("panic", 1, 1, 0),
+                // The `tests` directory.
+                ("tests", 1, 1, 0),
+                ("session", 3, 13, 1),
+                ("verify_token", 3, 6, 1),
+            ],
+        )
+    }
+
+    fn texts(found: &[Referent]) -> Vec<&str> {
+        found.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn grammar_and_syntax_are_never_names() {
+        let corpus = sample();
+        for text in [
+            "Add a dark mode toggle to the settings page.",
+            "Make the navbar sticky at the top.",
+            "Input: as described. Output: as expected.",
+            "Return it now, once, if it can match.",
+        ] {
+            let found = found_in(text, &corpus);
+            assert!(found.is_empty(), "{text}: {:?}", texts(&found));
+        }
+        // "to" took the full 150 resolution points, so the sentence scored
+        // as if it named the thing it changes.
+        let axis = |text: &str| grounding(text, &tokenize(text), &[], &[], &[], &corpus, 1.0).0;
+        assert_eq!(
+            component(
+                &axis("Add a dark mode toggle to the settings page."),
+                "resolution"
+            ),
+            component(
+                &axis("Add a dark mode toggle in the settings page."),
+                "resolution"
+            ),
+        );
+        // Written as code, the same words are names.
+        let found = found_in("call `now`, then now() and `if`", &corpus);
+        assert_eq!(texts(&found), ["now", "now"]);
+        assert!(found.iter().all(|r| r.explicit));
+    }
+
+    #[test]
+    fn a_prose_word_names_something_only_where_something_is_called_that() {
+        let corpus = sample();
+        let found = found_in(
+            "Make verify_token return an error instead of a panic when the \
+             token has expired, and keep the session. Tests must pass.",
+            &corpus,
+        );
+        assert_eq!(texts(&found), ["verify_token", "session"]);
+        let session = named(&found, "session");
+        assert!(!session.explicit);
+        assert_eq!(session.candidates(), Some(1));
+
+        // Named as code, a word nothing defines is still looked up.
+        let found = found_in("handle `expired` and `panic`", &corpus);
+        assert_eq!(named(&found, "expired").candidates(), Some(2));
+        assert_eq!(named(&found, "panic").candidates(), Some(1));
+    }
+
+    #[test]
+    fn a_prose_word_can_name_a_module_file() {
+        // django: `executor` is in ten files and defined in none, and
+        // `executor.py` is one of them.
+        let corpus = MapCorpus::new(
+            4694,
+            &[
+                ("executor", 10, 215, 0),
+                ("executor.py", 1, 1, 1),
+                ("router", 12, 40, 0),
+                ("utils", 30, 90, 0),
+                ("utils.js", 2, 2, 2),
+                ("utils.ts", 1, 1, 1),
+            ],
+        );
+        let found = found_in("the executor runs before the router", &corpus);
+        assert_eq!(texts(&found), ["executor.py"]);
+        assert_eq!(found[0].candidates(), Some(1));
+        assert!(!found[0].explicit);
+        // The first source file of that name found stands for the module.
+        let found = found_in("move it to utils", &corpus);
+        assert_eq!(texts(&found), ["utils.js"]);
+        assert_eq!(found[0].candidates(), Some(2));
     }
 
     #[test]

@@ -24,7 +24,7 @@
 pub mod extract;
 pub mod walk;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 
@@ -42,6 +42,13 @@ const MAX_PATH_TERM: usize = 256;
 /// name. An index without it, including every index written before it
 /// existed, has paths.
 const FLAT_MARK: &str = "flat";
+
+/// Written as a record's fifth field when a file was handed over under that
+/// bare name, so the page can mix a picked `login.rs` with a dropped
+/// `tests/auth.rs` and still know which of the two has a directory nobody
+/// told it. A reader that predates the field reads the first four and stops,
+/// so the format version is unchanged.
+const BARE_MARK: &str = "bare";
 
 /// A queryable repository index.
 pub struct RepoIndex {
@@ -67,6 +74,15 @@ impl RepoIndex {
         self.flat
     }
 
+    /// True when a file called `name` was handed over without a directory,
+    /// whatever the other files came with. Case-insensitive.
+    pub fn is_bare(&self, name: &str) -> bool {
+        self.flat
+            || self
+                .record(name)
+                .is_some_and(|line| line.split('\t').nth(4) == Some(BARE_MARK))
+    }
+
     /// Total term occurrences across the repository -- the denominator of the
     /// collection language model the specificity score is built on.
     pub fn total_terms(&self) -> u64 {
@@ -89,6 +105,11 @@ impl RepoIndex {
 
     /// Look one term up. Case-insensitive: the index stores lowercase.
     pub fn lookup(&self, term: &str) -> Option<TermStat> {
+        self.record(term).and_then(parse_record)
+    }
+
+    /// The whole record line for `term`, if the index has one.
+    fn record(&self, term: &str) -> Option<&str> {
         let needle = term.to_lowercase();
         let body = &self.blob[self.body..];
         // The search halves a byte range, so `mid` can fall inside a
@@ -118,7 +139,7 @@ impl RepoIndex {
             let key = line.split('\t').next().unwrap_or("");
 
             match key.cmp(needle.as_str()) {
-                std::cmp::Ordering::Equal => return parse_record(line),
+                std::cmp::Ordering::Equal => return Some(line),
                 std::cmp::Ordering::Less => {
                     // Everything up to and including this line is too small.
                     let next = line_end + 1;
@@ -159,7 +180,7 @@ impl RepoIndex {
 
         // A walk yields real paths. A file at the root of the repository is
         // named by its bare name because that is its path.
-        Self::index_files(&files, false)
+        Self::index_files(&files, false, &HashSet::new())
     }
 
     /// Build an index from files already in memory, as `(path, contents)`.
@@ -169,13 +190,20 @@ impl RepoIndex {
     /// and the repository is whatever the visitor dropped on the page.
     ///
     /// A browser names a picked or dropped file without its directory, so
-    /// when no name has one the index is marked [flat](Self::is_flat).
+    /// when no name has one the index is marked [flat](Self::is_flat), and
+    /// each name that has none is marked [bare](Self::is_bare) whatever the
+    /// others came with.
     pub fn from_files(files: &[(String, String)]) -> RepoIndex {
+        let bare: HashSet<String> = files
+            .iter()
+            .filter(|(path, _)| !path.contains(['/', '\\']))
+            .map(|(path, _)| path.to_lowercase())
+            .collect();
         let flat = !files.is_empty() && files.iter().all(|(path, _)| !path.contains(['/', '\\']));
-        Self::index_files(files, flat)
+        Self::index_files(files, flat, &bare)
     }
 
-    fn index_files(files: &[(String, String)], flat: bool) -> RepoIndex {
+    fn index_files(files: &[(String, String)], flat: bool, bare: &HashSet<String>) -> RepoIndex {
         let mut terms: HashMap<String, TermStat> = HashMap::new();
         let indexed = files.len();
 
@@ -242,10 +270,15 @@ impl RepoIndex {
             entry.def = entry.def.saturating_add(1);
         }
 
-        Self::from_terms(indexed, terms, flat)
+        Self::from_terms(indexed, terms, flat, bare)
     }
 
-    fn from_terms(files: usize, terms: HashMap<String, TermStat>, flat: bool) -> RepoIndex {
+    fn from_terms(
+        files: usize,
+        terms: HashMap<String, TermStat>,
+        flat: bool,
+        bare: &HashSet<String>,
+    ) -> RepoIndex {
         let mut records: Vec<(String, TermStat)> = terms.into_iter().collect();
         records.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -272,10 +305,12 @@ impl RepoIndex {
                 debug_assert!(false, "unrepresentable term {term:?}");
                 continue;
             }
-            blob.push_str(&format!(
-                "{}\t{}\t{}\t{}\n",
-                term, stat.df, stat.cf, stat.def
-            ));
+            blob.push_str(&format!("{}\t{}\t{}\t{}", term, stat.df, stat.cf, stat.def));
+            if bare.contains(term) {
+                blob.push('\t');
+                blob.push_str(BARE_MARK);
+            }
+            blob.push('\n');
         }
 
         RepoIndex {
@@ -390,7 +425,7 @@ mod tests {
                 )
             })
             .collect();
-        RepoIndex::from_terms(3, terms, false)
+        RepoIndex::from_terms(3, terms, false, &HashSet::new())
     }
 
     #[test]
@@ -616,6 +651,44 @@ mod tests {
     }
 
     #[test]
+    fn a_file_handed_over_bare_is_known_by_name_beside_files_with_paths() {
+        // What the page holds once a picked file and a dropped folder mix.
+        let file = |name: &str| (name.to_string(), "fn verify_token() {}".to_string());
+        let mixed = RepoIndex::from_files(&[file("login.rs"), file("tests/auth.rs")]);
+        assert!(!mixed.is_flat());
+        for index in [RepoIndex::parse_str(mixed.as_str()).expect("parses"), mixed] {
+            assert!(index.is_bare("login.rs"));
+            assert!(index.is_bare("Login.RS"));
+            assert!(!index.is_bare("auth.rs"));
+            assert!(!index.is_bare("tests/auth.rs"));
+            assert!(!index.is_bare("verify_token"));
+            assert!(!index.is_bare("absent.rs"));
+            // The mark changes no count.
+            let one = TermStat {
+                df: 1,
+                cf: 1,
+                def: 1,
+            };
+            assert_eq!(index.lookup("login.rs"), Some(one));
+            assert_eq!(index.lookup("auth.rs"), Some(one));
+        }
+
+        // A bare file and a pathed one can share a name, and then the name
+        // was handed over bare.
+        let shared = RepoIndex::from_files(&[file("auth.rs"), file("tests/auth.rs")]);
+        assert!(shared.is_bare("auth.rs"));
+        assert_eq!(shared.lookup("auth.rs").unwrap().def, 2);
+
+        // Every name in a flat index is bare, including in one written
+        // before the field existed.
+        let old = RepoIndex::parse_str("#YPIX\t2\t1\t1\t1\tflat\nlogin.rs\t1\t1\t1\n").unwrap();
+        assert!(old.is_bare("login.rs"));
+        let old = RepoIndex::parse_str("#YPIX\t2\t1\t1\t1\nlogin.rs\t1\t1\t1\n").unwrap();
+        assert!(!old.is_bare("login.rs"));
+        assert_eq!(old.lookup("login.rs").unwrap().def, 1);
+    }
+
+    #[test]
     fn a_walked_repository_is_never_flat() {
         // Every file here sits at the root, so no indexed name has a
         // directory, and those names are still the real paths.
@@ -629,11 +702,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(index.files(), 2);
         assert!(!index.is_flat());
-        // Written exactly as an index was before the flag existed.
+        assert!(!index.is_bare("main.rs"));
+        // Written exactly as an index was before either mark existed.
         assert_eq!(
             index.as_str().lines().next().unwrap().split('\t').count(),
             5
         );
+        assert!(index
+            .as_str()
+            .lines()
+            .skip(1)
+            .all(|line| line.split('\t').count() == 4));
     }
 
     #[test]

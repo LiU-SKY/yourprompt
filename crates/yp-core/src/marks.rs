@@ -36,9 +36,10 @@ pub struct Mark {
     pub end: usize,
     pub tone: Tone,
     /// A stable machine id: `smell:ambiguous_adverb`, `cue:action_verb`,
-    /// `cue:question`, `name:unique`, `name:ambiguous`, `name:missing`,
-    /// `pronoun:dangling`, `pronoun:anchored`, `pronoun:pasted`,
-    /// `attachment`. Pages translate these; the note is the English fallback.
+    /// `cue:question`, `name:unique`, `name:one_file`, `name:ambiguous`,
+    /// `name:missing`, `pronoun:dangling`, `pronoun:anchored`,
+    /// `pronoun:pasted`, `attachment`. Pages translate these; the note is the
+    /// English fallback.
     pub kind: String,
     /// For `name:ambiguous`, how many things the name could denote.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,12 +137,15 @@ pub(crate) fn collect(ev: &Evidence<'_>) -> Vec<Mark> {
                 let _ = referents;
                 let dangling = anchor.is_none_or(|first| hit.span.start < first);
                 if dangling {
+                    // Nothing before it is in the repository, which is not
+                    // the same as nothing named: in "change gravity() so it
+                    // returns" the name right before "it" is made up.
                     push(
                         &mut out,
                         hit.span,
                         Tone::Bad,
                         "pronoun:dangling",
-                        "points at nothing named before it",
+                        "points at nothing in your code",
                     );
                 } else {
                     push(&mut out, hit.span, Tone::Warn, "pronoun:anchored", ANCHORED);
@@ -230,6 +234,18 @@ pub(crate) fn collect(ev: &Evidence<'_>) -> Vec<Mark> {
                 String::new()
             };
             match r.candidates() {
+                // One file resolves as well as one definition does, but a
+                // field like `expires_at`, or a `to_string` the code only
+                // calls, has no definition the index can point to.
+                Some(1) if r.facts.is_some_and(|f| f.def == 0) => push(
+                    &mut out,
+                    span,
+                    Tone::Good,
+                    "name:one_file",
+                    format!(
+                        "{name}appears in one file in this repository, with no definition found"
+                    ),
+                ),
                 Some(1) => push(
                     &mut out,
                     span,
@@ -461,22 +477,90 @@ mod tests {
     }
 
     #[test]
-    fn a_pronoun_with_a_paste_to_point_at_is_marked_good_on_either_path() {
-        let text = "fix this\n```\nTraceback (most recent call last):\n  \
+    fn a_pronoun_with_a_paste_to_point_at_is_marked_good_on_every_path() {
+        const TRACE: &str = "Traceback (most recent call last):\n  \
                     File \"app/main.py\", line 42, in <module>\n    run()\n  \
                     File \"app/main.py\", line 30, in run\n    token = verify_token(raw)\n  \
                     File \"app/auth.py\", line 12, in verify_token\n    \
-                    raise ExpiredError(\"token expired\")\nauth.ExpiredError: token expired\n```";
-        let kind_of_this = |m: &[Mark]| {
-            m.iter()
+                    raise ExpiredError(\"token expired\")\nauth.ExpiredError: token expired\n";
+        let pasted = Some(("pronoun:pasted".to_string(), Tone::Good));
+        let kind_of_this = |text: &str, parts: &crate::prompt::Parts<'_>| {
+            crate::score_parts(parts, None)
+                .unwrap()
+                .marks
+                .iter()
                 .find(|m| &text[m.start..m.end] == "this")
                 .map(|m| (m.kind.clone(), m.tone))
         };
-        let pasted = Some(("pronoun:pasted".to_string(), Tone::Good));
-        // Cut out as an attachment, as the hook does.
-        assert_eq!(kind_of_this(&marks(text)), pasted);
-        // Kept in the text, as the web page does.
-        let page = crate::score_parts(&crate::prompt::from_parts(text, &[]), None).unwrap();
-        assert_eq!(kind_of_this(&page.marks), pasted);
+
+        // Long enough to be cut out as an attachment, on the page as in the
+        // hook.
+        let long = format!("fix this\n```\n{TRACE}```");
+        let parts = crate::prompt::from_parts(&long, &[]);
+        assert!(parts.has_attachments());
+        assert_eq!(kind_of_this(&long, &parts), pasted);
+
+        // Its first three lines are short enough to stay in the instruction.
+        let short_trace = TRACE.lines().take(3).collect::<Vec<_>>().join("\n");
+        let short = format!("fix this\n```\n{short_trace}\n```");
+        let parts = crate::prompt::from_parts(&short, &[]);
+        assert!(!parts.has_attachments());
+        assert_eq!(kind_of_this(&short, &parts), pasted);
+
+        // Opened as a file beside what was typed.
+        let parts = crate::prompt::from_parts("fix this", &[TRACE]);
+        assert_eq!(kind_of_this("fix this", &parts), pasted);
+    }
+
+    #[test]
+    fn defined_once_is_said_only_of_a_definition() {
+        let corpus = MapCorpus::new(
+            6,
+            &[
+                ("verify_token", 4, 6, 1),
+                ("expires_at", 1, 2, 0),
+                ("token", 5, 20, 1),
+            ],
+        );
+        let text = "set expires_at in verify_token";
+        let s = crate::score_with(text, Some(&corpus)).unwrap();
+        let on = |word: &str| {
+            s.marks
+                .iter()
+                .find(|m| &text[m.start..m.end] == word)
+                .unwrap_or_else(|| panic!("no mark on {word}: {:?}", kinds(&s.marks)))
+        };
+        assert_eq!(on("verify_token").kind, "name:unique");
+        assert_eq!(
+            on("verify_token").note,
+            "is defined once in this repository"
+        );
+        // A field: one file holds it, and the index sees no definition.
+        let field = on("expires_at");
+        assert_eq!(field.kind, "name:one_file");
+        assert_eq!(field.tone, Tone::Good);
+        assert!(!field.note.contains("defined once"), "{}", field.note);
+        // Both resolve, as the resolution component says.
+        let resolution = &s.grounding.as_ref().unwrap().components[0];
+        assert!(
+            resolution.detail.starts_with("all 2 name(s) resolve"),
+            "{}",
+            resolution.detail
+        );
+    }
+
+    #[test]
+    fn a_pronoun_after_a_made_up_name_points_at_nothing_in_the_code() {
+        // "it" comes straight after the name it means; the name is not here.
+        let corpus = MapCorpus::new(6, &[("verify_token", 4, 6, 1)]);
+        let text = "Refactor parse_config and make it faster.";
+        let s = crate::score_with(text, Some(&corpus)).unwrap();
+        let it = s
+            .marks
+            .iter()
+            .find(|m| &text[m.start..m.end] == "it")
+            .expect("the pronoun is marked");
+        assert_eq!(it.kind, "pronoun:dangling");
+        assert_eq!(it.note, "points at nothing in your code");
     }
 }
