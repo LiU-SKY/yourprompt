@@ -67,8 +67,8 @@ pub struct Parts<'a> {
     /// instruction be mapped back onto what the user actually has in front
     /// of them.
     cuts: Vec<Cut>,
-    /// Length of the text the instruction was cut from.
-    original_len: usize,
+    /// The text the instruction was cut from.
+    original: &'a str,
 }
 
 /// One place where the instruction departs from the original text.
@@ -88,6 +88,18 @@ impl<'a> Parts<'a> {
 
     pub fn has_attachments(&self) -> bool {
         !self.attachments.is_empty()
+    }
+
+    /// The text these parts were cut from, as it was sent: the raw prompt,
+    /// or what was typed beside the files a caller attached on their own.
+    ///
+    /// Whether Claude Code sent a turn is read here as well as in the
+    /// instruction. A stray backtick runs a code region to the end of the
+    /// text, and cut out as pasted it took the close tag that marks a report
+    /// as Claude Code's with it: a background agent's report that mentioned
+    /// "```" was graded 569.1, C+, in place of the task before it.
+    pub fn original(&self) -> &'a str {
+        self.original
     }
 
     /// Map a byte range of the instruction back onto the original text.
@@ -110,7 +122,7 @@ impl<'a> Parts<'a> {
         }
         let start = span.start as isize + shift;
         let end = span.end as isize + shift;
-        if start < 0 || end > self.original_len as isize {
+        if start < 0 || end > self.original.len() as isize {
             return None;
         }
         Some(Span::new(start as usize, end as usize))
@@ -145,7 +157,7 @@ impl<'a> Parts<'a> {
                 .copied()
                 .filter(|c| c.at + marker <= end)
                 .collect(),
-            original_len: self.original_len,
+            original: self.original,
         })
     }
 
@@ -273,7 +285,7 @@ pub fn split(text: &str) -> Parts<'_> {
         instruction,
         attachments,
         cuts,
-        original_len: text.len(),
+        original: text,
     }
 }
 
@@ -441,6 +453,21 @@ mod tests {
         assert!(capped.attachments[0].len() <= MAX_ATTACHED_BYTES);
         assert!(big.starts_with(capped.attachments[0]));
         assert_eq!(capped.instruction, parts.instruction);
+    }
+
+    #[test]
+    fn the_parts_keep_the_text_they_were_cut_from() {
+        let paste = "line of the paste\n".repeat(40);
+        let text = format!("fix the parser\n```\n{paste}```\n");
+        let parts = split(&text);
+        assert!(!parts.instruction().contains("line of the paste"));
+        assert_eq!(parts.original(), text);
+        // What was typed, without the files opened beside it.
+        let opened = from_parts("fix the parser", &["whatever the user uploaded"]);
+        assert_eq!(opened.original(), "fix the parser");
+        // Read to the limit, they still hold all of it.
+        let long = "the parser should accept it. ".repeat(4000);
+        assert_eq!(split(&long).capped().unwrap().original(), long);
     }
 
     #[test]

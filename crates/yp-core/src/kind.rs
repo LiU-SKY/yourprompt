@@ -181,6 +181,15 @@ const ROUTE_NOUNS: &[&str] = &[
     "webhook",
 ];
 
+/// Nouns that only a route takes. With a verb right behind one, the name is
+/// a route's even when it is a [`COMMAND_WORDS`] name. Read as commands,
+/// "/debug endpoint leaks environment variables in production" and "/test
+/// route returns 200 even when the database is down" were skipped, where
+/// graded they score 425.0 and 524.5. A command's argument names what is
+/// broken with the other nouns, "/fix test fails on windows", "/tdd form
+/// submits twice", and keeps them. Sorted, for binary search.
+const ROUTE_ONLY_NOUNS: &[&str] = &["endpoint", "route", "url"];
+
 /// Adverbs that do the same when a verb follows them: "/cart never updates
 /// the badge count", "/login still fails after the fix". Sorted, for binary
 /// search.
@@ -417,7 +426,8 @@ fn is_command(text: &str) -> bool {
 /// command's argument instead, a report of what is broken: "/fix test fails
 /// on windows", "/fix still fails after the patch". A verb right after the
 /// name still makes the name its subject, "/debug returns 404 in
-/// production".
+/// production", and so does one right after a noun only a route takes,
+/// "/debug endpoint leaks environment variables".
 fn about_the_route(name: &str, after: &[String]) -> bool {
     let word = |i: usize| after.get(i).map_or("", String::as_str);
     let first = word(0);
@@ -425,6 +435,7 @@ fn about_the_route(name: &str, after: &[String]) -> bool {
         && (is_finite(word(1)) || is_finite(word(2))))
         || (ROUTE_ADVERBS.binary_search(&first).is_ok() && is_finite(word(1)));
     (subject && !is_command_word(name))
+        || (ROUTE_ONLY_NOUNS.binary_search(&first).is_ok() && is_finite(word(1)))
         || (matches!(first, "->" | "=>" | "\u{2192}") && is_status_code(word(1)))
         || (matches!(first, "and" | "or" | "&") && word(1).starts_with('/'))
 }
@@ -528,18 +539,34 @@ fn is_automated(text: &str) -> bool {
 /// never sees, and the two may disagree, except on whether Claude Code sent
 /// the turn, which both decide on all of it.
 pub fn kind_of(text: &str) -> (Kind, Option<&'static str>) {
-    classify(text, text, &yp_lang::tokenize(text))
+    classify(text, text, text, &yp_lang::tokenize(text))
 }
 
-/// [`kind_of`] for a caller that has already tokenized the text it reads,
-/// `read`, the start of `whole`.
+/// [`kind_of`] for a caller that has split the prompt it was `sent` into an
+/// `instruction`, and tokenized what it reads, `read`, the start of that
+/// instruction.
 ///
-/// Whether Claude Code sent the turn is decided on `whole`. Its markup is
-/// recognised by the close tag that ends it, and a report longer than the
-/// cap lost that tag to it: a task notification of 69,326 bytes was graded
-/// 205.7, an F, and took the place of an 809.5 A in the status line.
-pub(crate) fn classify(whole: &str, read: &str, tokens: &[Token]) -> (Kind, Option<&'static str>) {
-    if is_automated(whole) {
+/// Whether Claude Code sent the turn is decided on all of the text, by the
+/// close tag that ends its markup. A report longer than the cap lost that
+/// tag to it: a task notification of 69,326 bytes was graded 205.7, an F,
+/// and took the place of an 809.5 A in the status line.
+///
+/// It is read both as it was sent and as an instruction, and either will
+/// do. A stray backtick runs a code region to the end of the text, and cut
+/// out as pasted it took the close tag with it: a report that mentioned
+/// "```" was graded 569.1, C+, in place of the task before it. A code block
+/// that quotes the close tag is cut out of the instruction, which then ends
+/// where Claude Code closed the report: read only as it was sent, a report
+/// of a test for this hook was graded 702.5, B+. Each reading is one pass,
+/// and the instruction is read only when a block was cut out of it: read
+/// twice, a megabyte of reminders cut short took the hook 46 ms, not 35.
+pub(crate) fn classify(
+    sent: &str,
+    instruction: &str,
+    read: &str,
+    tokens: &[Token],
+) -> (Kind, Option<&'static str>) {
+    if is_automated(sent) || (instruction != sent && is_automated(instruction)) {
         return (Kind::Automated, None);
     }
     if is_command(read) {
@@ -574,6 +601,7 @@ mod tests {
             ROOT_DIRS,
             PATH_VERBS,
             ROUTE_NOUNS,
+            ROUTE_ONLY_NOUNS,
             ROUTE_ADVERBS,
             COMMAND_WORDS,
             QUESTION_SUBJECTS,
@@ -659,6 +687,10 @@ mod tests {
             // request, as it is after "/fix-issue".
             "/review 404",
             "/fix 500",
+            // A noun only a route takes, with no verb right behind it.
+            "/fix url parsing fails on windows",
+            "/debug route matching is broken",
+            "/review endpoint",
         ] {
             assert_eq!(kind(text), Kind::Command, "{text:?}");
         }
@@ -671,6 +703,11 @@ mod tests {
             "/fix 500 on submit",
             "/fix and /test both fail on windows",
             "/plan -> 500",
+            // And of a verb right behind a noun only a route takes. Each of
+            // these was skipped as a command.
+            "/debug endpoint leaks environment variables in production",
+            "/test route returns 200 even when the database is down",
+            "/commit endpoint times out on large payloads",
         ] {
             assert_eq!(kind(text), Kind::Task, "{text:?}");
         }
@@ -808,6 +845,53 @@ mod tests {
             "<task-notification>\n<result>\n```\n{log}```\n</result>\n</task-notification>"
         );
         assert_eq!(kind(&long), Kind::Automated);
+    }
+
+    #[test]
+    fn a_stray_backtick_does_not_hide_the_end_of_a_report() {
+        // A backtick that is never closed runs a code region to the end of
+        // the text, and cut out as pasted it took the close tag with it.
+        // This report was graded 569.1, C+, and took the place of the task
+        // before it in the status line.
+        let sites: String = (0..10)
+            .map(|i| format!("- updated call site {i} in src/handlers/mod.rs\n"))
+            .collect();
+        for stray in [
+            "the three-backtick fences (```)",
+            "the `verify_token helper",
+        ] {
+            let report = format!(
+                "<task-notification>\n<task-id>agent_x</task-id>\n<status>completed</status>\n\
+                 <summary>Agent \"Update docs\" completed</summary>\n<result>I replaced {stray} \
+                 in docs/usage.md and updated these call sites:\n{sites}</result>\n\
+                 </task-notification>"
+            );
+            assert!(crate::prompt::split(&report).has_attachments(), "{stray}");
+            assert_eq!(classified(&report), (Kind::Automated, None), "{stray}");
+            assert_eq!(crate::score(&report).unwrap().kind, Kind::Automated);
+            // Typed into the web page, as the hook reads it.
+            let typed = crate::prompt::from_parts(&report, &[]);
+            assert_eq!(
+                crate::score_parts(&typed, None).unwrap().kind,
+                Kind::Automated
+            );
+        }
+        // A code block that quotes the close tag is cut out, and the report
+        // still ends where Claude Code closed it.
+        let test = format!(
+            "<task-notification>\n<result>I added this test:\n```rust\n\
+             const REPORT: &str = \"<result>done</result></task-notification>\";\n{}```\n\
+             </result>\n</task-notification>",
+            "    assert_eq!(out.stdout.len(), 0);\n".repeat(8)
+        );
+        assert_eq!(classified(&test), (Kind::Automated, None));
+        assert_eq!(crate::score(&test).unwrap().kind, Kind::Automated);
+        // The user's own words after a report are still theirs.
+        let asked = format!(
+            "<task-notification>\n<result>I replaced the ``` fences:\n{sites}</result>\n\
+             </task-notification>\nwhy did it stop there?"
+        );
+        assert_eq!(kind(&asked), Kind::Task);
     }
 
     #[test]
@@ -1115,6 +1199,9 @@ mod tests {
             "이어서 해줘",
             "수고하셨어요",
             "고생하셨습니다",
+            "수고했습니다",
+            "고생 많으셨어요",
+            "수고하세요",
         ] {
             assert_eq!(kind(text), Kind::FollowUp, "{text:?}");
         }

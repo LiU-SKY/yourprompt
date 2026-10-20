@@ -57,14 +57,15 @@ pub use stats::PromptStats;
 /// what keeps this fast any more: a megabyte of short fenced blocks is
 /// classified in about 10 ms read raw and 3 ms read like this.
 ///
-/// Whether Claude Code sent the turn is the one question asked of the whole
-/// instruction, as [`score_with`] asks it: the markup that says so closes at
-/// the very end, past the cap of a long report.
+/// Whether Claude Code sent the turn is the one question asked of all of the
+/// prompt, as [`score_with`] asks it, both as it was sent and as an
+/// instruction: the markup that says so closes at the very end, past the cap
+/// of a long report.
 pub fn kind_of(text: &str) -> (Kind, Option<&'static str>) {
     let parts = prompt::split(text);
     let capped = parts.capped();
     let read = capped.as_ref().unwrap_or(&parts).instruction();
-    kind::classify(parts.instruction(), read, &yp_lang::tokenize(read))
+    kind::classify(text, parts.instruction(), read, &yp_lang::tokenize(read))
 }
 
 /// A scored prompt.
@@ -202,7 +203,7 @@ pub fn score_parts(parts: &prompt::Parts<'_>, corpus: Option<&dyn Corpus>) -> Op
     let pasted = pasted::Pasted::of(parts);
     let stats = stats::analyze(text, &tokens).with_pasted(pasted.substance());
     let code = yp_lang::token::code_regions(text);
-    let (kind, language) = kind::classify(whole, text, &tokens);
+    let (kind, language) = kind::classify(parts.original(), whole, text, &tokens);
 
     let cue_hits = resources.cue_matcher.find_masked(text, &code);
     let smell_hits = resources.smells.find_masked(text, &code);
