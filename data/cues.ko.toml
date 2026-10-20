@@ -31,6 +31,18 @@ terms = [
   # 돌려줘"), which is why io_spec lists only the return-value forms of
   # 돌려주다 rather than 돌려줘 itself.
   "실행해", "실행하", "실행시켜", "재실행해", "재실행하", "돌려",
+  # Parity with "build", "test", "merge", "commit", "push", "install" and
+  # "review". 커밋해줘 and 테스트해줘 had no objective, where "test the parser"
+  # has one. The nouns themselves are not listed: 테스트 추가해줘 and 커밋
+  # 메시지 고쳐줘 each ask for one thing.
+  "커밋해", "커밋하", "푸시해", "푸시하", "머지해", "머지하", "병합해", "병합하",
+  "빌드해", "빌드하", "테스트해", "테스트하", "리뷰해", "리뷰하", "설치해", "설치하",
+  # The loanwords above become verbs with 하다, and a stem matches before 하
+  # but not before 해, so 업데이트해줘, 롤백해줘 and 마이그레이션해줘 had no
+  # objective. Their 해 forms, as 리팩터링해 and 최적화해 already were.
+  "문서화해", "마이그레이션해", "포팅해", "롤백해", "업그레이드해", "포맷해",
+  "인라인해", "래핑해", "업데이트해", "활성화해", "비활성화해", "인코딩해",
+  "디코딩해", "정규화해", "재시도해", "컴파일해", "동기화해", "디버깅해", "디버그해",
 ]
 
 [[cue]]
@@ -41,6 +53,10 @@ terms = [
   "결과는", "결과로", "응답", "요청", "스키마", "엔드포인트", "라우트",
   "상태 코드", "종료 코드", "표준 출력", "받아서", "돌려주", "돌려줘야",
   "내보내",
+  # Parity with "should return" and "must return": 반환 matches before 하 but
+  # not before 해, so 반환해야 said nothing. Asked for, as in 반환해줘, it is
+  # the objective instead; see yp-core's nouns.
+  "반환해", "리턴해",
 ]
 
 [[cue]]

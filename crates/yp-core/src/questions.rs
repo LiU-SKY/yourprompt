@@ -37,9 +37,9 @@ use crate::prompt::is_pasted_block;
 /// without the interrogatives that asked them.
 ///
 /// `smell_hits` must already be without the pronouns pasted material
-/// anchors, so any deictic still among them points at nothing in the prompt.
-/// `material` says whether the prompt carries pasted material that reads as
-/// language.
+/// anchors, and, with no index, those a name before them anchors, so any
+/// deictic still among them points at nothing in the prompt. `material` says
+/// whether the prompt carries pasted material that reads as language.
 pub fn asked(
     text: &str,
     tokens: &[Token],
@@ -114,18 +114,17 @@ fn is_pasted(text: &str, token: &Token) -> bool {
     }
 }
 
-/// Whether the typed instruction names anything a pronoun could stand for:
-/// an identifier, a path, or inline code.
+/// Whether the typed instruction names anything a pronoun could stand for, by
+/// the test of a name this shares with the antecedents and the noun reading,
+/// [`crate::antecedents::is_name`]: "Why does login() panic when it gets an
+/// expired token?" asks about login as plainly as the same question asks
+/// about verify_token.
 ///
 /// A pasted block is not a name. It anchors pronouns by its own rule, which
 /// reads what is in it; counting it here would let a fence around anything at
 /// all rescue a question.
 fn names_something(text: &str, tokens: &[Token]) -> bool {
-    tokens.iter().any(|t| match t.kind {
-        TokenKind::Ident | TokenKind::Path => true,
-        TokenKind::CodeSpan => !is_pasted(text, t),
-        _ => false,
-    })
+    (0..tokens.len()).any(|i| crate::antecedents::is_name(text, tokens, i))
 }
 
 #[cfg(test)]
@@ -181,6 +180,29 @@ mod tests {
             ["Why"]
         );
         assert_eq!(questions("why does it call `unwrap()` here?"), ["why"]);
+    }
+
+    #[test]
+    fn a_call_or_a_qualified_name_is_something_to_ask_about() {
+        // "it" was anchored to login() while the question was dropped as
+        // being about nothing: 480.4 against 634.2 for verify_token.
+        for text in [
+            "Why does login() panic when it gets an expired token?",
+            "Why does Session::refresh panic when it gets an expired token?",
+        ] {
+            assert_eq!(questions(text), ["Why"], "{text}");
+            let corpus = crate::MapCorpus::new(10, &[("login", 1, 2, 1), ("refresh", 1, 2, 1)]);
+            for corpus in [None, Some(&corpus as &dyn crate::Corpus)] {
+                let s = crate::score_with(text, corpus).unwrap();
+                let objective = &s.actionability.components[0];
+                assert_eq!(
+                    objective.earned,
+                    crate::params::actionability::OBJECTIVE_MAX,
+                    "{text}: {}",
+                    objective.detail
+                );
+            }
+        }
     }
 
     #[test]

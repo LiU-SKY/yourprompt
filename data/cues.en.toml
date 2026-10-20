@@ -47,12 +47,21 @@ terms = [
   # noun, and "the CI run failed, fix it" pays for it as a second objective
   # (328 -> 312): the same trade "build", "test" and "release" already make.
   "run", "rerun", "re-run", "execute",
+  # Parity with 커밋해, 푸시해 and 설치해: "commit the changes" scored 65
+  # with no objective. After a determiner they are nouns, as "build" and
+  # "test" are: "this commit", "a push notification".
+  "commit", "push", "install",
+  # Parity with 리뷰해. "review" stays a polysemous verb as well, the way
+  # "look into" does, so "review the PR" asks for something and still pays
+  # for not saying what to look for; cues.ko.toml's 리뷰해 pays the same.
+  "review",
 ]
 
 [[cue]]
 id = "io_spec"
 terms = [
   "returns", "should return", "must return", "return type", "return value",
+  "return types", "return values",
   "signature", "input", "inputs", "output", "outputs", "parameter",
   "parameters", "argument", "arguments", "takes", "accepts", "expects",
   "response", "request body", "payload", "schema", "endpoint", "route",
