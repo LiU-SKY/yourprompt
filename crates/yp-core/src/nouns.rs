@@ -126,6 +126,14 @@
 //! value") stays that cue, and the Korean 반환해줘 becomes the action in place
 //! of its result shape, so neither language counts one word twice.
 //!
+//! Korean asks for something to be made so with -게 or -도록 and 해줘, where
+//! English says "make": 테스트 돌게 해줘, 설정할 수 있게 해줘. Neither the verb
+//! nor 해 is an action word, so "SESSION_TIMEOUT_SECS 를 환경 변수
+//! YP_SESSION_TIMEOUT 으로 설정할 수 있게 해줘." asked for nothing and scored
+//! 150.2. When nothing else is the action, the verb and the 해 that asks for
+//! it are, and it scores 482.0. 반환하게 해줘 is 반환 asked for, as 반환해줘 is.
+//! 이렇게 해줘 says how, as "do it like this" does, and names no action either.
+//!
 //! The same reading keeps a vague verb's charge off a noun. The polysemous
 //! verbs are charged as smells, and "check" in "fix the type check errors"
 //! cost 46.8 points, "check" in "the health check fails" 64.6. And "that"
@@ -407,6 +415,14 @@ const KO_ASKING: &[&str] = &[" 주세요", " 줘", "라", "주세요", "줘"];
 
 /// The same after 반환 and 리턴 when 하다 follows them: 반환하세요.
 const KO_ASKING_HA: &[&str] = &["하라", "하세요"];
+
+/// The endings of a Korean verb that 해줘 after it asks to be made so, as
+/// "make" does in English: 돌게 해줘, 공유하도록 해주세요.
+const KO_CAUSED: &[&str] = &["게", "도록"];
+
+/// Words ending in 게 that say how rather than what: 이렇게 해줘 asks for
+/// what "do it like this" asks for, which names no action either.
+const KO_MANNER: &[&str] = &["그렇게", "어떻게", "이렇게", "저렇게"];
 
 /// Words before a "return" that leave it opening its clause: "and return
 /// early", "just return None". Sorted, for binary search.
@@ -760,14 +776,16 @@ const COPULAS: &[&str] = &[
 /// Question words that open a question around a copula: "what is that error?".
 const QUESTION_WORDS: &[&str] = &["how", "what", "when", "where", "which", "who", "why"];
 
-/// `settled` without the action words `text` uses as nouns or as the purpose
-/// of another, and with an opening "Return" when nothing else is the action.
+/// `settled` without the action words `text` uses as nouns, as the purpose of
+/// another or in a clause that says when, and with an opening "Return", or a
+/// Korean request to make something so, when nothing else is the action.
 ///
 /// `found` is every cue hit the matcher made, before any prohibition settled
 /// one away: "test" in "don't change test files" is still the object of
-/// "change". It is returned with the "Return" added, so that grounding reads
-/// it as an instruction word. Hits other than action verbs pass through
-/// unchanged and in order.
+/// "change". It is returned with the "Return" or the request added, so that
+/// grounding reads it as an instruction word. Hits other than action verbs
+/// pass through unchanged and in order, but for a 반환 asked for, which
+/// becomes one.
 pub(crate) fn strip(
     text: &str,
     tokens: &[Token],
@@ -791,6 +809,9 @@ pub(crate) fn strip(
             kept.push(hit);
         } else if let Some(hit) = kept.iter_mut().find(|h| asks_to_return(text, h)) {
             hit.id = CueId::ActionVerb;
+        } else if let Some(hit) = caused(text, tokens, &found) {
+            found.push(hit.clone());
+            kept.push(hit);
         }
     }
     (kept, found)
@@ -1185,26 +1206,13 @@ fn purpose_of(text: &str, breaks: &[usize], previous: Span, verb: Span) -> bool 
 /// The first "return" in `tokens` that opens a sentence or a clause and that
 /// no cue phrase holds, as an action-verb hit.
 fn returned(text: &str, tokens: &[Token], found: &[Hit<CueId>]) -> Option<Hit<CueId>> {
-    // Sorted by start, with the furthest end reached so far, so that whether
-    // any of them holds a word is one binary search.
-    let mut claimed: Vec<Span> = found.iter().map(|h| h.span).collect();
-    claimed.sort_unstable();
-    let mut furthest = 0;
-    let reach: Vec<usize> = claimed
-        .iter()
-        .map(|c| {
-            furthest = furthest.max(c.end);
-            furthest
-        })
-        .collect();
-    let held = |span: Span| {
-        let at = claimed.partition_point(|c| c.start <= span.start);
-        at > 0 && reach[at - 1] >= span.end
-    };
+    let claimed = Claimed::new(found);
     tokens
         .iter()
         .filter(|t| t.kind == TokenKind::Word && t.text == "return")
-        .find(|t| !held(t.span) && opens_clause(text, t.span.start) && !subject(text, t.span.end))
+        .find(|t| {
+            !claimed.holds(t.span) && opens_clause(text, t.span.start) && !subject(text, t.span.end)
+        })
         .map(|t| Hit {
             id: CueId::ActionVerb,
             term: t.span.slice(text).to_string(),
@@ -1212,11 +1220,47 @@ fn returned(text: &str, tokens: &[Token], found: &[Hit<CueId>]) -> Option<Hit<Cu
         })
 }
 
+/// The spans of some hits, sorted by start, with the furthest end reached so
+/// far, so that whether any of them holds or touches a word is one binary
+/// search.
+struct Claimed {
+    spans: Vec<Span>,
+    reach: Vec<usize>,
+}
+
+impl Claimed {
+    fn new(found: &[Hit<CueId>]) -> Self {
+        let mut spans: Vec<Span> = found.iter().map(|h| h.span).collect();
+        spans.sort_unstable();
+        let mut furthest = 0;
+        let reach = spans
+            .iter()
+            .map(|c| {
+                furthest = furthest.max(c.end);
+                furthest
+            })
+            .collect();
+        Self { spans, reach }
+    }
+
+    /// Whether one of them holds all of `span`.
+    fn holds(&self, span: Span) -> bool {
+        let at = self.spans.partition_point(|c| c.start <= span.start);
+        at > 0 && self.reach[at - 1] >= span.end
+    }
+
+    /// Whether one of them holds any of `span`.
+    fn touches(&self, span: Span) -> bool {
+        let at = self.spans.partition_point(|c| c.start < span.end);
+        at > 0 && self.reach[at - 1] > span.start
+    }
+}
+
 /// Whether the word at `at` opens a sentence or a clause: it starts the text
 /// or a line, follows punctuation, or follows a word like "and" or "just" that
 /// no modal stands before. "it should also return monomials" says what
 /// something should do, as "should return" does.
-fn opens_clause(text: &str, at: usize) -> bool {
+pub(crate) fn opens_clause(text: &str, at: usize) -> bool {
     let before = text[..at].trim_end_matches([' ', '\t']);
     match before.chars().next_back() {
         None => true,
@@ -1234,18 +1278,71 @@ fn opens_clause(text: &str, at: usize) -> bool {
 }
 
 /// Whether `hit` is 반환 or 리턴 asked for: 반환해줘, 리턴해 주세요,
-/// 반환하세요.
+/// 반환하세요, and made to: 반환하게 해줘, as "make it return" asks.
 fn asks_to_return(text: &str, hit: &Hit<CueId>) -> bool {
-    let endings = match hit.term.as_str() {
-        "반환해" | "리턴해" => KO_ASKING,
-        "반환" | "리턴" => KO_ASKING_HA,
-        _ => return false,
-    };
+    let rest = &text[hit.span.end..];
     hit.id == CueId::IoSpec
-        && endings.iter().any(|ending| {
-            text[hit.span.end..]
-                .strip_prefix(ending)
-                .is_some_and(|rest| !rest.starts_with(yp_lang::token::is_hangul))
+        && match hit.term.as_str() {
+            "반환해" | "리턴해" => ends_asking(rest, KO_ASKING),
+            "반환" | "리턴" => {
+                ends_asking(rest, KO_ASKING_HA)
+                    || rest.strip_prefix('하').is_some_and(|after| {
+                        KO_CAUSED
+                            .iter()
+                            .any(|c| after.strip_prefix(c).is_some_and(made))
+                    })
+            }
+            _ => false,
+        }
+}
+
+/// Whether `rest` starts with one of `endings` and nothing Korean goes on
+/// after it.
+fn ends_asking(rest: &str, endings: &[&str]) -> bool {
+    endings.iter().any(|ending| {
+        rest.strip_prefix(ending)
+            .is_some_and(|after| !after.starts_with(yp_lang::token::is_hangul))
+    })
+}
+
+/// Whether `rest`, the text after a verb's -게 or -도록, asks for it to be
+/// made so: 해줘, 해 주세요, 하세요.
+fn made(rest: &str) -> bool {
+    let rest = rest.trim_start_matches([' ', '\t']);
+    rest.strip_prefix('해')
+        .is_some_and(|after| ends_asking(after, KO_ASKING))
+        || ends_asking(rest, KO_ASKING_HA)
+}
+
+/// A Korean request that something be made so, as an action-verb hit over
+/// the verb and the 해 that asks for it: 테스트 돌게 해줘, 기다리게 해줘,
+/// 공유하도록 해주세요. "make" is an action word, and these asked for
+/// nothing where "make the tests run" asks for one thing. A word a cue holds
+/// is left to it: 반환하게 해줘 is 반환 asked for.
+fn caused(text: &str, tokens: &[Token], found: &[Hit<CueId>]) -> Option<Hit<CueId>> {
+    let claimed = Claimed::new(found);
+    tokens
+        .iter()
+        .find(|t| {
+            let word = t.text.as_str();
+            t.kind == TokenKind::Hangul
+                && KO_CAUSED
+                    .iter()
+                    .any(|c| word.len() > c.len() && word.ends_with(c))
+                && !KO_MANNER.contains(&word)
+                && made(&text[t.span.end..])
+                && !claimed.touches(t.span)
+        })
+        .map(|t| {
+            // Through the 해 or 하 that asks: "돌게 해".
+            let rest = &text[t.span.end..];
+            let gap = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+            let span = Span::new(t.span.start, t.span.end + gap + '해'.len_utf8());
+            Hit {
+                id: CueId::ActionVerb,
+                term: span.slice(text).to_string(),
+                span,
+            }
         })
 }
 
@@ -1887,14 +1984,42 @@ mod tests {
 
     #[test]
     fn an_opening_return_is_not_also_a_result_shape() {
-        let text = "반환해줘";
-        let found = yp_lang::resources().unwrap().cue_matcher.find(text);
-        let settled = crate::negation::settle(text, &found);
-        let (settled, _) = strip(text, &yp_lang::tokenize(text), found, settled);
-        assert!(
-            !settled.iter().any(|h| h.id == CueId::IoSpec),
-            "{settled:?}"
-        );
+        for text in ["반환해줘", "Err(()) 를 반환하게 해줘"] {
+            let found = yp_lang::resources().unwrap().cue_matcher.find(text);
+            let settled = crate::negation::settle(text, &found);
+            let (settled, _) = strip(text, &yp_lang::tokenize(text), found, settled);
+            assert!(
+                !settled.iter().any(|h| h.id == CueId::IoSpec),
+                "{text}: {settled:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_korean_request_to_make_something_so_is_the_action() {
+        // Each asked for nothing, where "make the tests run" asks for one
+        // thing.
+        for (text, wanted) in [
+            ("main 에 push 할 때 테스트 돌게 해줘.", "돌게 해"),
+            (
+                "SESSION_TIMEOUT_SECS 를 환경 변수 YP_SESSION_TIMEOUT 으로 설정할 수 있게 해줘.",
+                "있게 해",
+            ),
+            ("고객마다 한 번씩만 나오게 해 주세요.", "나오게 해"),
+            (
+                "두 사전이 같은 타입을 공유하도록 해주세요.",
+                "공유하도록 해",
+            ),
+            ("비어 있으면 Err(()) 를 반환하게 해줘.", "반환"),
+        ] {
+            assert_eq!(verbs(text), [wanted], "{text}");
+        }
+        // Another action is the objective, and the request adds none; "how"
+        // names no action, and neither does a report of what was done.
+        assert_eq!(verbs("파서 고치고 테스트 돌게 해줘"), ["고치"]);
+        for text in ["이렇게 해줘", "저거 좀 어떻게 해줘", "테스트 돌게 했어"] {
+            assert!(verbs(text).is_empty(), "{text}: {:?}", verbs(text));
+        }
     }
 
     #[test]
@@ -2041,9 +2166,12 @@ mod tests {
         // In each pair the same action words are found, but in the first
         // text every one of them looks back to the same earlier action, or
         // ahead to the same later one, across all the others. Read that way
-        // for each of them, the work would be quadratic. Timed against each
-        // other, the two texts measure how the work grows, not how fast the
-        // machine is.
+        // for each of them, the work would be quadratic. In the last pair no
+        // action is found, and in its first text every word asks for
+        // something to be made so beside a cue that holds it, which a search
+        // through every cue for each would make quadratic too. Timed against
+        // each other, the two texts measure how the work grows, not how fast
+        // the machine is.
         use std::time::{Duration, Instant};
         let time = |text: &str| {
             let r = yp_lang::resources().unwrap();
@@ -2074,6 +2202,10 @@ mod tests {
             (
                 "the type check that returns ".repeat(4_000),
                 "the type. check. that. returns. ".repeat(4_000),
+            ),
+            (
+                "입력하게 해줘 ".repeat(10_000),
+                "입력하게. 해줘. ".repeat(10_000),
             ),
         ] {
             let (heavy_time, light_time) = (time(&heavy), time(&light));
