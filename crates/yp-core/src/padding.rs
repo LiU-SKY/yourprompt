@@ -1313,6 +1313,11 @@ fn clauses(text: &str) -> Vec<Span> {
     let mut region = 0usize;
     // Where the current line's first character other than a space is.
     let mut line: Option<usize> = None;
+    // The last character other than a space in the clause so far. Found by
+    // trimming the clause at every line break, it cost time that grew as the
+    // square of the line breaks after a clause that ends in a colon: 64 KB of
+    // them took the hook 0.7 s.
+    let mut last: Option<char> = None;
     let mut chars = text.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         if c == '\n' {
@@ -1323,22 +1328,25 @@ fn clauses(text: &str) -> Vec<Span> {
         while code.get(region).is_some_and(|r| r.end <= i) {
             region += 1;
         }
-        if code.get(region).is_some_and(|r| r.start <= i) {
-            continue;
-        }
-        let next = chars.peek().map(|&(_, n)| n);
-        let numbers = c == '.'
-            && line.is_some_and(|l| i - l <= 3 && text[l..i].bytes().all(|b| b.is_ascii_digit()));
-        let ends = match c {
-            _ if numbers => false,
-            ',' | ';' | '.' | '!' | '?' => next.is_none_or(char::is_whitespace),
-            '\n' => line_break_ends(&text[start..i], &text[i + 1..]),
-            _ => false,
+        let ends = !code.get(region).is_some_and(|r| r.start <= i) && {
+            let next = chars.peek().map(|&(_, n)| n);
+            let numbers = c == '.'
+                && line
+                    .is_some_and(|l| i - l <= 3 && text[l..i].bytes().all(|b| b.is_ascii_digit()));
+            match c {
+                _ if numbers => false,
+                ',' | ';' | '.' | '!' | '?' => next.is_none_or(char::is_whitespace),
+                '\n' => line_break_ends(&text[start..i], &text[i + 1..]),
+                _ => false,
+            }
         };
-        if ends && !text[start..i].trim_end().ends_with(':') {
+        if ends && last != Some(':') {
             let end = i + c.len_utf8();
             out.push(Span::new(start, end));
             start = end;
+            last = None;
+        } else if !c.is_whitespace() {
+            last = Some(c);
         }
     }
     if start < text.len() || out.is_empty() {
@@ -1618,6 +1626,15 @@ mod tests {
             pieces("Call `f(a, b)` with 3.5. Then stop"),
             ["Call `f(a, b)` with 3.5.", "Then stop"]
         );
+        // A label reads on over blank lines and spaces, however they end.
+        assert_eq!(
+            pieces("Fix it:\n\n\nKeep it. Then stop"),
+            ["Fix it:\n\n\nKeep it.", "Then stop"]
+        );
+        assert_eq!(
+            pieces("Fix it: \r\n\t\r\n Keep it, then stop"),
+            ["Fix it: \r\n\t\r\n Keep it,", "then stop"]
+        );
     }
 
     #[test]
@@ -1664,6 +1681,41 @@ mod tests {
             assert!(
                 salad < plain * 20 + Duration::from_millis(100),
                 "{label} {salad:?}, plain {plain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_breaks_after_a_colon_cost_what_they_do_after_a_full_stop() {
+        // A clause that ends in a colon runs on into what follows, and every
+        // line break after one trimmed the whole clause again to see whether
+        // it still ended in the colon. 64 KB of them took the hook 0.7 s, and
+        // the same text with a full stop for the colon 30 ms. Timed against
+        // that full stop, each shape measures how the work grows, not how
+        // fast the machine is.
+        let time = |text: &str| {
+            let tokens = yp_lang::tokenize(text);
+            let found = yp_lang::resources().unwrap().cue_matcher.find(text);
+            (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    std::hint::black_box(judge(text, &tokens, &found, &found));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        for gap in ["\n", "\r\n", "\n\t"] {
+            let fill = gap.repeat(65_000 / gap.len());
+            let colon = time(&format!(
+                "Keep the output unchanged. Fix verify_token:{fill}x"
+            ));
+            let stop = time(&format!(
+                "Keep the output unchanged. Fix verify_token.{fill}x"
+            ));
+            assert!(
+                colon < stop * 20 + Duration::from_millis(100),
+                "{gap:?} after a colon took {colon:?}, after a full stop {stop:?}"
             );
         }
     }
