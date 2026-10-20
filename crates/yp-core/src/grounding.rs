@@ -235,12 +235,29 @@ fn qualified_name(tokens: &[Token], i: usize) -> Option<Vec<usize>> {
     (chain.len() > 1).then_some(chain)
 }
 
-/// Record every part of a qualified name.
+/// The most parts of a qualified name that are read.
+///
+/// Each part is recorded under the whole name up to it, so a part costs a copy
+/// of everything before it. Read to its end, a 64 KB `a::a::…` of 21,845 parts
+/// copied 716 MB: the hook took 6.7 s against the demo's sample, past its 5 s
+/// timeout, and the page ran for almost four minutes and then trapped. Real
+/// names stop far short of this. Of the 169,092 in the 39 crates this
+/// workspace depends on, the longest has 8 parts, `super::super::super::
+/// Win32::Security::Authentication::Identity::SEC_APPLICATION_PROTOCOL_LIST`
+/// in windows-sys; libstdc++'s headers reach 5, Python 3.11's library with
+/// its site-packages 6, and SWE-bench Lite's issues 2.
+const MAX_QUALIFIED_PARTS: usize = 32;
+
+/// Record every part of a qualified name, up to [`MAX_QUALIFIED_PARTS`] of
+/// them.
 ///
 /// The first part is looked up on its own. Each later part can denote no more
 /// things than the part before it does, since a type has one member of a
 /// given name, and nothing at all when either is missing here: no
 /// `MoonError::Full` exists where `MoonError` does not.
+///
+/// A chain longer than that is not a name anyone wrote, and the parts past it
+/// are passed over rather than read as names of their own.
 fn push_qualified(
     out: &mut Vec<Referent>,
     text: &str,
@@ -250,7 +267,7 @@ fn push_qualified(
 ) {
     let start = tokens[chain[0]].span.start;
     let mut prefix: Option<Option<TermFacts>> = None;
-    for &k in chain {
+    for &k in chain.iter().take(MAX_QUALIFIED_PARTS) {
         let token = &tokens[k];
         // `crate::`, `self::` and `Self::new()` qualify by syntax, not by
         // anything this repository defines.
