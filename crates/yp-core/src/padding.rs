@@ -46,10 +46,11 @@
 //! [`LIST_CUES`] of them beyond its names, or a run of short clauses, each a
 //! cue with at most one more word beside it and any letters and values, two
 //! of them a single cue word or three of them keywords, as in "Tests pass,
-//! assert, verify." and "Returns 1, input 2, schema 3." A sentence is a
-//! clause of more than one word held together by a function word other than
-//! an article, by a Korean particle, or by the objective and the article of
-//! its object; see [`ARTICLES`].
+//! assert, verify." and "Returns 1, input 2, schema 3." A clause of one
+//! plain word between the entries, "Note.", does not end the run. A sentence
+//! is a clause of more than one word held together by a function word other
+//! than an article, by a Korean particle, or by the objective and the
+//! article of its object; see [`ARTICLES`].
 //!
 //! The cue words left over are padding. They earn nothing, and count for
 //! nothing toward the substance of clarity's absence credit, which counts the
@@ -902,6 +903,23 @@ impl Clause {
         !self.says() && self.cues.is_empty() && self.markers == 0
     }
 
+    /// Whether it is filler that can stand between the entries of a list:
+    /// blank, or one plain word with no cue and no objective, "Note.", "-
+    /// logging", 메모. One word is not a sentence about the entries around
+    /// it. Read as the end of a list, "Note." after every second entry of a
+    /// list with a plain word beside each cue word took "Refactor
+    /// verify_token." to 907.4 with the sample, an S, where the same entries
+    /// unbroken score 517.9. It scores 536.1.
+    fn filler(&self) -> bool {
+        self.blank()
+            || (self.cues.is_empty()
+                && self.markers == 0
+                && !self.objective
+                && !self.headed
+                && !self.solid
+                && self.names.len() == 1)
+    }
+
     /// Whether it is a single cue word with nothing beside it but articles
     /// and function words: "assert", "the verify", "Only all".
     fn single(&self) -> bool {
@@ -1175,11 +1193,22 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
     // list of cue words collects them: "Add login tests.\n- verify login\n-
     // verify logout\n- verify refresh" is a checklist, and as a list it
     // scored 251.9, against 422.6.
+    //
+    // Filler between the entries neither ends a run nor counts toward it,
+    // and once the run is a list its words back nothing, as the word beside
+    // each cue backs nothing. Counted, three "Note."s between the entries
+    // after "Refactor verify_token." bought back the clarity of the list
+    // they no longer break up, 629.8 against 536.1 with the sample, and
+    // three "So."s, which are blank, did the same before. Before the first
+    // entry or after the last, filler stands beside the list rather than in
+    // it: "- pagination" after four keyword entries keeps its 516.5 without
+    // an index, where idle it scored 468.4.
     let mut listed = vec![false; clauses.len()];
+    let mut between = vec![false; clauses.len()];
     let mut run = 0usize;
     while run < clauses.len() {
         let end = (run..clauses.len())
-            .find(|&c| !clauses[c].entry() && !clauses[c].blank())
+            .find(|&c| !clauses[c].entry() && !clauses[c].filler())
             .unwrap_or(clauses.len());
         let (mut singles, mut keywords) = (0usize, 0usize);
         let mut terms: HashSet<&str> = HashSet::new();
@@ -1195,6 +1224,11 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         }
         if singles >= 2 || keywords >= 3 {
             listed[run..end].fill(true);
+            let first = (run..end).find(|&c| clauses[c].entry()).unwrap_or(end);
+            let last = (run..end).rfind(|&c| clauses[c].entry()).unwrap_or(run);
+            for c in first..last {
+                between[c] = !clauses[c].entry();
+            }
             for clause in &mut clauses[run..end] {
                 clause.names.clear();
                 clause.headed = false;
@@ -1399,7 +1433,10 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         .collect();
     let idle: Vec<bool> = tokens
         .iter()
-        .map(|t| empty[clause_of(t.span.start)] == Some(true))
+        .map(|t| {
+            let c = clause_of(t.span.start);
+            empty[c] == Some(true) || between[c]
+        })
         .collect();
     let glue = glue(tokens, &roles, &covered, &idle);
     Verdict {
@@ -2057,6 +2094,54 @@ mod tests {
         assert_kept(&[
             "Add a `yp export` command. JSON output. Return type unchanged. Tests pass.",
             "Add login tests.\n- verify login\n- verify logout\n- verify refresh",
+        ]);
+    }
+
+    #[test]
+    fn a_word_between_the_entries_does_not_break_up_their_list() {
+        // One plain word after every second entry of a list with a word or a
+        // value beside each cue word cut it into pairs too short to be a
+        // list, as a sentence, as a bullet, in Korean, between values, or
+        // with a different word each time: after "Refactor verify_token."
+        // the first took the sample to 907.4, an S.
+        let all = |text: &str| {
+            let (_, settled, verdict) = judged(text);
+            let bound = settled.iter().filter(|h| is_bound(h.id)).count();
+            assert!(bound >= 8, "{text}");
+            assert_eq!(
+                verdict.hits.iter().filter(|&&p| p).count(),
+                bound,
+                "{text}: {:?}",
+                padded(text)
+            );
+        };
+        for text in [
+            "Refactor `x`. Returns red, input blue. Note. Schema gold, assert pear. Note. Verify plum, only north. Note. Keep south, unchanged east.",
+            "Refactor `x`.\n- returns red\n- input blue\n- note\n- schema gold\n- assert pear\n- note\n- verify plum\n- only north\n- note\n- keep south\n- unchanged east",
+            "리팩터링해줘 `x`. 반환 빨강, 입력 파랑. 메모. 스키마 금색, 테스트 통과 사과. 메모. 그대로 북쪽, 유지해 남쪽. 메모. 하위 호환 동쪽, 커버리지 서쪽.",
+            "Refactor `x`. Returns 1, input 2. Note. Output 3, expected 4. Note. Coverage 5, exit code 6. Note. Must return 7, should equal 8.",
+            "Refactor `x`. Returns red, input blue. Details. Schema gold, assert pear. Constraints. Verify plum, only north. Red. Keep south, unchanged east.",
+        ] {
+            all(text);
+        }
+        // Between the entries of a list its words back nothing, as the word
+        // beside each cue backs nothing; before the first entry or after the
+        // last, they stand beside the list rather than in it.
+        let list = "Refactor `x`. Returns red. Input blue. Schema gold.";
+        assert_eq!(
+            unbacked_in("Refactor `x`. Returns red. Note. Input blue. So. Schema gold."),
+            unbacked_in(list) + 2
+        );
+        assert_eq!(unbacked_in(&format!("{list} Note.")), unbacked_in(list));
+        // A word that heads a list, with or without its colon, stands before
+        // the list rather than in it, and a checklist that names one cue word
+        // again and again is no list of cue words for a word between its
+        // items.
+        assert_kept(&[
+            "Add a `yp export` command.\nRequirements:\n- JSON output\n- keep backward compatibility\n- tests pass",
+            "Add a `yp export` command.\nRequirements\n- JSON output\n- keep backward compatibility\n- tests pass",
+            "Add login tests.\n- verify login\n- note\n- verify logout\n- verify refresh",
+            "Make login() return a Result. Note. Keep the public API. Verify expired tokens. Only src/auth.",
         ]);
     }
 
