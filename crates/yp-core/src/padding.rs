@@ -29,7 +29,8 @@
 //!   counts itself: "Keep the response schema unchanged", 입력과 출력은
 //!   그대로 유지하고. So it does for a boundary when the two stand alone,
 //!   "Return type unchanged", and a format beside the I/O cue it describes
-//!   counts with it, "JSON output", JSON 반환; see [`FORMATS`].
+//!   counts with it, "JSON output", JSON 반환, as does "only" beside the
+//!   two, "Output JSON only"; see [`FORMATS`].
 //! - **A statement about the result.** An I/O cue counts in a sentence, or as
 //!   the value of a label such as "Output:"; see [`names_its_own`]. A word
 //!   alone between commas after such a sentence is the next item of its
@@ -46,10 +47,11 @@
 //! [`LIST_CUES`] of them beyond its names, or a run of short clauses, each a
 //! cue with at most one more word beside it and any letters and values, two
 //! of them a single cue word or three of them keywords, as in "Tests pass,
-//! assert, verify." and "Returns 1, input 2, schema 3." A sentence is a
-//! clause of more than one word held together by a function word other than
-//! an article, by a Korean particle, or by the objective and the article of
-//! its object; see [`ARTICLES`].
+//! assert, verify." and "Returns 1, input 2, schema 3." A clause of one
+//! plain word between the entries, "Note.", does not end the run. A sentence
+//! is a clause of more than one word held together by a function word other
+//! than an article, by a Korean particle, or by the objective and the
+//! article of its object; see [`ARTICLES`].
 //!
 //! The cue words left over are padding. They earn nothing, and count for
 //! nothing toward the substance of clarity's absence credit, which counts the
@@ -164,6 +166,10 @@ const IO_NOUNS: &[&str] = &[
 /// describes, a format says what the result looks like: "JSON output",
 /// "Returns JSON", "YAML input", JSON 반환. Sorted, for binary search.
 const FORMATS: &[&str] = &["json", "stderr", "stdout", "yaml", "표준 출력"];
+
+/// The scope cue that bounds a result to the format beside it, "Output JSON
+/// only", and so may stand with the two; see [`Clause::format_pair`].
+const ONLY: &str = "only";
 
 /// Cue words that take a value: "returns 404", "exit code 1", "expected 5",
 /// "limit to 100", 404 반환. A number beside one of them is what it returns,
@@ -815,6 +821,8 @@ struct Clause {
     /// categories, a bit each.
     cues: HashSet<String>,
     kinds: u8,
+    /// How many of those cue words are I/O cues.
+    io: usize,
     /// How many example markers it holds.
     markers: usize,
     /// How many words it holds, values aside, and how many of them are cue
@@ -858,9 +866,15 @@ impl Clause {
     }
 
     /// How many things it holds that say something: cues and plain names.
-    /// Letters and values name nothing.
+    /// Letters and values name nothing, and "only" that bounds a format pair
+    /// is part of the pair, so the three are as short an entry as the two
+    /// and a run of them is a list as a run of format pairs is. Read as a
+    /// third unit, it took each pair out of its list: "Refactor `x`. returns
+    /// json only, input yaml only, output stdout only." scored 775.2 for it,
+    /// and scores 318.2.
     fn units(&self) -> usize {
-        self.cues.len() + self.markers + self.names.len()
+        let only = self.cues.contains(ONLY) && self.format_pair();
+        self.cues.len() + self.markers + self.names.len() - usize::from(only)
     }
 
     /// Whether it is short enough to be an entry of a list: a cue and at
@@ -900,6 +914,43 @@ impl Clause {
     /// scores 500.5.
     fn blank(&self) -> bool {
         !self.says() && self.cues.is_empty() && self.markers == 0
+    }
+
+    /// Whether it is filler that can stand between the entries of a list:
+    /// blank, or one plain word with no cue and no objective, "Note.", "-
+    /// logging", 메모. One word is not a sentence about the entries around
+    /// it. Read as the end of a list, "Note." after every second entry of a
+    /// list with a plain word beside each cue word took "Refactor
+    /// verify_token." to 907.4 with the sample, an S, where the same entries
+    /// unbroken score 517.9. It scores 536.1.
+    fn filler(&self) -> bool {
+        self.blank()
+            || (self.cues.is_empty()
+                && self.markers == 0
+                && !self.objective
+                && !self.headed
+                && !self.solid
+                && self.names.len() == 1)
+    }
+
+    /// Whether it is a format beside the I/O cue it describes and nothing
+    /// else, "JSON output", "Returns JSON", JSON 반환, but for "only", which
+    /// bounds the result to that format: "Output JSON only".
+    fn format_pair(&self) -> bool {
+        let only = self.cues.contains(ONLY);
+        self.io == 2
+            && self.cues.len() == 2 + usize::from(only)
+            && self.markers + self.names.len() == 0
+            && !self.objective
+            && !self.function
+            && !self.solid
+            && !self.labelled
+            && self
+                .cues
+                .iter()
+                .filter(|t| FORMATS.binary_search(&t.trim()).is_ok())
+                .count()
+                == 1
     }
 
     /// Whether it is a single cue word with nothing beside it but articles
@@ -1154,7 +1205,9 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         {
             clause.io_nouns.push(term.clone());
         }
-        clause.cues.insert(term);
+        if clause.cues.insert(term) && hit.id == CueId::IoSpec {
+            clause.io += 1;
+        }
         clause.kinds |= match hit.id {
             CueId::IoSpec => 1,
             CueId::Acceptance => 2,
@@ -1175,11 +1228,22 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
     // list of cue words collects them: "Add login tests.\n- verify login\n-
     // verify logout\n- verify refresh" is a checklist, and as a list it
     // scored 251.9, against 422.6.
+    //
+    // Filler between the entries neither ends a run nor counts toward it,
+    // and once the run is a list its words back nothing, as the word beside
+    // each cue backs nothing. Counted, three "Note."s between the entries
+    // after "Refactor verify_token." bought back the clarity of the list
+    // they no longer break up, 629.8 against 536.1 with the sample, and
+    // three "So."s, which are blank, did the same before. Before the first
+    // entry or after the last, filler stands beside the list rather than in
+    // it: "- pagination" after four keyword entries keeps its 516.5 without
+    // an index, where idle it scored 468.4.
     let mut listed = vec![false; clauses.len()];
+    let mut between = vec![false; clauses.len()];
     let mut run = 0usize;
     while run < clauses.len() {
         let end = (run..clauses.len())
-            .find(|&c| !clauses[c].entry() && !clauses[c].blank())
+            .find(|&c| !clauses[c].entry() && !clauses[c].filler())
             .unwrap_or(clauses.len());
         let (mut singles, mut keywords) = (0usize, 0usize);
         let mut terms: HashSet<&str> = HashSet::new();
@@ -1195,6 +1259,11 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         }
         if singles >= 2 || keywords >= 3 {
             listed[run..end].fill(true);
+            let first = (run..end).find(|&c| clauses[c].entry()).unwrap_or(end);
+            let last = (run..end).rfind(|&c| clauses[c].entry()).unwrap_or(run);
+            for c in first..last {
+                between[c] = !clauses[c].entry();
+            }
             for clause in &mut clauses[run..end] {
                 clause.names.clear();
                 clause.headed = false;
@@ -1207,21 +1276,20 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
     // describes, "JSON output", "Returns JSON", JSON 반환, and the two count
     // together. Neither names the other, and "Add a `yp export` command.
     // JSON output. Tests pass." scored 569.2 with both as padding, against
-    // 763.6.
+    // 763.6. "only" beside the two bounds the result to that format and
+    // counts with them: with all three as padding, "Add a report command.
+    // Output JSON only." scored 366.8, against 655.8.
     let mut counted: HashSet<(CueId, String)> = HashSet::new();
     for (c, clause) in clauses.iter().enumerate() {
-        if !listed[c]
-            && clause.short()
-            && clause.kinds == 1
-            && clause.cues.len() == 2
-            && clause
-                .cues
-                .iter()
-                .filter(|t| FORMATS.binary_search(&t.trim()).is_ok())
-                .count()
-                == 1
-        {
-            counted.extend(clause.cues.iter().map(|t| (CueId::IoSpec, t.clone())));
+        if !listed[c] && clause.format_pair() {
+            counted.extend(clause.cues.iter().map(|t| {
+                let id = if t == ONLY {
+                    CueId::ScopeConstraint
+                } else {
+                    CueId::IoSpec
+                };
+                (id, t.clone())
+            }));
         }
     }
 
@@ -1399,7 +1467,10 @@ fn judge(text: &str, tokens: &[Token], found: &[Hit<CueId>], settled: &[Hit<CueI
         .collect();
     let idle: Vec<bool> = tokens
         .iter()
-        .map(|t| empty[clause_of(t.span.start)] == Some(true))
+        .map(|t| {
+            let c = clause_of(t.span.start);
+            empty[c] == Some(true) || between[c]
+        })
         .collect();
     let glue = glue(tokens, &roles, &covered, &idle);
     Verdict {
@@ -1871,6 +1942,24 @@ mod tests {
             padded("Add a `yp export` command. Input schema."),
             ["Input", "schema"]
         );
+        // "only" beside the two bounds the result to that format, and counts
+        // with them; beside a format and any other cue it does not.
+        assert_kept(&[
+            "Add a report command. Output JSON only.",
+            "Add a report command. Only output JSON.",
+            "Add a report command. Returns YAML only.",
+            "Output JSON only.",
+        ]);
+        assert_eq!(
+            padded("Add a report command. Keep JSON only."),
+            ["Keep", "JSON", "only"]
+        );
+        // The three are one entry of a list, as the two are, and a run of
+        // them is a list.
+        assert_eq!(
+            padded("Refactor `x`. returns json only, input yaml only, output stdout only.").len(),
+            9
+        );
     }
 
     #[test]
@@ -2057,6 +2146,54 @@ mod tests {
         assert_kept(&[
             "Add a `yp export` command. JSON output. Return type unchanged. Tests pass.",
             "Add login tests.\n- verify login\n- verify logout\n- verify refresh",
+        ]);
+    }
+
+    #[test]
+    fn a_word_between_the_entries_does_not_break_up_their_list() {
+        // One plain word after every second entry of a list with a word or a
+        // value beside each cue word cut it into pairs too short to be a
+        // list, as a sentence, as a bullet, in Korean, between values, or
+        // with a different word each time: after "Refactor verify_token."
+        // the first took the sample to 907.4, an S.
+        let all = |text: &str| {
+            let (_, settled, verdict) = judged(text);
+            let bound = settled.iter().filter(|h| is_bound(h.id)).count();
+            assert!(bound >= 8, "{text}");
+            assert_eq!(
+                verdict.hits.iter().filter(|&&p| p).count(),
+                bound,
+                "{text}: {:?}",
+                padded(text)
+            );
+        };
+        for text in [
+            "Refactor `x`. Returns red, input blue. Note. Schema gold, assert pear. Note. Verify plum, only north. Note. Keep south, unchanged east.",
+            "Refactor `x`.\n- returns red\n- input blue\n- note\n- schema gold\n- assert pear\n- note\n- verify plum\n- only north\n- note\n- keep south\n- unchanged east",
+            "리팩터링해줘 `x`. 반환 빨강, 입력 파랑. 메모. 스키마 금색, 테스트 통과 사과. 메모. 그대로 북쪽, 유지해 남쪽. 메모. 하위 호환 동쪽, 커버리지 서쪽.",
+            "Refactor `x`. Returns 1, input 2. Note. Output 3, expected 4. Note. Coverage 5, exit code 6. Note. Must return 7, should equal 8.",
+            "Refactor `x`. Returns red, input blue. Details. Schema gold, assert pear. Constraints. Verify plum, only north. Red. Keep south, unchanged east.",
+        ] {
+            all(text);
+        }
+        // Between the entries of a list its words back nothing, as the word
+        // beside each cue backs nothing; before the first entry or after the
+        // last, they stand beside the list rather than in it.
+        let list = "Refactor `x`. Returns red. Input blue. Schema gold.";
+        assert_eq!(
+            unbacked_in("Refactor `x`. Returns red. Note. Input blue. So. Schema gold."),
+            unbacked_in(list) + 2
+        );
+        assert_eq!(unbacked_in(&format!("{list} Note.")), unbacked_in(list));
+        // A word that heads a list, with or without its colon, stands before
+        // the list rather than in it, and a checklist that names one cue word
+        // again and again is no list of cue words for a word between its
+        // items.
+        assert_kept(&[
+            "Add a `yp export` command.\nRequirements:\n- JSON output\n- keep backward compatibility\n- tests pass",
+            "Add a `yp export` command.\nRequirements\n- JSON output\n- keep backward compatibility\n- tests pass",
+            "Add login tests.\n- verify login\n- note\n- verify logout\n- verify refresh",
+            "Make login() return a Result. Note. Keep the public API. Verify expired tokens. Only src/auth.",
         ]);
     }
 

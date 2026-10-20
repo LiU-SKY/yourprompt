@@ -551,6 +551,24 @@ mod tests {
              에서만 7, 그대로 8, 유지해 9.",
             "리팩터링해줘 `x`. 반환 하나, 입력 둘, 스키마 셋. 테스트 통과 넷, 커버리지 다섯, \
              기대값 여섯. 에서만 일곱, 그대로 여덟, 유지해 아홉.",
+            // One plain word after every second entry cut the same list into
+            // pairs too short to be lists: 902.5 as sentences, 925.5 as
+            // bullets, 905.7 in Korean, 845.6 between values, 862.4 with no
+            // name at all, 807.2 with "Details." for the word, and 820.6 at
+            // fourteen words.
+            "Refactor `x`. Returns red, input blue. Note. Schema gold, assert pear. Note. \
+             Verify plum, only north. Note. Keep south, unchanged east.",
+            "Refactor `x`.\n- returns red\n- input blue\n- note\n- schema gold\n- assert pear\n\
+             - note\n- verify plum\n- only north\n- note\n- keep south\n- unchanged east",
+            "리팩터링해줘 `x`. 반환 빨강, 입력 파랑. 메모. 스키마 금색, 테스트 통과 사과. 메모. \
+             그대로 북쪽, 유지해 남쪽. 메모. 하위 호환 동쪽, 커버리지 서쪽.",
+            "Refactor `x`. Returns 1, input 2. Note. Output 3, expected 4. Note. Coverage 5, \
+             exit code 6. Note. Must return 7, should equal 8.",
+            "Refactor. Returns red, input blue. Note. Schema gold, assert pear. Note. Verify \
+             plum, only north. Note. Keep south, unchanged east.",
+            "Refactor `x`. Returns red, input blue. Details. Schema gold, assert pear. Details. \
+             Verify plum, only north. Details. Keep south, unchanged east.",
+            "Refactor `x`. Tests pass red. Note. Returns blue. Note. Only gold. Note. Input pear.",
         ] {
             let t = total(salad);
             assert!(t < 400.0, "{salad:.48} scored {t}");
@@ -622,6 +640,18 @@ mod tests {
              - only 7\n- keep 8\n- unchanged 9",
             " 반환 1, 입력 2, 스키마 3. 테스트 통과 4, 커버리지 5, 기대값 6. 에서만 7, 그대로 8, \
              유지해 9.",
+            // One plain word after every second entry took it to 907.4, an
+            // S, above the prompt that names the file, the function and the
+            // test, to 922.3 between bullets, to 909.4 in Korean and to
+            // 870.4 between values.
+            " Returns red, input blue. Note. Schema gold, assert pear. Note. Verify plum, only \
+             north. Note. Keep south, unchanged east.",
+            "\n- returns red\n- input blue\n- note\n- schema gold\n- assert pear\n- note\n- verify \
+             plum\n- only north\n- note\n- keep south\n- unchanged east",
+            " 반환 빨강, 입력 파랑. 메모. 스키마 금색, 테스트 통과 사과. 메모. 그대로 북쪽, 유지해 남쪽. \
+             메모. 하위 호환 동쪽, 커버리지 서쪽.",
+            " Returns 1, input 2. Note. Output 3, expected 4. Note. Coverage 5, exit code 6. \
+             Note. Must return 7, should equal 8.",
         ] {
             let tailed = grounded(&format!("Refactor verify_token.{tail}"));
             // The tail earns no result shape, finish line or boundary.
@@ -705,6 +735,18 @@ mod tests {
                  compatibility\n- tests pass",
                 835.0,
             ),
+            // A word that heads the list, with or without its colon, stands
+            // before the list rather than in it.
+            (
+                "Add a `yp export` command.\nRequirements\n- JSON output\n- keep backward \
+                 compatibility\n- tests pass",
+                835.0,
+            ),
+            // "only" bounds the result to the format beside it. As padding,
+            // with the format and its I/O cue, the first scored 366.8 and the
+            // second 7.3.
+            ("Add a report command. Output JSON only.", 655.8),
+            ("Output JSON only.", 296.3),
             ("`yp export` 명령 추가해줘. JSON 출력. 테스트 통과.", 711.7),
             ("`yp export` 명령 추가해줘. JSON 반환. 테스트 통과.", 711.7),
             (
