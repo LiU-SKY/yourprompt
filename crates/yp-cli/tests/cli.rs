@@ -407,6 +407,12 @@ fn commands_and_follow_ups_leave_the_last_task_in_place() {
     // it -- was recorded and then explained instead of the real prompt.
     let scratch = Scratch::new("not-recorded");
     let session = "kinds-session";
+    let stray = format!(
+        "<task-notification>\n<task-id>agent_x</task-id>\n<status>completed</status>\n\
+         <result>I replaced the three-backtick fences (```) in docs/usage.md:\n{}</result>\n\
+         </task-notification>",
+        "- updated a call site in src/handlers/mod.rs\n".repeat(10)
+    );
     let task = "refactor parse_args in src/cli.rs so it returns Config";
     run_isolated(scratch.path(), &["hook"], &hook_payload(task, session));
 
@@ -428,6 +434,11 @@ fn commands_and_follow_ups_leave_the_last_task_in_place() {
         "/plan api returns too much data",
         "proceed as planned",
         "수고하셨어요",
+        "수고했습니다",
+        "고생 많으셨어요",
+        // A report with a backtick that is never closed. Cut out as
+        // pasted, it took the close tag with it, and replaced the task.
+        stray.as_str(),
     ] {
         let out = run_isolated(scratch.path(), &["hook"], &hook_payload(prompt, session));
         assert_eq!(out.status.code(), Some(0), "{prompt}");
@@ -530,10 +541,15 @@ fn a_command_with_a_file_of_its_own_is_left_out_however_its_argument_reads() {
         assert_eq!(sidecar["latest_prompt"], task, "{prompt}");
     }
     // With no file of that name the same words are a sentence about a
-    // route, and graded.
-    let route = "/checkout form submits twice";
-    hook(route);
-    assert_eq!(sidecar_of(scratch.path(), session)["latest_prompt"], route);
+    // route, and graded, as they are after a command's name when they
+    // open with a noun only a route takes.
+    for route in [
+        "/checkout form submits twice",
+        "/debug endpoint leaks environment variables in production",
+    ] {
+        hook(route);
+        assert_eq!(sidecar_of(scratch.path(), session)["latest_prompt"], route);
+    }
 }
 
 #[test]
