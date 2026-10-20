@@ -163,6 +163,10 @@ impl RepoIndex {
     pub fn build(root: &Path) -> RepoIndex {
         let paths = walk::source_files(root);
         let files = walk::read_sources(root, &paths);
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
 
         // A walk yields real paths. A file at the root of the repository is
         // named by its bare name because that is its path.
@@ -175,21 +179,38 @@ impl RepoIndex {
     /// is what makes the browser build possible, where there is no filesystem
     /// and the repository is whatever the visitor dropped on the page.
     ///
-    /// A browser names a picked or dropped file without its directory, so
-    /// when no name has one the index is marked [flat](Self::is_flat), and
+    /// A browser names a file picked on its own without its directory, so
     /// each name that has none is marked [bare](Self::is_bare) whatever the
-    /// others came with.
+    /// others came with, and when no name has one the index is marked
+    /// [flat](Self::is_flat).
+    ///
+    /// A file at the root of a folder has a directory, the root, and is
+    /// written `./Cargo.toml` to say so. It is indexed as `Cargo.toml` with
+    /// neither mark, as the walk indexes it. Under its bare name, any
+    /// `<dir>/Cargo.toml` a prompt made up was taken for it: the page said
+    /// "crates/api/Cargo.toml" was defined once in the demo's sample, where
+    /// `yp index` of the same six files has it missing, 644.3 against 378.5.
+    /// A name without the prefix is read as before, so an older page's files
+    /// are indexed as they always were.
     pub fn from_files(files: &[(String, String)]) -> RepoIndex {
-        let bare: HashSet<String> = files
+        let mut bare = HashSet::new();
+        let mut flat = !files.is_empty();
+        let files: Vec<(&str, &str)> = files
             .iter()
-            .filter(|(path, _)| !path.contains(['/', '\\']))
-            .map(|(path, _)| path.to_lowercase())
+            .map(|(path, text)| {
+                let rooted = path.strip_prefix("./").or_else(|| path.strip_prefix(".\\"));
+                if rooted.is_some() || path.contains(['/', '\\']) {
+                    flat = false;
+                } else {
+                    bare.insert(path.to_lowercase());
+                }
+                (rooted.unwrap_or(path), text.as_str())
+            })
             .collect();
-        let flat = !files.is_empty() && files.iter().all(|(path, _)| !path.contains(['/', '\\']));
-        Self::index_files(files, flat, &bare)
+        Self::index_files(&files, flat, &bare)
     }
 
-    fn index_files(files: &[(String, String)], flat: bool, bare: &HashSet<String>) -> RepoIndex {
+    fn index_files(files: &[(&str, &str)], flat: bool, bare: &HashSet<String>) -> RepoIndex {
         let mut terms: HashMap<String, TermStat> = HashMap::new();
         let indexed = files.len();
 
@@ -672,6 +693,62 @@ mod tests {
         let old = RepoIndex::parse_str("#YPIX\t2\t1\t1\t1\nlogin.rs\t1\t1\t1\n").unwrap();
         assert!(!old.is_bare("login.rs"));
         assert_eq!(old.lookup("login.rs").unwrap().def, 1);
+    }
+
+    #[test]
+    fn a_file_at_the_root_of_a_folder_is_indexed_as_the_walk_indexes_it() {
+        // The page sends the sample's Cargo.toml, and the root files of a
+        // dropped folder, as ./Cargo.toml.
+        let files = [
+            ("Cargo.toml", "[package]\nname = \"acme-auth\"\n"),
+            ("src/lib.rs", "pub fn verify_token() {}\n"),
+            ("tests/auth.rs", "fn expired() { verify_token(); }\n"),
+        ];
+        let root = std::env::temp_dir().join(format!("yp-index-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, text) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let walked = RepoIndex::build(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(walked.files(), 3);
+
+        let sent = |prefix: &str| -> Vec<(String, String)> {
+            files
+                .iter()
+                .map(|(path, text)| {
+                    let name = if path.contains('/') {
+                        path.to_string()
+                    } else {
+                        format!("{prefix}{path}")
+                    };
+                    (name, text.to_string())
+                })
+                .collect()
+        };
+        for prefix in ["./", ".\\"] {
+            let page = RepoIndex::from_files(&sent(prefix));
+            assert_eq!(page.as_str(), walked.as_str(), "{prefix}");
+            assert!(!page.is_bare("Cargo.toml"));
+            assert!(page.lookup(&format!("{prefix}cargo.toml")).is_none());
+        }
+
+        // Sent bare, as a page did before the prefix, the same file is taken
+        // for one picked on its own, and that is how it is still read.
+        let old = RepoIndex::from_files(&sent(""));
+        assert!(old.is_bare("Cargo.toml"));
+        assert_ne!(old.as_str(), walked.as_str());
+
+        // A folder holding nothing but root files has paths all the same.
+        let file = |name: &str| (name.to_string(), "def run(): pass\n".to_string());
+        let shallow = RepoIndex::from_files(&[file("./main.py"), file("./setup.py")]);
+        assert!(!shallow.is_flat());
+        assert!(!shallow.is_bare("main.py"));
+        assert_eq!(shallow.lookup("main.py").unwrap().def, 1);
+        // Two files picked under one name are still a flat pair.
+        assert!(RepoIndex::from_files(&[file("main.py"), file("main.py")]).is_flat());
     }
 
     #[test]

@@ -46,8 +46,27 @@ use yp_lang::{SmellHit, SmellId, Span, Token, TokenKind};
 use crate::params::prompt::ATTACHMENT_MARKER;
 use crate::prompt::is_pasted_block;
 
-/// Abbreviations with a name's shape: "e.g." is dotted like `mod.attr`.
-const ABBREVIATIONS: &[&str] = &["e.g", "i.e"];
+/// Abbreviations a prompt writes as words, never as names.
+///
+/// "e.g." is dotted like `mod.attr`, and grounding looked it up as a name the
+/// repository lacks: against the demo's sample, "Make verify_token return an
+/// error for bad input, e.g. an empty string." scored 606.4 and the same with
+/// "for example" 705.1. An undotted one is a name to grounding wherever
+/// something defines it, and the definition heuristic reads "class, etc." in
+/// a comment as defining `etc`, which all six of SWE-bench Lite's
+/// repositories then do. "nb", "ps" and "ie" are left out: undotted, they can
+/// be a notebook, a PostScript backend or Internet Explorer.
+const ABBREVIATIONS: &[&str] = &[
+    "a.k.a", "a.m", "cf", "e.g", "etc", "i.e", "n.b", "p.m", "p.s", "viz", "vs", "w.r.t",
+];
+
+/// Whether `word` is one of the [`ABBREVIATIONS`], in any case.
+///
+/// The one list every pass consults, so that none of them takes "e.g." for a
+/// name while another does not.
+pub(crate) fn is_abbreviation(word: &str) -> bool {
+    ABBREVIATIONS.iter().any(|a| a.eq_ignore_ascii_case(word))
+}
 
 /// Words that may come before the pronoun a sentence opens with, without
 /// taking its place: "But it panics", "Now it hangs", "그리고 그거 고쳐줘".
@@ -144,7 +163,7 @@ fn openers(tokens: &[Token], starts: &[usize]) -> Vec<Option<usize>> {
 pub(crate) fn is_name(text: &str, tokens: &[Token], i: usize) -> bool {
     let t = &tokens[i];
     match t.kind {
-        TokenKind::Ident => !ABBREVIATIONS.contains(&t.text.to_ascii_lowercase().as_str()),
+        TokenKind::Ident => !is_abbreviation(&t.text),
         TokenKind::Path => true,
         TokenKind::CodeSpan => {
             let raw = t.span.slice(text);

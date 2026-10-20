@@ -49,6 +49,11 @@ fn a_lone_folder_is_indexed_by_the_paths_inside_it() {
 }
 
 #[test]
+fn only_a_file_that_came_on_its_own_is_indexed_bare() {
+    page_check("bare-files");
+}
+
+#[test]
 fn removing_files_says_what_went() {
     page_check("removed-note");
 }

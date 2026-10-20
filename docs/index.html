@@ -260,7 +260,7 @@ const num = n => n.toLocaleString('en-US');
 const enc = new TextEncoder(), dec = new TextDecoder();
 
 let wasm = null, indexBytes = null, lastScore = null;
-let files = [];         // { name, text, sample, group } -- the visitor's codebase
+let files = [];         // { name, text, sample, group, bare } -- the visitor's codebase
 // Why the scorer did not load, kept so that switching language says so again
 // instead of going back to "Loading the scorer…" for good.
 let loadError = null;
@@ -604,13 +604,21 @@ function scoreNow(instruction) {
   }
 }
 
+// The name a file is indexed under. A file picked on its own came without
+// its directory, and a prompt may name it by any path that ends in its name.
+// The sample's root files and a folder's have a directory, the root, and go
+// as ./Cargo.toml: under their bare names, "crates/api/Cargo.toml" was
+// "defined once in your code" here, where yp index of the same six files has
+// it missing.
+const indexedAs = f => f.bare || f.name.includes('/') ? f.name : './' + f.name;
+
 /// Index the visitor's files, in their browser. The files *are* the
 /// repository, so the grounding axis is about their code and not about
 /// whichever project happened to ship with the page.
 function rebuildIndex() {
   // Files that arrive before the scorer has loaded are indexed at boot.
   if (!files.length || !wasm) { indexBytes = null; return; }
-  const payload = files.map(f => f.name + '\u001f' + f.text).join('\u001e');
+  const payload = files.map(f => indexedAs(f) + '\u001f' + f.text).join('\u001e');
   const bytes = enc.encode(payload);
   const [p, l] = write(bytes);
   try {
@@ -1223,8 +1231,9 @@ function addTexts(entries, folder) {
 
 // Any file can be picked, so anything that is not text, or is larger than
 // MAX_BYTES, is turned away here with the reason. An item is a File and the
-// name it is indexed under: its path inside a folder, else its own name.
-function readFile({ file, name, group }) {
+// name it is indexed under: its path inside a folder, else its own name, and
+// `bare` when it came on its own, with no folder around it.
+function readFile({ file, name, group, bare }) {
   return new Promise(resolve => {
     const refuse = problem => resolve({ name, problem });
     if (!file) {
@@ -1240,7 +1249,7 @@ function readFile({ file, name, group }) {
     reader.onload = () => {
       const text = String(reader.result);
       if (looksBinary(text)) refuse(T().not_text(name));
-      else resolve(group ? { name, text, group } : { name, text });
+      else resolve(Object.assign({ name, text }, group && { group }, bare && { bare }));
     };
     reader.readAsText(file, 'utf-8');
   });
@@ -1335,6 +1344,8 @@ function addFolder(found, roots, top) {
   found.sort((a, b) => depth(a.path) - depth(b.path) || (a.path < b.path ? -1 : 1));
   addFiles(found.map(({ path, file }) => ({
     file, group, name: strip ? path.slice(path.indexOf('/') + 1) : path,
+    // A file dropped beside the folders came on its own.
+    bare: !path.includes('/'),
   })), group.label);
 }
 
@@ -1342,7 +1353,7 @@ $('open').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', e => {
   const picked = Array.from(e.target.files);
   e.target.value = '';
-  addFiles(picked.map(file => ({ file, name: file.name })));
+  addFiles(picked.map(file => ({ file, name: file.name, bare: true })));
 });
 
 // A browser that cannot choose a folder does not get the button.
@@ -1353,7 +1364,7 @@ $('folder').addEventListener('change', e => {
   e.target.value = '';
   if (!picked.length) return;
   if (!picked[0].webkitRelativePath) {
-    addFiles(picked.map(file => ({ file, name: file.name })));
+    addFiles(picked.map(file => ({ file, name: file.name, bare: true })));
     return;
   }
   const root = picked[0].webkitRelativePath.split('/')[0];
@@ -1434,7 +1445,7 @@ for (const target of [$('p'), $('atts')]) {
       item.kind === 'file' && item.webkitGetAsEntry ? item.webkitGetAsEntry() : null).filter(Boolean);
     const dropped = Array.from(dt.files || []);
     if (entries.some(entry => entry.isDirectory)) addDropped(entries);
-    else addFiles(dropped.map(file => ({ file, name: file.name })));
+    else addFiles(dropped.map(file => ({ file, name: file.name, bare: true })));
   });
 }
 

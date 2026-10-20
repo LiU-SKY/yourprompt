@@ -314,6 +314,47 @@ const checks = {
     assert.deepEqual(page.get('files.map(f => f.name)').sort(), ['src/auth/login.rs', 'tests/auth.rs']);
   },
 
+  // Only a file that came on its own is indexed without a directory. The
+  // sample's root files and a folder's have one, the root: under their bare
+  // names, "crates/api/Cargo.toml" was defined once in the sample.
+  'bare-files': async () => {
+    // The names the page hands the scorer to index, read off the payload
+    // with a stand-in for the scorer in place for one rebuild.
+    const indexed = page => {
+      page.run(`wasm = {
+        memory: { buffer: new ArrayBuffer(1 << 20) },
+        yp_alloc: () => 8,
+        yp_free: () => {},
+        yp_index_build: (ptr, len) => {
+          globalThis.payload = new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, ptr, len));
+          return 0;
+        },
+      };
+      rebuildIndex();
+      wasm = null;`);
+      return page.get(`payload.split('\\u001e').map(record => record.split('\\u001f')[0])`).sort();
+    };
+    let page = open(demoPath);
+    page.run('loadSample()');
+    assert.deepEqual(indexed(page), ['./Cargo.toml', ...SRC].sort(), 'the sample');
+    for (const how of ['picked', 'dropped']) {
+      page = open(demoPath);
+      if (how === 'picked') pick(page, 'acme-auth', ['Cargo.toml', ...SRC]);
+      else drop(page, [folder('acme-auth', ['Cargo.toml', ...SRC])]);
+      for (let i = 0; i < 5; i++) await settle();
+      assert.deepEqual(indexed(page), ['./Cargo.toml', ...SRC].sort(), `acme-auth/ ${how}`);
+    }
+    page = open(demoPath);
+    page.$('file').files = [fakeFile('login.rs')];
+    page.$('file').dispatch('change');
+    await settle();
+    const beside = { isDirectory: false, isFile: true, name: 'routes.rs', fullPath: '/routes.rs',
+      file: ok => ok(fakeFile('routes.rs')) };
+    drop(page, [beside, folder('tests', ['auth.rs'])]);
+    for (let i = 0; i < 5; i++) await settle();
+    assert.deepEqual(indexed(page), ['login.rs', 'routes.rs', 'tests/auth.rs']);
+  },
+
   // Removing what was loaded says so, instead of leaving "loaded the sample
   // repo, 6 files" over an empty list.
   'removed-note': async () => {

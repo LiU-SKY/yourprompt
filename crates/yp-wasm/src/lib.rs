@@ -114,12 +114,12 @@ impl Corpus for WasmCorpus {
         self.0.total_terms()
     }
 
-    // Files picked or dropped on the page arrive under bare names.
+    // Files picked on the page arrive under bare names.
     fn flat(&self) -> bool {
         self.0.is_flat()
     }
 
-    // A folder added beside them keeps its paths.
+    // A folder added beside them keeps its paths, its root files included.
     fn bare_file(&self, name: &str) -> bool {
         self.0.is_bare(name)
     }
@@ -217,6 +217,11 @@ pub unsafe extern "C" fn yp_score_parts(
 /// source text. Returns a length-prefixed index blob for [`yp_score_parts`],
 /// or null if the input was not valid UTF-8 or held no files.
 ///
+/// A path with no directory is a file picked on its own, which a prompt may
+/// name by any path that ends in it. A file at the root of a folder, or of
+/// the sample, has a directory and is sent as `./Cargo.toml`; see
+/// [`yp_index::RepoIndex::from_files`].
+///
 /// This is what lets the published page ground scores in *your* codebase
 /// rather than in whichever repository happened to be shipped with it: the
 /// files you drop on the page are the repository.
@@ -295,10 +300,10 @@ mod tests {
     }
 
     /// The index the page builds from the files a visitor gave it.
-    fn index_of(files: &[(&str, &str)]) -> String {
+    fn index_of<N: AsRef<str>, T: AsRef<str>>(files: &[(N, T)]) -> String {
         let payload = files
             .iter()
-            .map(|(name, text)| format!("{name}\u{1f}{text}"))
+            .map(|(name, text)| format!("{}\u{1f}{}", name.as_ref(), text.as_ref()))
             .collect::<Vec<_>>()
             .join("\u{1e}");
         let (ptr, len) = buffer(payload.as_bytes());
@@ -402,5 +407,143 @@ mod tests {
         let text = PROMPT.replace("src/auth/login.rs", "src/auth/banana.rs");
         let score: serde_json::Value = serde_json::from_str(&page(&text, &index)).unwrap();
         assert_eq!(mark_on(&score, &text, "src/auth/banana.rs"), "name:missing");
+    }
+
+    /// The demo's six-file sample, read from the page that ships it and named
+    /// as the page sends it to be indexed: its root file as `./Cargo.toml`.
+    fn sample() -> Vec<(String, String)> {
+        let html = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/index.html"),
+        )
+        .unwrap();
+        let list = &html[html.find("const SAMPLE = [").unwrap()..];
+        let list = &list[..list.find("\n];").unwrap()];
+        let files: Vec<(String, String)> = list
+            .split("\n  ['")
+            .skip(1)
+            .map(|entry| {
+                let (name, rest) = entry.split_once("', `").unwrap();
+                let (text, _) = rest.rsplit_once("`]").unwrap();
+                let name = if name.contains('/') {
+                    name.to_string()
+                } else {
+                    format!("./{name}")
+                };
+                (name, text.to_string())
+            })
+            .collect();
+        assert_eq!(files.len(), 6, "{files:?}");
+        files
+    }
+
+    fn scored(text: &str, index: &str) -> serde_json::Value {
+        serde_json::from_str(&page(text, index)).unwrap()
+    }
+
+    #[test]
+    fn a_made_up_path_to_a_root_file_is_missing_from_the_sample() {
+        // The sample's Cargo.toml sits at its root, which is a directory. Taken
+        // for a file picked on its own, it was what "crates/api/Cargo.toml"
+        // meant: the page said that path was defined once, 644.3, while `yp
+        // index` of the same six files has it missing, 378.5.
+        let index = index_of(&sample());
+        for (text, path, kind) in [
+            (
+                "Bump the serde version in crates/api/Cargo.toml.",
+                "crates/api/Cargo.toml",
+                "name:missing",
+            ),
+            (
+                "Bump the serde version in src/Cargo.toml.",
+                "src/Cargo.toml",
+                "name:missing",
+            ),
+            (
+                "Bump the serde version in Cargo.toml.",
+                "Cargo.toml",
+                "name:unique",
+            ),
+        ] {
+            assert_eq!(mark_on(&scored(text, &index), text, path), kind, "{text}");
+        }
+
+        // It is the index `yp index` writes for the same six files.
+        let root = std::env::temp_dir().join(format!("yp-wasm-sample-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (name, text) in sample() {
+            let path = root.join(name.trim_start_matches("./"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let walked = yp_index::RepoIndex::build(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(walked.files(), 6);
+        assert_eq!(index, walked.as_str());
+
+        // So are a dropped folder's: proj/ arrives as ./main.py and
+        // app/views.py.
+        let index = index_of(&[
+            (
+                "./main.py",
+                "from app.views import index\n\ndef run():\n    return index()\n",
+            ),
+            ("app/views.py", "def index():\n    return 'ok'\n"),
+        ]);
+        for (path, kind) in [("app/main.py", "name:missing"), ("main.py", "name:unique")] {
+            let text = format!("Fix the crash in {path} when run() is called.");
+            assert_eq!(mark_on(&scored(&text, &index), &text, path), kind);
+        }
+    }
+
+    #[test]
+    fn an_abbreviation_is_not_a_name_the_sample_lacks() {
+        // "e.g" was looked up as an identifier and found missing: 606.4
+        // against 705.1 for "for example", with a red mark on "i.e".
+        let index = index_of(&sample());
+        for (abbreviated, spelled_out) in [
+            (
+                "Make verify_token return an error for bad input, e.g. an empty string.",
+                "Make verify_token return an error for bad input, for example an empty string.",
+            ),
+            (
+                "Make verify_token return an error for bad input, i.e. anything it cannot decode.",
+                "Make verify_token return an error for bad input, that is, anything it cannot \
+                 decode.",
+            ),
+        ] {
+            let grounding = |text: &str| {
+                let score = scored(text, &index);
+                let marks = score["marks"].as_array().unwrap();
+                assert!(
+                    !marks.iter().any(|m| m["kind"] == "name:missing"),
+                    "{text}: {score}"
+                );
+                score["grounding"].clone()
+            };
+            assert_eq!(
+                grounding(abbreviated),
+                grounding(spelled_out),
+                "{abbreviated}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_call_with_arguments_names_its_function_in_the_sample() {
+        // `decode(raw)` named nothing, so the "it" after it pointed at
+        // nothing in the code: 458.5, against 759.1 for `decode()`.
+        let index = index_of(&sample());
+        let text = "Fix decode(raw) so it returns an error for an empty string.";
+        let score = scored(text, &index);
+        assert_eq!(mark_on(&score, text, "decode"), "name:unique");
+        assert_eq!(mark_on(&score, text, "it"), "pronoun:anchored");
+        let empty = scored(
+            "Fix decode() so it returns an error for an empty string.",
+            &index,
+        );
+        assert_eq!(score["grounding"], empty["grounding"]);
+
+        let text = "Why does login(user, password) panic when the token is expired?";
+        assert_eq!(mark_on(&scored(text, &index), text, "login"), "name:unique");
     }
 }
