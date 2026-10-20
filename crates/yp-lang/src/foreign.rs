@@ -40,6 +40,31 @@
 //!   with a letter English does not use, "napraw błąd w logowaniu". English
 //!   words in the same prose count against them.
 //!
+//! # Pasted messages
+//!
+//! A message copied from a localized system or a customer holds more
+//! function words than a terse request holds English ones. "Das System kann
+//! den angegebenen Pfad nicht finden. why?" has four German words to one
+//! English one, and was reported as German, as were 146 of 300 such
+//! requests with a Windows or tool message in German, Spanish, French,
+//! Portuguese, Italian or Dutch.
+//!
+//! So each sentence and each line is weighed on its own as well. A sentence
+//! reads as English when its English words outnumber the other languages'
+//! function words in it, a request verb that opens it counting as one of
+//! them: "why?", "please help", "Fix build.rs". One that comes before or
+//! after the rest makes the prompt English, and the rest is what it was
+//! pasted to ask about. Inside a sentence a borrowed word stays borrowed:
+//! "haz un fix rápido del login, se rompe con la contraseña vacía" has no
+//! sentence of its own in English, and is Spanish.
+//!
+//! The same reading leaves a request in another language as it is. What a
+//! sentence introduces with a colon is pasted, "me sale este error al
+//! compilar: Cannot find module 'react'. ¿qué hago?"; English between two
+//! sentences of another language is an aside, "Le bouton ne fait rien. Any
+//! ideas? J'ai vidé le cache."; and a sentence that only thanks asks for
+//! nothing, "Thank you!".
+//!
 //! # Borrowed words
 //!
 //! A sentence that mixes two languages takes its grammar from one of them
@@ -53,6 +78,8 @@
 //! Every rule leans toward reading the prompt. A wrong "unsupported" hides a
 //! real prompt's grade; a wrong "task" only grades a foreign prompt badly,
 //! which is what happened to every one of them before.
+
+use std::cmp::Ordering;
 
 use crate::span::Span;
 use crate::token::{code_regions, is_hangul};
@@ -282,16 +309,66 @@ const ABOUT_LANGUAGE: &[&str] = &[
 ];
 
 /// The verbs a request is made of, which are not on the [`ENGLISH`] list.
-/// One counts as an English word only when it opens the prompt. A language
-/// that borrows the verb puts it where its own grammar does -- "このbugを
-/// fixして", "haz un fix rápido", "帮我 fix 一下" -- while an English request
-/// opens with it, and a terse one may have no other English word: without
-/// its verb, "rename ログイン to サインイン" would be Japanese and "Fix
-/// Ελληνικά label" Greek. Sorted, for binary search.
+/// One counts as an English word only when it opens the prompt, or, for the
+/// sentence it opens, that sentence. A language that borrows the verb puts
+/// it where its own grammar does -- "このbugをfixして", "haz un fix rápido",
+/// "帮我 fix 一下" -- while an English request opens with it, and a terse one
+/// may have no other English word: without its verb, "rename ログイン to
+/// サインイン" would be Japanese, "Fix Ελληνικά label" Greek, and "Das System
+/// kann den angegebenen Pfad nicht finden. Fix build.rs" German. Sorted, for
+/// binary search.
 const REQUEST_VERBS: &[&str] = &[
     "change", "create", "delete", "explain", "find", "fix", "get", "give", "help", "keep", "know",
     "look", "make", "move", "need", "remove", "rename", "replace", "run", "say", "see", "set",
     "show", "take", "try", "update", "use", "want", "write",
+];
+
+/// The [`REQUEST_VERBS`] that are words of a listed language too, and the
+/// languages they belong to: "change" is French, "find" Danish and
+/// Norwegian, "help" Dutch, "move", "remove" and "use" are how Portuguese
+/// asks, and "want" is how Dutch says "because". One that opens a sentence
+/// makes it English only when the prompt is in none of its languages:
+/// "help!" after a Vietnamese message asks in English, and "Help! De build
+/// faalt en ik weet niet waarom" is Dutch. Sorted, for binary search.
+const SHARED_VERBS: &[(&str, &[&str])] = &[
+    ("change", &["French"]),
+    ("find", &["Danish", "Norwegian"]),
+    ("help", &["Dutch"]),
+    ("move", &["Portuguese"]),
+    ("remove", &["Portuguese"]),
+    ("use", &["Portuguese"]),
+    ("want", &["Dutch"]),
+];
+
+/// The words a request is greeted, thanked or signed off with. A sentence
+/// made of nothing else asks for nothing, so it does not make the prompt
+/// English: weighed as English, "Thank you!" at the end of a Spanish request
+/// had the request graded, and so did "You're the best!" at the end of a
+/// French one. "please help" asks. Sorted, for binary search.
+const COURTESIES: &[&str] = &[
+    "a",
+    "advance",
+    "all",
+    "appreciate",
+    "appreciated",
+    "best",
+    "hello",
+    "hey",
+    "hi",
+    "in",
+    "it",
+    "lot",
+    "many",
+    "much",
+    "please",
+    "so",
+    "thank",
+    "thanks",
+    "the",
+    "there",
+    "very",
+    "you",
+    "you're",
 ];
 
 /// The function words of the Latin-script languages most likely to turn up,
@@ -1849,13 +1926,17 @@ fn split_elision(word: &str) -> (Option<&str>, &str) {
     let end = at + word[at..].chars().next().map_or(1, char::len_utf8);
     let (head, rest) = word.split_at(end);
     let key = head.to_lowercase().replace('\u{2019}', "'");
-    let listed = FUNCTION_WORDS
-        .iter()
-        .any(|(_, list)| list.binary_search(&key.as_str()).is_ok());
-    if rest.is_empty() || !listed {
+    if rest.is_empty() || !is_function_word(&key) {
         return (None, word);
     }
     (Some(head), rest)
+}
+
+/// Whether a lowercased word is a function word of any language listed.
+fn is_function_word(word: &str) -> bool {
+    FUNCTION_WORDS
+        .iter()
+        .any(|(_, list)| list.binary_search(&word).is_ok())
 }
 
 /// The ISO 639-1 language codes, which a list of locales is made of. Sorted,
@@ -2011,6 +2092,29 @@ struct Word {
     name_like: bool,
 }
 
+/// The sentence or line being read, weighed on its own when it ends.
+#[derive(Default)]
+struct Sentence {
+    /// Where its words start in [`Prose::words`].
+    start: usize,
+    /// Its letters so far, in any script. A request verb opens the sentence
+    /// only while there are none.
+    letters: usize,
+    /// It holds letters of a script other than Latin, and so is not a
+    /// sentence of English: "сделай update зависимостей" borrows its verb.
+    script: bool,
+    /// Its words on the [`ENGLISH`] list, each counted as often as it is
+    /// used, and a request verb that opens it.
+    english: usize,
+    /// Opened by a request verb, one of the [`SHARED_VERBS`] included.
+    request: bool,
+    /// Opened by one of the [`SHARED_VERBS`], by its index there.
+    shared: Option<usize>,
+    /// What a sentence of English or another language introduced with a
+    /// colon, and so pasted unless it asks. See [`Prose::close_sentence`].
+    introduced: bool,
+}
+
 /// What is left of a prompt once its code, and usually its quotations, are
 /// set aside.
 #[derive(Default)]
@@ -2025,6 +2129,18 @@ struct Prose {
     /// and a request verb that opens the prompt. A name is not counted:
     /// "Show More" on a button in a French request is the button's label.
     english: usize,
+    sentence: Sentence,
+    /// The sentences read so far that hold more function words of other
+    /// languages than English words, what a colon introduced aside.
+    foreign_sentences: usize,
+    /// For the last sentence that reads as English and comes after one of
+    /// those, how many of them came before it.
+    english_after: Option<usize>,
+    /// For each of the [`SHARED_VERBS`], how many sentences of another
+    /// language came before the last sentence it opened and would make
+    /// English, counted as for [`Self::english_after`]. One that came before
+    /// all of them stays `Some(0)`.
+    shared: [Option<usize>; SHARED_VERBS.len()],
     /// A quotation was set aside unread.
     quoted: bool,
     /// Letters that tell a language apart from the commonest one of its
@@ -2034,11 +2150,13 @@ struct Prose {
     urdu: bool,
     persian: bool,
     /// Set at the first Hangul letter, at a word that asks in English about
-    /// text in another language, or at the English word no language's
-    /// function words could outweigh. Each means the lexicons can read the
-    /// prompt and nothing after it changes that, so reading stops there: a
-    /// long English prompt is settled within its first hundred or so words,
-    /// however long it goes on.
+    /// text in another language, at the English word no language's function
+    /// words could outweigh, or at the end of a sentence that reads as
+    /// English before any sentence of another language. Each means the
+    /// lexicons can read the prompt and nothing after it changes that, so
+    /// reading stops there: a long English prompt is settled within its
+    /// first hundred or so words, however long it goes on. An English
+    /// sentence after all of those sets it once the prompt has been read.
     readable: bool,
 }
 
@@ -2060,8 +2178,11 @@ impl Prose {
     fn count(&mut self, c: char) {
         let script = script_of(c);
         self.letters[script as usize] += 1;
-        if script == Script::Hangul {
-            self.readable = true;
+        self.sentence.letters += 1;
+        match script {
+            Script::Hangul => self.readable = true,
+            Script::Latin => {}
+            _ => self.sentence.script = true,
         }
         match c {
             '\u{490}' | '\u{491}' | '\u{404}' | '\u{454}' | '\u{406}' | '\u{456}' | '\u{407}'
@@ -2076,21 +2197,29 @@ impl Prose {
         }
     }
 
-    /// Read a run of Latin-script characters, and say whether it ends a
-    /// sentence.
-    fn read_latin(&mut self, run: &str, starts_sentence: bool) -> bool {
-        let ends_sentence = run
-            .trim_end_matches(['"', '\'', ')', ']', '\u{2019}'])
-            .ends_with(['.', '!', '?', ':']);
+    /// Read a run of Latin-script characters, and say which mark it ends a
+    /// sentence with, if it ends one: a full stop, an exclamation or question
+    /// mark, a colon, or a dash on its own, which ends the clause before it.
+    /// "Das System kann die angegebene Datei nicht finden -- fix the config
+    /// loader" asks after the dash.
+    fn read_latin(&mut self, run: &str, starts_sentence: bool) -> Option<char> {
+        let end = if run.bytes().all(|b| b == b'-') {
+            Some('-')
+        } else {
+            run.trim_end_matches(['"', '\'', ')', ']', '\u{2019}'])
+                .chars()
+                .next_back()
+                .filter(|c| matches!(c, '.' | '!' | '?' | ':'))
+        };
         let core = run.trim_matches(|c: char| c.is_ascii_punctuation() || c == '\u{2019}');
         // Its semicolon makes it read as code, but only English writes it:
         // "TL;DR: Ce module gère l'authentification" asks in English.
         if core.eq_ignore_ascii_case("tl;dr") {
             self.readable = true;
-            return ends_sentence;
+            return end;
         }
         if core.is_empty() || is_code(core) {
-            return ends_sentence;
+            return end;
         }
         let mut first = starts_sentence;
         for word in core.split(|c: char| !(c.is_alphabetic() || is_joiner(c) || is_mark(c))) {
@@ -2101,20 +2230,22 @@ impl Prose {
             let (elided, word) = split_elision(word);
             for part in elided.into_iter().chain([word]) {
                 if !self.read_word(part, first) {
-                    return ends_sentence;
+                    return end;
                 }
                 first = false;
             }
         }
-        ends_sentence
+        end
     }
 
     /// Count one word of prose: false once the prompt is known to be
     /// readable.
     fn read_word(&mut self, word: &str, first: bool) -> bool {
         let opens = self.letters.iter().all(|&n| n == 0);
+        let opens_sentence = self.sentence.letters == 0;
         let letters = word.chars().filter(|c| c.is_alphabetic()).count();
         self.letters[Script::Latin as usize] += letters;
+        self.sentence.letters += letters;
         let capital = word
             .chars()
             .find(|c| c.is_alphabetic())
@@ -2135,14 +2266,24 @@ impl Prose {
         if name_like {
             self.named += letters;
         }
-        let english = !name_like
-            && (ENGLISH.binary_search(&text.as_str()).is_ok()
-                || (opens && REQUEST_VERBS.binary_search(&text.as_str()).is_ok()));
+        let listed = !name_like && ENGLISH.binary_search(&text.as_str()).is_ok();
+        let verb =
+            !name_like && opens_sentence && REQUEST_VERBS.binary_search(&text.as_str()).is_ok();
+        let shared = SHARED_VERBS
+            .binary_search_by_key(&text.as_str(), |&(verb, _)| verb)
+            .ok();
         self.words.push(Word {
             text,
             capital,
             name_like,
         });
+        self.sentence.request |= verb;
+        match shared {
+            Some(index) if verb => self.sentence.shared = Some(index),
+            _ if listed || verb => self.sentence.english += 1,
+            _ => {}
+        }
+        let english = listed || (opens && verb);
         if english {
             self.english += 1;
             if FOREIGN_PER_ENGLISH * self.english > MOST_FUNCTION_WORDS {
@@ -2151,6 +2292,94 @@ impl Prose {
             }
         }
         true
+    }
+
+    /// Weigh the sentence that has just ended with `end`, the mark that ended
+    /// it if one did, and start the next.
+    ///
+    /// It reads as English when its English words outnumber the function
+    /// words of other languages in it, which are counted every time they are
+    /// used, and it is not all [`COURTESIES`]; it reads as another language
+    /// when they are outnumbered. A request is made before or after what it
+    /// pastes, so an English sentence makes the prompt English when no
+    /// sentence of another language comes before it, or, as [`Self::finish`]
+    /// settles, none comes after it. Between two of them it is an aside: "Le
+    /// bouton de connexion ne fait rien. Any ideas? J'ai déjà vidé le cache."
+    /// is French. One of the [`SHARED_VERBS`] that would tip a sentence
+    /// waits until the end, when the prompt's language is known.
+    ///
+    /// A sentence that reads as either and ends in a colon introduces the
+    /// next, and what it introduces was pasted, so it says nothing of the
+    /// prompt's language: "me sale este error al compilar: Cannot find module
+    /// 'react'. ¿qué hago?" asks in Spanish. A pasted line that ends in a
+    /// colon itself introduces the next as well, "Uncaught TypeError: Cannot
+    /// read properties of null", and a blank line or a line of code does not
+    /// end what a colon introduced. A question, or a sentence a request verb
+    /// opens, asks rather than quotes: in "...überschrieben werden:\nhow do I
+    /// keep my changes?" the colon is the pasted message's own.
+    fn close_sentence(&mut self, end: Option<char>) {
+        let start = self.words.len();
+        let sentence = std::mem::take(&mut self.sentence);
+        self.sentence.start = start;
+        if self.readable || sentence.script {
+            return;
+        }
+        let words = &self.words[sentence.start..];
+        if words.is_empty() {
+            self.sentence.introduced = sentence.introduced;
+            return;
+        }
+        if sentence.introduced && end != Some('?') && !sentence.request {
+            self.sentence.introduced = end == Some(':');
+            return;
+        }
+        // Counting past one more than the English words would change nothing.
+        let foreign = words
+            .iter()
+            .filter(|w| !w.name_like && is_function_word(&w.text))
+            .take(sentence.english + 1)
+            .count();
+        let courtesy = words
+            .iter()
+            .all(|w| COURTESIES.binary_search(&w.text.as_str()).is_ok());
+        let before = self.foreign_sentences;
+        match sentence.english.cmp(&foreign) {
+            Ordering::Less => self.foreign_sentences += 1,
+            Ordering::Greater if courtesy => {}
+            Ordering::Greater if before == 0 => {
+                self.readable = true;
+                return;
+            }
+            Ordering::Greater => self.english_after = Some(before),
+            Ordering::Equal => {
+                if let Some(index) = sentence.shared {
+                    let at = &mut self.shared[index];
+                    if *at != Some(0) {
+                        *at = Some(before);
+                    }
+                }
+            }
+        }
+        self.sentence.introduced = end == Some(':') && sentence.english != foreign;
+    }
+
+    /// Weigh the last sentence, and settle what only the end can: whether
+    /// the last English sentence after one of another language came after
+    /// all of them.
+    fn finish(&mut self) {
+        self.close_sentence(None);
+        if self.english_after == Some(self.foreign_sentences) {
+            self.readable = true;
+        }
+    }
+
+    /// Read a run with [`Self::read_latin`], and weigh the sentence it ends.
+    fn read_run(&mut self, run: &str, sentence: &mut bool) {
+        let end = self.read_latin(run, *sentence);
+        *sentence = end.is_some();
+        if end.is_some() {
+            self.close_sentence(end);
+        }
     }
 
     /// Read text with no code in it. `sentence` says whether the next word
@@ -2166,17 +2395,23 @@ impl Prose {
                 continue;
             }
             if let Some(start) = run.take() {
-                *sentence = self.read_latin(&text[start..i], *sentence);
+                self.read_run(&text[start..i], sentence);
             }
-            if matches!(c, '\n' | '\u{3002}' | '\u{FF01}' | '\u{FF1F}') {
+            // A line ends a sentence, as the CJK full stop, exclamation and
+            // question marks do, and an en or em dash ends a clause.
+            if matches!(
+                c,
+                '\n' | '\u{3002}' | '\u{FF01}' | '\u{FF1F}' | '\u{2013}' | '\u{2014}'
+            ) {
                 *sentence = true;
+                self.close_sentence(None);
             }
             if c.is_alphabetic() {
                 self.count(c);
             }
         }
         if let Some(start) = run {
-            *sentence = self.read_latin(&text[start..], *sentence);
+            self.read_run(&text[start..], sentence);
         }
     }
 
@@ -2260,11 +2495,12 @@ impl Prose {
         out
     }
 
-    /// The Latin-script language whose function words this prose uses most,
-    /// and how many distinct ones it uses.
-    fn function_word_language(&self) -> Option<(Foreign, usize)> {
+    /// The Latin-script languages whose function words this prose uses
+    /// most, more than one on a tie, and how many distinct ones it uses.
+    fn function_word_languages(&self) -> (Vec<&'static str>, usize) {
+        let (mut best, mut most) = (Vec::new(), 0);
         if self.words.len() < MIN_SHORT_WORDS {
-            return None;
+            return (best, most);
         }
         let particles = self.particles();
         // Lowercase words with a letter English does not use: "błąd" or
@@ -2275,8 +2511,6 @@ impl Prose {
             .filter(|w| !w.capital && !w.text.is_ascii())
             .map(|w| w.text.as_str())
             .collect();
-        let mut best: Option<(&'static str, usize)> = None;
-        let mut tied = false;
         for (language, list) in FUNCTION_WORDS {
             let mut found: Vec<&str> = Vec::new();
             let mut in_names: Vec<&str> = Vec::new();
@@ -2301,21 +2535,26 @@ impl Prose {
             // The accent has to be a second piece of evidence, not the
             // function word again: "über cool feature" stays a task.
             let accent = accented.iter().any(|w| !found.contains(w));
-            if !decides(self.words.len(), found.len(), telling, accent) {
+            if !decides(self.words.len(), found.len(), telling, accent) || found.len() < most {
                 continue;
             }
-            match best {
-                Some((_, most)) if most > found.len() => {}
-                Some((_, most)) if most == found.len() => tied = true,
-                _ => {
-                    best = Some((language, found.len()));
-                    tied = false;
-                }
+            if found.len() > most {
+                best.clear();
+                most = found.len();
             }
+            best.push(*language);
         }
-        best.map(|(language, found)| {
-            let name = (!tied).then_some(language);
-            (Foreign { name }, found)
+        (best, most)
+    }
+
+    /// Whether a sentence one of the [`SHARED_VERBS`] opened reads as
+    /// English, because the prompt is in none of that verb's languages, and
+    /// comes before or after every sentence of another language.
+    /// `languages` are the ones [`Self::function_word_languages`] names.
+    fn shared_verb_is_english(&self, languages: &[&str]) -> bool {
+        SHARED_VERBS.iter().zip(self.shared).any(|(&(_, own), at)| {
+            let edge = at == Some(0) || at == Some(self.foreign_sentences);
+            edge && !own.iter().any(|l| languages.contains(l))
         })
     }
 }
@@ -2358,6 +2597,7 @@ fn read_with(text: &str, skip_quotes: bool) -> Prose {
         cursor = region.end;
     }
     prose.read_prose(&text[cursor..], &mut sentence, skip_quotes);
+    prose.finish();
     prose
 }
 
@@ -2369,6 +2609,10 @@ pub fn detect(text: &str) -> Option<Foreign> {
     if prose.readable {
         return None;
     }
+    let (languages, found) = prose.function_word_languages();
+    if prose.shared_verb_is_english(&languages) {
+        return None;
+    }
     let latin = prose.letters[Script::Latin as usize];
     let other: usize = prose.letters.iter().sum::<usize>() - latin;
     if other >= MIN_LETTERS && other >= latin - prose.named {
@@ -2378,8 +2622,12 @@ pub fn detect(text: &str) -> Option<Foreign> {
             name: prose.script_language(),
         });
     }
-    let (foreign, found) = prose.function_word_language()?;
-    (found >= FOREIGN_PER_ENGLISH * prose.english).then_some(foreign)
+    let name = match languages.as_slice() {
+        [] => return None,
+        [language] => Some(*language),
+        _ => None,
+    };
+    (found >= FOREIGN_PER_ENGLISH * prose.english).then_some(Foreign { name })
 }
 
 #[cfg(test)]
@@ -2406,8 +2654,28 @@ mod tests {
         check("ABOUT_LANGUAGE", ABOUT_LANGUAGE);
         check("LANGUAGE_CODES", LANGUAGE_CODES);
         check("REQUEST_VERBS", REQUEST_VERBS);
+        check("COURTESIES", COURTESIES);
+        let shared: Vec<&str> = SHARED_VERBS.iter().map(|&(verb, _)| verb).collect();
+        check("SHARED_VERBS", &shared);
         for (language, list) in FUNCTION_WORDS {
             check(language, list);
+        }
+    }
+
+    #[test]
+    fn a_shared_verb_is_a_request_verb_of_a_listed_language() {
+        for &(verb, languages) in SHARED_VERBS {
+            assert!(REQUEST_VERBS.binary_search(&verb).is_ok(), "{verb}");
+            for language in languages {
+                assert!(
+                    FUNCTION_WORDS.iter().any(|(name, _)| name == language),
+                    "{verb}: {language}"
+                );
+            }
+        }
+        // "please help" asks, so no verb a request opens with is a courtesy.
+        for verb in REQUEST_VERBS {
+            assert!(COURTESIES.binary_search(verb).is_err(), "{verb}");
         }
     }
 
@@ -2919,6 +3187,159 @@ mod tests {
         ] {
             assert_eq!(detect(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn a_sentence_in_english_is_the_request_beside_a_pasted_message() {
+        // A localized message holds more function words than a terse request
+        // holds English ones. Each of these was named as the language of its
+        // message, as were 146 of 300 English requests around a Windows or
+        // tool message in German, Spanish, French, Portuguese, Italian or
+        // Dutch.
+        for text in [
+            "Das System kann den angegebenen Pfad nicht finden. fix the path handling in \
+             build.rs",
+            "El sistema no puede encontrar la ruta especificada. why?",
+            "Le système ne peut pas trouver le chemin spécifié. please help",
+            "Der Befehl \"npm\" ist entweder falsch geschrieben oder konnte nicht gefunden \
+             werden. any idea?",
+            "Het systeem kan het opgegeven pad niet vinden. any idea?",
+            "O sistema não pode encontrar o caminho especificado. Fix build.rs",
+            "Le processus ne peut pas accéder au fichier car ce fichier est utilisé par un \
+             autre processus. fix it",
+            // The request first, and the message after its colon.
+            "why: Das System kann den angegebenen Pfad nicht finden.",
+            "please help: El sistema no puede encontrar la ruta especificada.",
+            "Fix build.rs: Le système ne peut pas trouver le chemin spécifié.",
+            "Fix: Der Prozess kann nicht auf die Datei zugreifen, da sie von einem anderen \
+             Prozess verwendet wird.",
+            // A line is a sentence, and so is a clause a dash sets off.
+            "El sistema no puede encontrar la ruta especificada.\nfix build.rs",
+            "Das System kann den angegebenen Pfad nicht finden\nwhy?",
+            "Das System kann die angegebene Datei nicht finden -- fix the config loader",
+            "Das System kann den angegebenen Pfad nicht finden – why?",
+            "why — Das System kann den angegebenen Pfad nicht finden.",
+            // Tickets and tool output.
+            "Customer wrote: no puedo iniciar sesión desde ayer, me sale un error de \
+             contraseña. Find the bug.",
+            "git commit gives: Bitte geben Sie eine Commit-Beschreibung für Ihre Änderungen \
+             ein. why?",
+            "PowerShell: Die Benennung \"yp\" wurde nicht als Name eines Cmdlet, einer \
+             Funktion, einer Skriptdatei oder eines ausführbaren Programms erkannt. fix the \
+             install script",
+            // "help" is Dutch as well, but neither message is.
+            "Hệ thống không thể tìm thấy đường dẫn được chỉ định. help!",
+            "El sistema no puede encontrar la ruta especificada. Help!",
+            // A request after a paste of several sentences, and one before a
+            // second paste that an English sentence introduces.
+            "Das System kann den angegebenen Pfad nicht finden. Der Prozess kann nicht auf \
+             die Datei zugreifen. why?",
+            "Der Prozess kann nicht auf die Datei zugreifen, da sie von einem anderen Prozess \
+             verwendet wird. why does this happen? After a reboot it says: Das System kann \
+             den angegebenen Pfad nicht finden, weil die Datei gesperrt ist und noch nicht \
+             freigegeben wurde.",
+        ] {
+            assert_eq!(detect(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_sentence_of_another_language_keeps_the_english_it_borrows() {
+        for (text, name) in [
+            // No sentence here is English, only the verb it borrows.
+            (
+                "haz un fix rápido del login, se rompe con la contraseña vacía",
+                "Spanish",
+            ),
+            (
+                "Fix het. Het werkt niet meer sinds de laatste update.",
+                "Dutch",
+            ),
+            ("le test échoue sur la CI. Fix le test stp.", "French"),
+            (
+                "der Build schlägt seit gestern fehl. Update bitte die Dependencies und \
+                 starte die Tests neu.",
+                "German",
+            ),
+            // A verb English shares with a language is that language's when
+            // the prompt is written in it.
+            ("Help! De build faalt en ik weet niet waarom.", "Dutch"),
+            (
+                "Change! La couleur du bouton de connexion doit être bleue.",
+                "French",
+            ),
+            (
+                "Find fejlen. Den er i login-funktionen og den skal rettes i dag.",
+                "Danish",
+            ),
+            (
+                "Remove o botão antigo. Depois atualize os testes e a documentação.",
+                "Portuguese",
+            ),
+            // English between two sentences of another language is an aside.
+            (
+                "Le bouton de connexion ne fait rien. Any ideas? J'ai déjà vidé le cache du \
+                 navigateur.",
+                "French",
+            ),
+            (
+                "El login falla con la contraseña vacía. Same here en producción. ¿Lo \
+                 puedes arreglar hoy?",
+                "Spanish",
+            ),
+            // A sentence that only thanks or greets asks for nothing.
+            (
+                "Arregla el test de login que falla desde ayer, por favor. Thank you!",
+                "Spanish",
+            ),
+            (
+                "Corrige le test qui échoue sur la CI, s'il te plaît. You're the best!",
+                "French",
+            ),
+            (
+                "Kannst du den Login-Fehler beheben? Der tritt nur bei leerem Passwort \
+                 auf. Thank you so much!",
+                "German",
+            ),
+        ] {
+            assert_eq!(language(text), Some(Some(name)), "{text}");
+        }
+    }
+
+    #[test]
+    fn what_a_sentence_of_another_language_introduces_is_pasted() {
+        // Weighed as sentences of their own, the English messages made each
+        // of these graded.
+        for (text, name) in [
+            (
+                "me sale este error al compilar: Cannot find module 'react'. ¿qué hago?",
+                "Spanish",
+            ),
+            (
+                "Me aparece este error:\n\nCannot find module 'react'\n\n¿Cómo lo arreglo?",
+                "Spanish",
+            ),
+            (
+                "Il login non funziona, nella console vedo: Uncaught TypeError: Cannot read \
+                 properties of null. Puoi aiutarmi?",
+                "Italian",
+            ),
+            (
+                "Le build échoue avec le message suivant :\nModule not found: Error: Can't \
+                 resolve './App'\nComment je peux corriger ça ?",
+                "French",
+            ),
+        ] {
+            assert_eq!(language(text), Some(Some(name)), "{text}");
+        }
+        // A question asks, so the colon before it was the message's own.
+        assert_eq!(
+            detect(
+                "error: Ihre lokalen Änderungen in den folgenden Dateien würden durch den \
+                 Merge überschrieben werden:\nhow do I keep my changes?"
+            ),
+            None
+        );
     }
 
     #[test]
