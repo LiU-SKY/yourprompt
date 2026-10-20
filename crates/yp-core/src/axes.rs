@@ -240,12 +240,20 @@ pub fn clarity(
 
     worst.sort_by(|a, b| b.2.total_cmp(&a.2));
     let detail = if worst.is_empty()
-        && stats.content_tokens + stats.pasted < c::MIN_CONTENT_UNITS as usize
+        && stats.judged_tokens() + stats.pasted < c::MIN_CONTENT_UNITS as usize
     {
-        format!(
-            "too thin to judge ({} content tokens)",
-            stats.content_tokens
-        )
+        if stats.unbacked == 0 {
+            format!(
+                "too thin to judge ({} content tokens)",
+                stats.judged_tokens()
+            )
+        } else {
+            format!(
+                "too thin to judge ({} content tokens, and {} cue words with nothing named beside them)",
+                stats.judged_tokens(),
+                stats.unbacked
+            )
+        }
     } else if worst.is_empty() {
         "no ambiguity smells".to_string()
     } else {
