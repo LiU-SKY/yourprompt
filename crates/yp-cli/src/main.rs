@@ -190,11 +190,12 @@ fn read_stdin() -> std::io::Result<String> {
 /// Windows PowerShell 5.1 puts a byte order mark in front of what it pipes
 /// to a program, so `'/score' | yp score` was graded as a task: the prompt
 /// began with U+FEFF, not with the slash. `trim` leaves it, as it is not
-/// white space.
+/// white space. With the console on UTF-8 and `$OutputEncoding` set to
+/// `[Text.Encoding]::UTF8` it puts two, and '/score' scored 15.1 F.
 fn without_bom(text: String) -> String {
-    match text.strip_prefix('\u{feff}') {
-        Some(rest) => rest.to_string(),
-        None => text,
+    match text.trim_start_matches('\u{feff}') {
+        rest if rest.len() == text.len() => text,
+        rest => rest.to_string(),
     }
 }
 
@@ -370,5 +371,30 @@ mod tests {
         assert_eq!(without_bom("\u{feff}/score".to_string()), "/score");
         assert_eq!(without_bom("/score".to_string()), "/score");
         assert_eq!(without_bom("fix \u{feff}it".to_string()), "fix \u{feff}it");
+    }
+
+    #[test]
+    fn every_byte_order_mark_in_front_of_piped_text_is_dropped() {
+        // PowerShell 5.1 on a UTF-8 console, with $OutputEncoding set to
+        // [Text.Encoding]::UTF8, piped ef bb bf ef bb bf before "/score",
+        // which was then graded 15.1 F.
+        let piped = without_bom("\u{feff}\u{feff}/score\r\n".to_string());
+        assert_eq!(piped, "/score\r\n");
+        assert_eq!(yp_core::kind_of(piped.trim()).0, yp_core::Kind::Command);
+    }
+
+    #[test]
+    fn the_served_page_breaks_a_long_repository_path() {
+        // `yp serve` names the repository in the page's subtitle, in a
+        // <code> that, at 320 px in English, ran 511 px past the right edge
+        // when a folder in the path had a 62-letter name.
+        let page = include_str!("../assets/index.html");
+        assert!(page.contains("`<code>${repo}</code>"));
+        let rule = page
+            .split_once(".sub code {")
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .map(|(rule, _)| rule)
+            .expect("a rule for the subtitle's code");
+        assert!(rule.contains("overflow-wrap: anywhere"), "{rule}");
     }
 }

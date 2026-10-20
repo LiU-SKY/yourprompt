@@ -46,7 +46,10 @@
                   color: var(--dim); }
   .langs button.on { background: var(--track); color: var(--ink); font-weight: 600; }
   .sub { color: var(--dim); font-size: 13.5px; margin: 0; }
-  .sub code { font-size: 12.5px; }
+  /* A repository path is one long word to the line breaker: at 320 px in
+     English, one with a 62-letter folder name ran 511 px past the right
+     edge. Korean already breaks it, under :lang(ko). */
+  .sub code { font-size: 12.5px; overflow-wrap: anywhere; }
   .lede { margin: 10px 0 0; max-width: 62ch; color: var(--dim); font-size: 13.5px; }
   @media (prefers-reduced-motion: reduce) {
     .fill { transition: none; }
